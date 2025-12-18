@@ -1,0 +1,12 @@
+[package]
+name = "iced_editor"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/LuDog71FR/iced_code_editor"
+readme = "README.md"
+keywords = ["gui", "graphics", "interface", "widgets", "iced"]
+categories = ["gui"]
+
+[dependencies]
+iced = { version = "0.13", features = ["advanced", "highlighter"] }
