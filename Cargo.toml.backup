@@ -1,27 +1,25 @@
-[workspace]
-resolver = "2"
-members = [
-    "iced-code-editor",
-    "demo-app",
-]
-
-[workspace.package]
+[package]
+name = "iced_code_editor"
+description = "A custom code editor widget for the Iced GUI framework with syntax highlighting, line numbers, and scrolling support."
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/LuDog71FR/iced_code_editor"
+readme = "README.md"
+keywords = ["gui", "interface", "widgets", "iced", "editor"]
+categories = ["gui"]
 
-[workspace.dependencies]
-iced = { version = "0.14", features = ["advanced", "highlighter", "canvas"] }
+[dependencies]
+iced = { version = "0.13", features = ["advanced", "highlighter"] }
 
 [profile.release]
 # the resulting binary is small as possible
 panic = 'abort'
 
-[workspace.lints.rust]
+[lints.rust]
 unsafe_code = "forbid"
 
-[workspace.lints.clippy]
+[lints.clippy]
 panic = "deny"                       # Denies direct calls to `panic!`. Encourages proper error handling instead of crashing.
 unreachable = "deny"                 # Denies unreachable code blocks. Improves code clarity and removes dead code.
 unwrap_used = "deny"                 # Denies the use of `.unwrap()`. Encourages explicit error handling with `?` or `match`.
@@ -49,4 +47,3 @@ dbg_macro = "deny"                   # Denies `dbg!` in production code. Prevent
 unimplemented = "deny"               # Denies `unimplemented!` macros. Ensures all features are fully implemented.
 missing_panics_doc = "deny"          # Denies missing documentation for functions that may panic. Improves API safety and clarity.
 missing_errors_doc = "deny"          # Denies missing documentation for functions returning `Result`. Improves error handling clarity.
-needless_pass_by_value = "deny"      # Force l'utilisation de références quand l'ownership n'est pas nécessaire

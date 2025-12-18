@@ -1,0 +1,17 @@
+[package]
+name = "iced-code-editor"
+description = "A custom code editor widget for the Iced GUI framework with syntax highlighting, line numbers, and scrolling support."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../README.md"
+keywords = ["gui", "interface", "widgets", "iced", "editor"]
+categories = ["gui"]
+
+[dependencies]
+iced.workspace = true
+syntect = "5.2"
+
+[lints]
+workspace = true

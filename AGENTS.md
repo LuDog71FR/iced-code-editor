@@ -28,6 +28,7 @@
 ## ⚠️ Strict rules
 
 - **Mandatory tests**: Any new function must have a unit test (exception: frontend display management functions)
+- **Mandatory documentation**: Any struct, enum or function must have a clear documentation
 - **Test verification**: Any function modification requires verification and update of associated unit tests
 - Each clippy warning is considered like an error and must be fix
 

@@ -1,0 +1,12 @@
+[package]
+name = "demo-app"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+iced.workspace = true
+iced-code-editor = { path = "../iced-code-editor" }
+
+[lints]
+workspace = true
