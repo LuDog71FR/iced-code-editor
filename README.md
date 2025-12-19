@@ -6,8 +6,9 @@ A high-performance, canvas-based code editor widget for [Iced](https://github.co
 
 [![Crates.io](https://img.shields.io/crates/v/iced-code-editor.svg)](https://crates.io/crates/iced-code-editor)
 [![Documentation](https://docs.rs/iced-code-editor/badge.svg)](https://docs.rs/iced-code-editor)
-[![License](https://img.shields.io/crates/l/iced-code-editor.svg)](LICENSE)
+[![License](https://img.shields.io/crates/l/iced-code-editor.svg)](https://github.com/LuDog71FR/iced-code-editor/blob/main/LICENSE)
 [![Downloads](https://img.shields.io/crates/d/iced-code-editor.svg)](https://crates.io/crates/iced-code-editor)
+[![Build Status](https://github.com/LuDog71FR/iced-code-editor/workflows/Rust/badge.svg)](https://github.com/LuDog71FR/iced-code-editor/actions)
 
 </div>
 

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 None
 
+## [0.2.1] - 2025-12-19
+
+### Added
+
+- Add build badge in README.md
+
+### Changes
+
+- Fix GitHub repository link in README.md
+
 ## [0.2.0] - 2025-12-19
 
 ### Added
