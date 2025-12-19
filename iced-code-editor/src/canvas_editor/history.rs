@@ -101,7 +101,7 @@ impl CommandHistory {
     /// # Example
     ///
     /// ```
-    /// # use iced_code_editor::canvas_editor::CommandHistory;
+    /// use iced_code_editor::CommandHistory;
     ///
     /// let history = CommandHistory::new(100);
     /// ```

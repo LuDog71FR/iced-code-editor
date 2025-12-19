@@ -28,7 +28,7 @@
 ## ⚠️ Strict rules
 
 - **Mandatory tests**: Any new function must have a unit test (exception: frontend display management functions)
-- **Mandatory documentation**: Any struct, enum or function must have a clear documentation
+- **Mandatory documentation**: Any struct, enum or function must have a clear documentation. Every public item, with examples.
 - **Test verification**: Any function modification requires verification and update of associated unit tests
 - Each clippy warning is considered like an error and must be fix
 - All documentation (in source code or Markdown files) must be written in English

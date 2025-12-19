@@ -1,0 +1,9 @@
+# Files to exclude from cargo package
+
+AGENTS.md
+DEV.md
+TODO.md
+.github/
+screenshot\_\*.png
+demo-app/
+docs/

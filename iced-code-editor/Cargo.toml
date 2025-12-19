@@ -2,9 +2,12 @@
 name = "iced-code-editor"
 description = "A custom code editor widget for the Iced GUI framework with syntax highlighting, line numbers, and scrolling support."
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage = "https://github.com/LuDog71FR/iced_code_editor"
+documentation = "https://docs.rs/iced-code-editor"
 readme = "../README.md"
 keywords = ["gui", "interface", "widgets", "iced", "editor"]
 categories = ["gui"]
@@ -12,6 +15,10 @@ categories = ["gui"]
 [dependencies]
 iced.workspace = true
 syntect = "5.2"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lints]
 workspace = true
