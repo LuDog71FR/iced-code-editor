@@ -235,12 +235,19 @@ person:greet()
             Message::ThemeChanged,
         );
 
-        // Toolbar at the top
+        // Toolbar at the top with theme-aware text color
+        let text_color = match self.current_theme {
+            EditorTheme::Dark => iced::Color::from_rgb(0.9, 0.9, 0.9),
+            EditorTheme::Light => iced::Color::from_rgb(0.0, 0.0, 0.0),
+        };
+
         let toolbar = row![
-            button(text("📂 Open")).on_press(Message::OpenFile),
-            button(text("💾 Save")).on_press(Message::SaveFile),
-            button(text("💾 Save As...")).on_press(Message::SaveFileAs),
-            text(self.file_status()),
+            button(text("Open")).on_press(Message::OpenFile),
+            button(text("Save")).on_press(Message::SaveFile),
+            button(text("Save As...")).on_press(Message::SaveFileAs),
+            text(self.file_status()).style(move |_theme| {
+                text::Style { color: Some(text_color) }
+            }),
             theme_picker,
         ]
         .spacing(10)
