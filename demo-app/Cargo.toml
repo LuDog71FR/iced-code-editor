@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 iced.workspace = true
 iced-code-editor = { path = "../iced-code-editor" }
+rfd = "0.16"
 
 [lints]
 workspace = true

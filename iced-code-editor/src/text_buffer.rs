@@ -109,7 +109,8 @@ impl TextBuffer {
                 let line_str = &mut self.lines[line];
                 let byte_pos = Self::char_to_byte_index(line_str, column);
                 if byte_pos > 0 {
-                    let char_start = Self::char_to_byte_index(line_str, column - 1);
+                    let char_start =
+                        Self::char_to_byte_index(line_str, column - 1);
                     line_str.drain(char_start..byte_pos);
                 }
             }
@@ -161,9 +162,7 @@ impl TextBuffer {
     ///
     /// The byte index
     fn char_to_byte_index(s: &str, char_index: usize) -> usize {
-        s.char_indices()
-            .nth(char_index)
-            .map_or(s.len(), |(idx, _)| idx)
+        s.char_indices().nth(char_index).map_or(s.len(), |(idx, _)| idx)
     }
 
     /// Returns the entire buffer content as a single string.

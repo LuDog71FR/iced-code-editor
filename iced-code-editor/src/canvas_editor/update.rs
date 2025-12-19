@@ -2,9 +2,13 @@
 
 use iced::Task;
 
-use super::{CURSOR_BLINK_INTERVAL, CanvasEditor, CanvasEditorMessage};
+use super::command::{
+    Command, DeleteCharCommand, DeleteForwardCommand, InsertCharCommand,
+    InsertNewlineCommand,
+};
+use super::{CURSOR_BLINK_INTERVAL, CodeEditor, Message};
 
-impl CanvasEditor {
+impl CodeEditor {
     /// Updates the editor state based on messages and returns scroll commands.
     ///
     /// # Arguments
@@ -14,47 +18,90 @@ impl CanvasEditor {
     /// # Returns
     ///
     /// A Task that may contain scroll commands to keep cursor visible
-    pub fn update(&mut self, message: &CanvasEditorMessage) -> Task<CanvasEditorMessage> {
+    pub fn update(&mut self, message: &Message) -> Task<Message> {
         match message {
-            CanvasEditorMessage::CharacterInput(ch) => {
-                let (line, col) = self.cursor;
-                self.buffer.insert_char(line, col, *ch);
-                self.cursor.1 += 1;
-                self.reset_cursor_blink();
-                self.cache.clear();
-                Task::none()
-            }
-            CanvasEditorMessage::Backspace => {
-                let (line, col) = self.cursor;
-                if self.buffer.delete_char(line, col) {
-                    // Line merged with previous
-                    if line > 0 {
-                        let prev_line_len = self.buffer.line_len(line - 1);
-                        self.cursor = (line - 1, prev_line_len);
-                    }
-                } else if col > 0 {
-                    self.cursor.1 -= 1;
+            Message::CharacterInput(ch) => {
+                // Start grouping if not already grouping (for smart undo)
+                if !self.is_grouping {
+                    self.history.begin_group("Typing");
+                    self.is_grouping = true;
                 }
-                self.reset_cursor_blink();
-                self.cache.clear();
-                self.scroll_to_cursor()
-            }
-            CanvasEditorMessage::Delete => {
+
                 let (line, col) = self.cursor;
-                self.buffer.delete_forward(line, col);
+                let mut cmd =
+                    InsertCharCommand::new(line, col, *ch, self.cursor);
+                cmd.execute(&mut self.buffer, &mut self.cursor);
+                self.history.push(Box::new(cmd));
+
                 self.reset_cursor_blink();
                 self.cache.clear();
                 Task::none()
             }
-            CanvasEditorMessage::Enter => {
+            Message::Backspace => {
+                // End grouping on backspace (separate from typing)
+                if self.is_grouping {
+                    self.history.end_group();
+                    self.is_grouping = false;
+                }
+
                 let (line, col) = self.cursor;
-                self.buffer.insert_newline(line, col);
-                self.cursor = (line + 1, 0);
+                let mut cmd = DeleteCharCommand::new(
+                    &self.buffer,
+                    line,
+                    col,
+                    self.cursor,
+                );
+                cmd.execute(&mut self.buffer, &mut self.cursor);
+                self.history.push(Box::new(cmd));
+
                 self.reset_cursor_blink();
                 self.cache.clear();
                 self.scroll_to_cursor()
             }
-            CanvasEditorMessage::ArrowKey(direction, shift_pressed) => {
+            Message::Delete => {
+                // End grouping on delete
+                if self.is_grouping {
+                    self.history.end_group();
+                    self.is_grouping = false;
+                }
+
+                let (line, col) = self.cursor;
+                let mut cmd = DeleteForwardCommand::new(
+                    &self.buffer,
+                    line,
+                    col,
+                    self.cursor,
+                );
+                cmd.execute(&mut self.buffer, &mut self.cursor);
+                self.history.push(Box::new(cmd));
+
+                self.reset_cursor_blink();
+                self.cache.clear();
+                Task::none()
+            }
+            Message::Enter => {
+                // End grouping on enter
+                if self.is_grouping {
+                    self.history.end_group();
+                    self.is_grouping = false;
+                }
+
+                let (line, col) = self.cursor;
+                let mut cmd = InsertNewlineCommand::new(line, col, self.cursor);
+                cmd.execute(&mut self.buffer, &mut self.cursor);
+                self.history.push(Box::new(cmd));
+
+                self.reset_cursor_blink();
+                self.cache.clear();
+                self.scroll_to_cursor()
+            }
+            Message::ArrowKey(direction, shift_pressed) => {
+                // End grouping on navigation
+                if self.is_grouping {
+                    self.history.end_group();
+                    self.is_grouping = false;
+                }
+
                 if *shift_pressed {
                     // Start selection if not already started
                     if self.selection_start.is_none() {
@@ -71,7 +118,13 @@ impl CanvasEditor {
                 self.cache.clear();
                 self.scroll_to_cursor()
             }
-            CanvasEditorMessage::MouseClick(point) => {
+            Message::MouseClick(point) => {
+                // End grouping on mouse click
+                if self.is_grouping {
+                    self.history.end_group();
+                    self.is_grouping = false;
+                }
+
                 self.handle_mouse_click(*point);
                 self.reset_cursor_blink();
                 // Clear selection on click
@@ -80,24 +133,30 @@ impl CanvasEditor {
                 self.selection_start = Some(self.cursor);
                 Task::none()
             }
-            CanvasEditorMessage::MouseDrag(point) => {
+            Message::MouseDrag(point) => {
                 if self.is_dragging {
                     self.handle_mouse_drag(*point);
                     self.cache.clear();
                 }
                 Task::none()
             }
-            CanvasEditorMessage::MouseRelease => {
+            Message::MouseRelease => {
                 self.is_dragging = false;
                 Task::none()
             }
-            CanvasEditorMessage::Copy => self.copy_selection(),
-            CanvasEditorMessage::Paste(text) => {
+            Message::Copy => self.copy_selection(),
+            Message::Paste(text) => {
+                // End grouping on paste
+                if self.is_grouping {
+                    self.history.end_group();
+                    self.is_grouping = false;
+                }
+
                 // If text is empty, we need to read from clipboard
                 if text.is_empty() {
                     // Return a task that reads clipboard and chains to paste
                     iced::clipboard::read().and_then(|clipboard_text| {
-                        Task::done(CanvasEditorMessage::Paste(clipboard_text))
+                        Task::done(Message::Paste(clipboard_text))
                     })
                 } else {
                     // We have the text, paste it
@@ -106,7 +165,20 @@ impl CanvasEditor {
                     self.scroll_to_cursor()
                 }
             }
-            CanvasEditorMessage::Tick => {
+            Message::DeleteSelection => {
+                // End grouping on delete selection
+                if self.is_grouping {
+                    self.history.end_group();
+                    self.is_grouping = false;
+                }
+
+                // Delete selected text
+                self.delete_selection();
+                self.reset_cursor_blink();
+                self.cache.clear();
+                self.scroll_to_cursor()
+            }
+            Message::Tick => {
                 // Handle cursor blinking
                 if self.last_blink.elapsed() >= CURSOR_BLINK_INTERVAL {
                     self.cursor_visible = !self.cursor_visible;
@@ -115,17 +187,17 @@ impl CanvasEditor {
                 }
                 Task::none()
             }
-            CanvasEditorMessage::PageUp => {
+            Message::PageUp => {
                 self.page_up();
                 self.reset_cursor_blink();
                 self.scroll_to_cursor()
             }
-            CanvasEditorMessage::PageDown => {
+            Message::PageDown => {
                 self.page_down();
                 self.reset_cursor_blink();
                 self.scroll_to_cursor()
             }
-            CanvasEditorMessage::Home(shift_pressed) => {
+            Message::Home(shift_pressed) => {
                 if *shift_pressed {
                     // Start selection if not already started
                     if self.selection_start.is_none() {
@@ -142,7 +214,7 @@ impl CanvasEditor {
                 self.cache.clear();
                 Task::none()
             }
-            CanvasEditorMessage::End(shift_pressed) => {
+            Message::End(shift_pressed) => {
                 let line = self.cursor.0;
                 let line_len = self.buffer.line_len(line);
 
@@ -162,11 +234,55 @@ impl CanvasEditor {
                 self.cache.clear();
                 Task::none()
             }
-            CanvasEditorMessage::Scrolled(viewport) => {
+            Message::CtrlHome => {
+                // Move cursor to the beginning of the document
+                self.clear_selection();
+                self.cursor = (0, 0);
+                self.reset_cursor_blink();
+                self.cache.clear();
+                self.scroll_to_cursor()
+            }
+            Message::CtrlEnd => {
+                // Move cursor to the end of the document
+                self.clear_selection();
+                let last_line = self.buffer.line_count().saturating_sub(1);
+                let last_col = self.buffer.line_len(last_line);
+                self.cursor = (last_line, last_col);
+                self.reset_cursor_blink();
+                self.cache.clear();
+                self.scroll_to_cursor()
+            }
+            Message::Scrolled(viewport) => {
                 // Track viewport scroll position and height
                 self.viewport_scroll = viewport.absolute_offset().y;
                 self.viewport_height = viewport.bounds().height;
                 Task::none()
+            }
+            Message::Undo => {
+                // End any current grouping before undoing
+                if self.is_grouping {
+                    self.history.end_group();
+                    self.is_grouping = false;
+                }
+
+                if self.history.undo(&mut self.buffer, &mut self.cursor) {
+                    self.clear_selection();
+                    self.reset_cursor_blink();
+                    self.cache.clear();
+                    self.scroll_to_cursor()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::Redo => {
+                if self.history.redo(&mut self.buffer, &mut self.cursor) {
+                    self.clear_selection();
+                    self.reset_cursor_blink();
+                    self.cache.clear();
+                    self.scroll_to_cursor()
+                } else {
+                    Task::none()
+                }
             }
         }
     }
@@ -179,58 +295,296 @@ mod tests {
 
     #[test]
     fn test_new_canvas_editor() {
-        let editor = CanvasEditor::new("line1\nline2", "py");
+        let editor = CodeEditor::new("line1\nline2", "py");
         assert_eq!(editor.cursor, (0, 0));
     }
 
     #[test]
     fn test_home_key() {
-        let mut editor = CanvasEditor::new("hello world", "py");
+        let mut editor = CodeEditor::new("hello world", "py");
         editor.cursor = (0, 5); // Move to middle of line
-        let _ = editor.update(&CanvasEditorMessage::Home(false));
+        let _ = editor.update(&Message::Home(false));
         assert_eq!(editor.cursor, (0, 0));
     }
 
     #[test]
     fn test_end_key() {
-        let mut editor = CanvasEditor::new("hello world", "py");
+        let mut editor = CodeEditor::new("hello world", "py");
         editor.cursor = (0, 0);
-        let _ = editor.update(&CanvasEditorMessage::End(false));
+        let _ = editor.update(&Message::End(false));
         assert_eq!(editor.cursor, (0, 11)); // Length of "hello world"
     }
 
     #[test]
     fn test_arrow_key_with_shift_creates_selection() {
-        let mut editor = CanvasEditor::new("hello world", "py");
+        let mut editor = CodeEditor::new("hello world", "py");
         editor.cursor = (0, 0);
 
         // Shift+Right should start selection
-        let _ = editor.update(&CanvasEditorMessage::ArrowKey(ArrowDirection::Right, true));
+        let _ = editor.update(&Message::ArrowKey(ArrowDirection::Right, true));
         assert!(editor.selection_start.is_some());
         assert!(editor.selection_end.is_some());
     }
 
     #[test]
     fn test_arrow_key_without_shift_clears_selection() {
-        let mut editor = CanvasEditor::new("hello world", "py");
+        let mut editor = CodeEditor::new("hello world", "py");
         editor.selection_start = Some((0, 0));
         editor.selection_end = Some((0, 5));
 
         // Regular arrow key should clear selection
-        let _ = editor.update(&CanvasEditorMessage::ArrowKey(ArrowDirection::Right, false));
+        let _ = editor.update(&Message::ArrowKey(ArrowDirection::Right, false));
         assert_eq!(editor.selection_start, None);
         assert_eq!(editor.selection_end, None);
     }
 
     #[test]
     fn test_typing_with_selection() {
-        let mut editor = CanvasEditor::new("hello world", "py");
+        let mut editor = CodeEditor::new("hello world", "py");
         editor.selection_start = Some((0, 0));
         editor.selection_end = Some((0, 5));
 
-        let _ = editor.update(&CanvasEditorMessage::CharacterInput('X'));
+        let _ = editor.update(&Message::CharacterInput('X'));
         // Current behavior: character is inserted at cursor, selection is NOT automatically deleted
         // This is expected behavior - user must delete selection first (Backspace/Delete) or use Paste
         assert_eq!(editor.buffer.line(0), "Xhello world");
+    }
+
+    #[test]
+    fn test_ctrl_home() {
+        let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
+        editor.cursor = (2, 5); // Start at line 3, column 5
+        let _ = editor.update(&Message::CtrlHome);
+        assert_eq!(editor.cursor, (0, 0)); // Should move to beginning of document
+    }
+
+    #[test]
+    fn test_ctrl_end() {
+        let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
+        editor.cursor = (0, 0); // Start at beginning
+        let _ = editor.update(&Message::CtrlEnd);
+        assert_eq!(editor.cursor, (2, 5)); // Should move to end of last line (line3 has 5 chars)
+    }
+
+    #[test]
+    fn test_ctrl_home_clears_selection() {
+        let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
+        editor.cursor = (2, 5);
+        editor.selection_start = Some((0, 0));
+        editor.selection_end = Some((2, 5));
+
+        let _ = editor.update(&Message::CtrlHome);
+        assert_eq!(editor.cursor, (0, 0));
+        assert_eq!(editor.selection_start, None);
+        assert_eq!(editor.selection_end, None);
+    }
+
+    #[test]
+    fn test_ctrl_end_clears_selection() {
+        let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
+        editor.cursor = (0, 0);
+        editor.selection_start = Some((0, 0));
+        editor.selection_end = Some((1, 3));
+
+        let _ = editor.update(&Message::CtrlEnd);
+        assert_eq!(editor.cursor, (2, 5));
+        assert_eq!(editor.selection_start, None);
+        assert_eq!(editor.selection_end, None);
+    }
+
+    #[test]
+    fn test_delete_selection_message() {
+        let mut editor = CodeEditor::new("hello world", "py");
+        editor.cursor = (0, 0);
+        editor.selection_start = Some((0, 0));
+        editor.selection_end = Some((0, 5));
+
+        let _ = editor.update(&Message::DeleteSelection);
+        assert_eq!(editor.buffer.line(0), " world");
+        assert_eq!(editor.cursor, (0, 0));
+        assert_eq!(editor.selection_start, None);
+        assert_eq!(editor.selection_end, None);
+    }
+
+    #[test]
+    fn test_delete_selection_multiline() {
+        let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
+        editor.cursor = (0, 2);
+        editor.selection_start = Some((0, 2));
+        editor.selection_end = Some((2, 2));
+
+        let _ = editor.update(&Message::DeleteSelection);
+        assert_eq!(editor.buffer.line(0), "line3");
+        assert_eq!(editor.cursor, (0, 2));
+        assert_eq!(editor.selection_start, None);
+    }
+
+    #[test]
+    fn test_delete_selection_no_selection() {
+        let mut editor = CodeEditor::new("hello world", "py");
+        editor.cursor = (0, 5);
+
+        let _ = editor.update(&Message::DeleteSelection);
+        // Should do nothing if there's no selection
+        assert_eq!(editor.buffer.line(0), "hello world");
+        assert_eq!(editor.cursor, (0, 5));
+    }
+
+    #[test]
+    fn test_undo_char_insert() {
+        let mut editor = CodeEditor::new("hello", "py");
+        editor.cursor = (0, 5);
+
+        // Type a character
+        let _ = editor.update(&Message::CharacterInput('!'));
+        assert_eq!(editor.buffer.line(0), "hello!");
+        assert_eq!(editor.cursor, (0, 6));
+
+        // Undo should remove it (but first end the grouping)
+        editor.history.end_group();
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "hello");
+        assert_eq!(editor.cursor, (0, 5));
+    }
+
+    #[test]
+    fn test_undo_redo_char_insert() {
+        let mut editor = CodeEditor::new("hello", "py");
+        editor.cursor = (0, 5);
+
+        // Type a character
+        let _ = editor.update(&Message::CharacterInput('!'));
+        editor.history.end_group();
+
+        // Undo
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "hello");
+
+        // Redo
+        let _ = editor.update(&Message::Redo);
+        assert_eq!(editor.buffer.line(0), "hello!");
+        assert_eq!(editor.cursor, (0, 6));
+    }
+
+    #[test]
+    fn test_undo_backspace() {
+        let mut editor = CodeEditor::new("hello", "py");
+        editor.cursor = (0, 5);
+
+        // Backspace
+        let _ = editor.update(&Message::Backspace);
+        assert_eq!(editor.buffer.line(0), "hell");
+        assert_eq!(editor.cursor, (0, 4));
+
+        // Undo
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "hello");
+        assert_eq!(editor.cursor, (0, 5));
+    }
+
+    #[test]
+    fn test_undo_newline() {
+        let mut editor = CodeEditor::new("hello world", "py");
+        editor.cursor = (0, 5);
+
+        // Insert newline
+        let _ = editor.update(&Message::Enter);
+        assert_eq!(editor.buffer.line(0), "hello");
+        assert_eq!(editor.buffer.line(1), " world");
+        assert_eq!(editor.cursor, (1, 0));
+
+        // Undo
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "hello world");
+        assert_eq!(editor.cursor, (0, 5));
+    }
+
+    #[test]
+    fn test_undo_grouped_typing() {
+        let mut editor = CodeEditor::new("hello", "py");
+        editor.cursor = (0, 5);
+
+        // Type multiple characters (they should be grouped)
+        let _ = editor.update(&Message::CharacterInput(' '));
+        let _ = editor.update(&Message::CharacterInput('w'));
+        let _ = editor.update(&Message::CharacterInput('o'));
+        let _ = editor.update(&Message::CharacterInput('r'));
+        let _ = editor.update(&Message::CharacterInput('l'));
+        let _ = editor.update(&Message::CharacterInput('d'));
+
+        assert_eq!(editor.buffer.line(0), "hello world");
+
+        // End the group
+        editor.history.end_group();
+
+        // Single undo should remove all grouped characters
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "hello");
+        assert_eq!(editor.cursor, (0, 5));
+    }
+
+    #[test]
+    fn test_navigation_ends_grouping() {
+        let mut editor = CodeEditor::new("hello", "py");
+        editor.cursor = (0, 5);
+
+        // Type a character (starts grouping)
+        let _ = editor.update(&Message::CharacterInput('!'));
+        assert!(editor.is_grouping);
+
+        // Move cursor (ends grouping)
+        let _ = editor.update(&Message::ArrowKey(ArrowDirection::Left, false));
+        assert!(!editor.is_grouping);
+
+        // Type another character (starts new group)
+        let _ = editor.update(&Message::CharacterInput('?'));
+        assert!(editor.is_grouping);
+
+        editor.history.end_group();
+
+        // Two separate undo operations
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "hello!");
+
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "hello");
+    }
+
+    #[test]
+    fn test_multiple_undo_redo() {
+        let mut editor = CodeEditor::new("a", "py");
+        editor.cursor = (0, 1);
+
+        // Make several changes
+        let _ = editor.update(&Message::CharacterInput('b'));
+        editor.history.end_group();
+
+        let _ = editor.update(&Message::CharacterInput('c'));
+        editor.history.end_group();
+
+        let _ = editor.update(&Message::CharacterInput('d'));
+        editor.history.end_group();
+
+        assert_eq!(editor.buffer.line(0), "abcd");
+
+        // Undo all
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "abc");
+
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "ab");
+
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "a");
+
+        // Redo all
+        let _ = editor.update(&Message::Redo);
+        assert_eq!(editor.buffer.line(0), "ab");
+
+        let _ = editor.update(&Message::Redo);
+        assert_eq!(editor.buffer.line(0), "abc");
+
+        let _ = editor.update(&Message::Redo);
+        assert_eq!(editor.buffer.line(0), "abcd");
     }
 }

@@ -31,6 +31,8 @@
 - **Mandatory documentation**: Any struct, enum or function must have a clear documentation
 - **Test verification**: Any function modification requires verification and update of associated unit tests
 - Each clippy warning is considered like an error and must be fix
+- All documentation (in source code or Markdown files) must be written in English
+- Never use `#[allow(dead_code)]`
 
 ## Communication Guidelines
 

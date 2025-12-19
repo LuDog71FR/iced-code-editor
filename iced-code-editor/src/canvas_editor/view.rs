@@ -4,11 +4,11 @@ use iced::widget::canvas::Canvas;
 use iced::widget::{Scrollable, container, scrollable};
 use iced::{Border, Color, Element, Length, Shadow};
 
-use super::{CanvasEditor, CanvasEditorMessage, LINE_HEIGHT};
+use super::{CodeEditor, LINE_HEIGHT, Message};
 
-impl CanvasEditor {
+impl CodeEditor {
     /// Creates the view element with scrollable wrapper.
-    pub fn view(&self) -> Element<'_, CanvasEditorMessage> {
+    pub fn view(&self) -> Element<'_, Message> {
         // Calculate total content height
         let total_lines = self.buffer.line_count();
         let content_height = total_lines as f32 * LINE_HEIGHT;
@@ -18,16 +18,16 @@ impl CanvasEditor {
             .width(Length::Fill)
             .height(Length::Fixed(content_height));
 
-        // Capture theme colors for the scrollbar style closure
-        let scrollbar_bg = self.theme.scrollbar_background;
-        let scroller_color = self.theme.scroller_color;
+        // Capture style colors for the scrollbar style closure
+        let scrollbar_bg = self.style.scrollbar_background;
+        let scroller_color = self.style.scroller_color;
 
         // Wrap in scrollable for automatic scrollbar display with custom style
         Scrollable::new(canvas)
             .id(self.scrollable_id.clone())
             .width(Length::Fill)
             .height(Length::Fill)
-            .on_scroll(CanvasEditorMessage::Scrolled)
+            .on_scroll(Message::Scrolled)
             .style(move |_theme, _status| scrollable::Style {
                 container: container::Style::default(),
                 vertical_rail: scrollable::Rail {

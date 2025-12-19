@@ -5,10 +5,10 @@ use iced::widget::scrollable;
 use iced::{Point, Task};
 
 use super::{
-    ArrowDirection, CHAR_WIDTH, CanvasEditor, CanvasEditorMessage, GUTTER_WIDTH, LINE_HEIGHT,
+    ArrowDirection, CHAR_WIDTH, CodeEditor, GUTTER_WIDTH, LINE_HEIGHT, Message,
 };
 
-impl CanvasEditor {
+impl CodeEditor {
     /// Moves the cursor based on arrow key direction.
     pub(crate) fn move_cursor(&mut self, direction: ArrowDirection) {
         let (line, col) = self.cursor;
@@ -72,7 +72,7 @@ impl CanvasEditor {
     }
 
     /// Returns a scroll command to make the cursor visible.
-    pub(crate) fn scroll_to_cursor(&self) -> Task<CanvasEditorMessage> {
+    pub(crate) fn scroll_to_cursor(&self) -> Task<Message> {
         let cursor_y = self.cursor.0 as f32 * LINE_HEIGHT;
         let viewport_top = self.viewport_scroll;
         let viewport_bottom = self.viewport_scroll + self.viewport_height;
@@ -95,10 +95,7 @@ impl CanvasEditor {
 
         scroll_to(
             self.scrollable_id.clone(),
-            scrollable::AbsoluteOffset {
-                x: 0.0,
-                y: new_scroll,
-            },
+            scrollable::AbsoluteOffset { x: 0.0, y: new_scroll },
         )
     }
 
@@ -155,7 +152,7 @@ mod tests {
 
     #[test]
     fn test_cursor_movement() {
-        let mut editor = CanvasEditor::new("line1\nline2", "py");
+        let mut editor = CodeEditor::new("line1\nline2", "py");
         editor.move_cursor(ArrowDirection::Down);
         assert_eq!(editor.cursor.0, 1);
         editor.move_cursor(ArrowDirection::Right);
@@ -169,7 +166,7 @@ mod tests {
             .map(|i| format!("line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let mut editor = CanvasEditor::new(&content, "py");
+        let mut editor = CodeEditor::new(&content, "py");
 
         editor.page_down();
         // Should move approximately 30 lines (600px / 20px per line)
@@ -184,7 +181,7 @@ mod tests {
             .map(|i| format!("line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let mut editor = CanvasEditor::new(&content, "py");
+        let mut editor = CodeEditor::new(&content, "py");
 
         // Move to line 50
         editor.cursor = (50, 0);
@@ -197,11 +194,9 @@ mod tests {
 
     #[test]
     fn test_page_down_at_end() {
-        let content = (0..10)
-            .map(|i| format!("line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut editor = CanvasEditor::new(&content, "py");
+        let content =
+            (0..10).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let mut editor = CodeEditor::new(&content, "py");
 
         editor.page_down();
         // Should be at last line (line 9)
@@ -214,7 +209,7 @@ mod tests {
             .map(|i| format!("line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let mut editor = CanvasEditor::new(&content, "py");
+        let mut editor = CodeEditor::new(&content, "py");
 
         // Already at start
         editor.cursor = (0, 0);

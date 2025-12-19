@@ -1,122 +1,77 @@
-use iced::widget::{container, mouse_area, row};
+use iced::widget::{button, column, container, pick_list, row, text};
 use iced::{Element, Subscription, Task, window};
-use iced_code_editor::CanvasEditor;
-use iced_code_editor::CanvasEditorMessage;
+use iced_code_editor::Message as EditorMessage;
+use iced_code_editor::{CodeEditor, theme};
+use std::path::PathBuf;
 
-/// Main entry point for the canvas-based editor demo.
+/// Main entry point for the demo application.
 fn main() -> iced::Result {
     iced::application(DemoApp::new, DemoApp::update, DemoApp::view)
         .subscription(DemoApp::subscription)
         .run()
 }
 
-/// Which editor is currently focused
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum FocusedEditor {
-    Python,
-    Lua,
+/// Available themes for the editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorTheme {
+    Dark,
+    Light,
 }
 
-/// Demo application with canvas-based high-performance editors.
+impl EditorTheme {
+    /// Returns all available themes.
+    const ALL: [EditorTheme; 2] = [EditorTheme::Dark, EditorTheme::Light];
+}
+
+impl std::fmt::Display for EditorTheme {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EditorTheme::Dark => write!(f, "🌙 Dark"),
+            EditorTheme::Light => write!(f, "☀️ Light"),
+        }
+    }
+}
+
+/// Demo application with Lua editor and file management.
 struct DemoApp {
-    /// Python code editor instance
-    python_editor: CanvasEditor,
-    /// Lua code editor instance
-    lua_editor: CanvasEditor,
-    /// Which editor currently has focus
-    focused: FocusedEditor,
+    /// Lua code editor
+    editor: CodeEditor,
+    /// Path of the currently open file
+    current_file: Option<PathBuf>,
+    /// Error message to display (if any)
+    error_message: Option<String>,
+    /// Current editor theme
+    current_theme: EditorTheme,
 }
 
-/// Messages that can be sent within the application.
+/// Application messages.
 #[derive(Debug, Clone)]
 enum Message {
-    /// Event from the Python editor
-    PythonEditorEvent(CanvasEditorMessage),
-    /// Event from the Lua editor
-    LuaEditorEvent(CanvasEditorMessage),
-    /// Python editor was clicked (focus it)
-    FocusPython,
-    /// Lua editor was clicked (focus it)
-    FocusLua,
+    /// Editor event
+    EditorEvent(EditorMessage),
+    /// Request to open a file
+    OpenFile,
+    /// File opened successfully
+    FileOpened(Result<(PathBuf, String), String>),
+    /// Request to save the current file
+    SaveFile,
+    /// Request to save as a new file
+    SaveFileAs,
+    /// File saved successfully
+    FileSaved(Result<PathBuf, String>),
     /// Periodic tick for cursor blinking
     Tick,
+    /// Theme changed
+    ThemeChanged(EditorTheme),
 }
 
 impl DemoApp {
-    /// Creates a new demo app with example Python and Lua code.
+    /// Creates a new instance of the application.
     fn new() -> (Self, Task<Message>) {
-        // Example Python code with enough lines to trigger scrollbar
-        let python_content = r#"def hello_world():
-    """A simple greeting function."""
-    print("Hello, World!")
-    
-    for i in range(10):
-        print(f"Count: {i}")
+        // Default Lua content
+        let lua_content = r#"-- Lua code editor
+-- Use the buttons to open and save files
 
-def fibonacci(n):
-    """Calculate fibonacci number."""
-    if n <= 1:
-        return n
-    return fibonacci(n-1) + fibonacci(n-2)
-
-def factorial(n):
-    """Calculate factorial."""
-    if n <= 1:
-        return 1
-    return n * factorial(n-1)
-
-def bubble_sort(arr):
-    """Simple bubble sort implementation."""
-    n = len(arr)
-    for i in range(n):
-        for j in range(0, n-i-1):
-            if arr[j] > arr[j+1]:
-                arr[j], arr[j+1] = arr[j+1], arr[j]
-    return arr
-
-def binary_search(arr, target):
-    """Binary search implementation."""
-    left, right = 0, len(arr) - 1
-    
-    while left <= right:
-        mid = (left + right) // 2
-        if arr[mid] == target:
-            return mid
-        elif arr[mid] < target:
-            left = mid + 1
-        else:
-            right = mid - 1
-    return -1
-
-class Person:
-    """Example class."""
-    def __init__(self, name, age):
-        self.name = name
-        self.age = age
-    
-    def greet(self):
-        print(f"Hello, I'm {self.name} and I'm {self.age} years old")
-    
-    def birthday(self):
-        self.age += 1
-        print(f"Happy birthday! Now {self.age} years old")
-
-# Main execution
-if __name__ == "__main__":
-    hello_world()
-    print(f"Fibonacci(10) = {fibonacci(10)}")
-    print(f"Factorial(5) = {factorial(5)}")
-    
-    numbers = [64, 34, 25, 12, 22, 11, 90]
-    print(f"Sorted: {bubble_sort(numbers)}")
-    
-    person = Person("Alice", 30)
-    person.greet()
-    person.birthday()
-"#;
-
-        // Example Lua code with enough lines to trigger scrollbar
-        let lua_content = r#"-- Lua example code
 function hello_world()
     print("Hello, World!")
     
@@ -139,44 +94,12 @@ function factorial(n)
     return n * factorial(n - 1)
 end
 
-function bubble_sort(arr)
-    local n = #arr
-    for i = 1, n do
-        for j = 1, n - i do
-            if arr[j] > arr[j + 1] then
-                arr[j], arr[j + 1] = arr[j + 1], arr[j]
-            end
-        end
-    end
-    return arr
-end
-
-function binary_search(arr, target)
-    local left, right = 1, #arr
-    
-    while left <= right do
-        local mid = math.floor((left + right) / 2)
-        if arr[mid] == target then
-            return mid
-        elseif arr[mid] < target then
-            left = mid + 1
-        else
-            right = mid - 1
-        end
-    end
-    return -1
-end
-
 -- Tables (dictionaries)
 local person = {
     name = "John",
     age = 30,
     greet = function(self)
         print("Hello, I'm " .. self.name)
-    end,
-    birthday = function(self)
-        self.age = self.age + 1
-        print("Happy birthday! Now " .. self.age .. " years old")
     end
 }
 
@@ -184,124 +107,223 @@ local person = {
 hello_world()
 print("Fibonacci(10) = " .. fibonacci(10))
 print("Factorial(5) = " .. factorial(5))
-
-local numbers = {64, 34, 25, 12, 22, 11, 90}
-bubble_sort(numbers)
-print("Sorted array")
-
 person:greet()
-person:birthday()
 "#;
 
         (
             Self {
-                python_editor: CanvasEditor::new(python_content, "py"),
-                lua_editor: CanvasEditor::new(lua_content, "lua"),
-                focused: FocusedEditor::Python, // Python starts focused
+                editor: CodeEditor::new(lua_content, "lua"),
+                current_file: None,
+                error_message: None,
+                current_theme: EditorTheme::Dark,
             },
             Task::none(),
         )
     }
 
-    /// Handles application messages and updates editor state.
+    /// Handles messages and updates the application state.
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::PythonEditorEvent(event) => {
-                // Only update Python editor if it's focused
-                if self.focused == FocusedEditor::Python {
-                    self.python_editor
-                        .update(&event)
-                        .map(Message::PythonEditorEvent)
-                } else {
-                    Task::none()
-                }
+            Message::EditorEvent(event) => {
+                self.editor.update(&event).map(Message::EditorEvent)
             }
-            Message::LuaEditorEvent(event) => {
-                // Only update Lua editor if it's focused
-                if self.focused == FocusedEditor::Lua {
-                    self.lua_editor.update(&event).map(Message::LuaEditorEvent)
-                } else {
-                    Task::none()
-                }
+            Message::OpenFile => {
+                // Open file picker asynchronously
+                Task::perform(open_file_dialog(), Message::FileOpened)
             }
-            Message::FocusPython => {
-                self.focused = FocusedEditor::Python;
+            Message::FileOpened(result) => {
+                match result {
+                    Ok((path, content)) => {
+                        self.editor = CodeEditor::new(&content, "lua");
+                        // Apply current theme to the new editor
+                        let style = match self.current_theme {
+                            EditorTheme::Dark => {
+                                theme::dark(&iced::Theme::Dark)
+                            }
+                            EditorTheme::Light => {
+                                theme::light(&iced::Theme::Light)
+                            }
+                        };
+                        self.editor.set_theme(style);
+                        // Mark as saved since we just loaded the file
+                        self.editor.mark_saved();
+                        self.current_file = Some(path);
+                        self.error_message = None;
+                    }
+                    Err(err) => {
+                        self.error_message = Some(err);
+                    }
+                }
                 Task::none()
             }
-            Message::FocusLua => {
-                self.focused = FocusedEditor::Lua;
+            Message::SaveFile => {
+                if let Some(path) = &self.current_file {
+                    // Save to current file
+                    let content = self.editor.content();
+                    let path_clone = path.clone();
+                    Task::perform(
+                        save_file(path_clone, content),
+                        Message::FileSaved,
+                    )
+                } else {
+                    // No current file, ask where to save
+                    self.update(Message::SaveFileAs)
+                }
+            }
+            Message::SaveFileAs => {
+                // Open picker to choose where to save
+                let content = self.editor.content();
+                Task::perform(save_file_as_dialog(content), Message::FileSaved)
+            }
+            Message::FileSaved(result) => {
+                match result {
+                    Ok(path) => {
+                        self.current_file = Some(path);
+                        // Mark as saved
+                        self.editor.mark_saved();
+                        self.error_message = None;
+                    }
+                    Err(err) => {
+                        self.error_message = Some(err);
+                    }
+                }
                 Task::none()
             }
-            Message::Tick => {
-                // Send Tick to both editors for cursor blinking
-                let python_task = self
-                    .python_editor
-                    .update(&CanvasEditorMessage::Tick)
-                    .map(Message::PythonEditorEvent);
-                let lua_task = self
-                    .lua_editor
-                    .update(&CanvasEditorMessage::Tick)
-                    .map(Message::LuaEditorEvent);
-                Task::batch([python_task, lua_task])
+            Message::Tick => self
+                .editor
+                .update(&EditorMessage::Tick)
+                .map(Message::EditorEvent),
+            Message::ThemeChanged(new_theme) => {
+                // Change editor theme
+                self.current_theme = new_theme;
+                let style = match new_theme {
+                    EditorTheme::Dark => theme::dark(&iced::Theme::Dark),
+                    EditorTheme::Light => theme::light(&iced::Theme::Light),
+                };
+                self.editor.set_theme(style);
+                Task::none()
             }
         }
     }
 
-    /// Subscription for periodic cursor blink updates.
+    /// Subscription for periodic updates.
     fn subscription(&self) -> Subscription<Message> {
-        // Use window frames for periodic updates
-        let _ = self; // Suppress unused self warning
+        let _ = self; // Required for trait signature
         window::frames().map(|_| Message::Tick)
     }
 
-    /// Renders the application view with two side-by-side editors.
+    /// Renders the user interface.
     fn view(&self) -> Element<'_, Message> {
-        let python_focused = self.focused == FocusedEditor::Python;
-        let lua_focused = self.focused == FocusedEditor::Lua;
+        // Theme selector
+        let theme_picker = pick_list(
+            &EditorTheme::ALL[..],
+            Some(self.current_theme),
+            Message::ThemeChanged,
+        );
 
-        // Python editor with focus indicator and click detection
-        let python_view = mouse_area(
-            container(self.python_editor.view().map(Message::PythonEditorEvent)).style(
-                move |_theme| {
-                    container::Style {
-                        border: iced::Border {
-                            color: if python_focused {
-                                iced::Color::from_rgb(0.3, 0.6, 1.0) // Blue border when focused
-                            } else {
-                                iced::Color::from_rgb(0.2, 0.2, 0.2) // Gray border when not focused
-                            },
-                            width: 2.0,
-                            radius: 0.0.into(),
-                        },
-                        ..Default::default()
-                    }
-                },
-            ),
-        )
-        .on_press(Message::FocusPython);
+        // Toolbar at the top
+        let toolbar = row![
+            button(text("📂 Open")).on_press(Message::OpenFile),
+            button(text("💾 Save")).on_press(Message::SaveFile),
+            button(text("💾 Save As...")).on_press(Message::SaveFileAs),
+            text(self.file_status()),
+            theme_picker,
+        ]
+        .spacing(10)
+        .padding(10);
 
-        // Lua editor with focus indicator and click detection
-        let lua_view = mouse_area(
-            container(self.lua_editor.view().map(Message::LuaEditorEvent)).style(move |_theme| {
-                container::Style {
-                    border: iced::Border {
-                        color: if lua_focused {
-                            iced::Color::from_rgb(0.3, 0.6, 1.0) // Blue border when focused
-                        } else {
-                            iced::Color::from_rgb(0.2, 0.2, 0.2) // Gray border when not focused
-                        },
-                        width: 2.0,
-                        radius: 0.0.into(),
-                    },
-                    ..Default::default()
+        // Error message (if present)
+        let error_view = if let Some(err) = &self.error_message {
+            container(text(format!("❌ Error: {}", err)).style(|_theme| {
+                text::Style {
+                    color: Some(iced::Color::from_rgb(1.0, 0.3, 0.3)),
                 }
-            }),
-        )
-        .on_press(Message::FocusLua);
-
-        container(row![python_view, lua_view].spacing(10))
+            }))
             .padding(10)
-            .center(iced::Fill)
-            .into()
+        } else {
+            container(text(""))
+        };
+
+        // Main editor
+        let editor_view = container(
+            self.editor.view().map(Message::EditorEvent),
+        )
+        .style(|_theme| container::Style {
+            border: iced::Border {
+                color: iced::Color::from_rgb(0.2, 0.2, 0.2),
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        });
+
+        // Main layout
+        container(
+            column![toolbar, error_view, editor_view]
+                .spacing(0)
+                .width(iced::Fill)
+                .height(iced::Fill),
+        )
+        .padding(0)
+        .center(iced::Fill)
+        .into()
+    }
+
+    /// Returns the file status for display.
+    fn file_status(&self) -> String {
+        let file_name = self
+            .current_file
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("New file");
+
+        let modified = if self.editor.is_modified() { " *" } else { "" };
+
+        format!("📄 {}{}", file_name, modified)
+    }
+}
+
+/// Opens a dialog box to select a file to open.
+async fn open_file_dialog() -> Result<(PathBuf, String), String> {
+    let file = rfd::AsyncFileDialog::new()
+        .add_filter("Lua Files", &["lua"])
+        .add_filter("All Files", &["*"])
+        .set_title("Open Lua File")
+        .pick_file()
+        .await;
+
+    if let Some(file) = file {
+        let path = file.path().to_path_buf();
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Unable to read file: {}", e))?;
+        Ok((path, content))
+    } else {
+        Err("No file selected".to_string())
+    }
+}
+
+/// Saves the content to an existing file.
+async fn save_file(path: PathBuf, content: String) -> Result<PathBuf, String> {
+    std::fs::write(&path, content)
+        .map_err(|e| format!("Unable to write file: {}", e))?;
+    Ok(path)
+}
+
+/// Opens a dialog box to save with a new name.
+async fn save_file_as_dialog(content: String) -> Result<PathBuf, String> {
+    let file = rfd::AsyncFileDialog::new()
+        .add_filter("Lua Files", &["lua"])
+        .set_title("Save As")
+        .save_file()
+        .await;
+
+    if let Some(file) = file {
+        let path = file.path().to_path_buf();
+        std::fs::write(&path, content)
+            .map_err(|e| format!("Unable to write file: {}", e))?;
+        Ok(path)
+    } else {
+        Err("Save cancelled".to_string())
     }
 }

@@ -1,8 +1,8 @@
 //! Text selection logic.
 
-use super::CanvasEditor;
+use super::CodeEditor;
 
-impl CanvasEditor {
+impl CodeEditor {
     /// Clears the current selection.
     pub(crate) fn clear_selection(&mut self) {
         self.selection_start = None;
@@ -11,8 +11,12 @@ impl CanvasEditor {
     }
 
     /// Returns the selected text range in normalized order (start before end).
-    pub(crate) fn get_selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
-        if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+    pub(crate) fn get_selection_range(
+        &self,
+    ) -> Option<((usize, usize), (usize, usize))> {
+        if let (Some(start), Some(end)) =
+            (self.selection_start, self.selection_end)
+        {
             // Normalize: ensure start comes before end
             if start.0 < end.0 || (start.0 == end.0 && start.1 < end.1) {
                 Some((start, end))
@@ -66,7 +70,7 @@ mod tests {
 
     #[test]
     fn test_selection_single_line() {
-        let mut editor = CanvasEditor::new("hello world", "py");
+        let mut editor = CodeEditor::new("hello world", "py");
         editor.selection_start = Some((0, 0));
         editor.selection_end = Some((0, 5));
 
@@ -76,7 +80,7 @@ mod tests {
 
     #[test]
     fn test_selection_multiline() {
-        let mut editor = CanvasEditor::new("line1\nline2\nline3", "py");
+        let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
         editor.selection_start = Some((0, 2)); // "ne1"
         editor.selection_end = Some((2, 3)); // to "lin"
 
@@ -86,7 +90,7 @@ mod tests {
 
     #[test]
     fn test_selection_range_normalization() {
-        let mut editor = CanvasEditor::new("hello world", "py");
+        let mut editor = CodeEditor::new("hello world", "py");
         // Set selection in reverse order (end before start)
         editor.selection_start = Some((0, 5));
         editor.selection_end = Some((0, 0));
@@ -98,7 +102,7 @@ mod tests {
 
     #[test]
     fn test_clear_selection() {
-        let mut editor = CanvasEditor::new("hello world", "py");
+        let mut editor = CodeEditor::new("hello world", "py");
         editor.selection_start = Some((0, 0));
         editor.selection_end = Some((0, 5));
 
