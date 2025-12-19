@@ -1,22 +1,24 @@
-//! A code editor widget for the Iced GUI framework.
+//! A high-performance code editor widget for the Iced GUI framework.
 //!
-//! This crate provides a full-featured code editor component with:
+//! This crate provides a canvas-based code editor with:
 //! - Syntax highlighting for multiple programming languages (Python, Lua, Rust, JavaScript, etc.)
 //! - Line numbers display with styled gutter
-//! - Smart cursor tracking and auto-scrolling
-//! - Custom key bindings (e.g., Tab inserts 4 spaces)
+//! - Text selection (mouse drag and keyboard)
+//! - Clipboard operations (copy, paste)
+//! - Scrollbars with custom styling
+//! - Focus management for multiple editors
 //! - Dark theme support with customizable colors
 //!
 //! # Example
 //!
 //! ```ignore
-//! use iced_code_editor::CodeEditorComponent;
+//! use iced_code_editor::{CanvasEditor, CanvasEditorMessage};
 //!
 //! // Create a Python editor
-//! let editor = CodeEditorComponent::new_with_language("print('Hello, World!')", "py");
+//! let editor = CanvasEditor::new("print('Hello, World!')", "py");
 //!
 //! // Create a Rust editor
-//! let rust_editor = CodeEditorComponent::new_with_language("fn main() {}", "rs");
+//! let rust_editor = CanvasEditor::new("fn main() {}", "rs");
 //! ```
 //!
 //! # Supported Languages
@@ -28,16 +30,11 @@
 //! - JavaScript (`"js"` or `"javascript"`)
 //! - And many more...
 //!
-//! For a complete list, refer to the `syntect` crate documentation or
-//! Iced's highlighter module.
+//! For a complete list, refer to the `syntect` crate documentation.
 
 mod canvas_editor;
-mod component;
-mod custom_editor;
 mod state;
 mod text_buffer;
 
 pub use canvas_editor::{CanvasEditor, CanvasEditorMessage};
-pub use component::{CodeEditorComponent, Event};
-pub use custom_editor::{CustomEditor, CustomEditorEvent};
 pub use state::EditorTheme;

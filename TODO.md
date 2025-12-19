@@ -2,11 +2,7 @@
 
 ## Fix
 
-Nettoie les fichiers/le code inutilisé. Refactorise si nécessaire. Ecris des tests unitaires si nécessaire.
-
 En terme de norme de codage, est ce que l'on est conforme à la crate iced ? Suit-on les memes règles ?
-
-Splitte le fichier iced-code-editor/src/component.rs pour améliorer la lisibilité.
 
 Ecrit un README.md à destination des futurs utilisateurs du widget en mettant un exemple concret et une capture d'écran du résultat. Le README.md sera sur GitHub, il faut donc qu'il est le look & feel des projets github pro.
 

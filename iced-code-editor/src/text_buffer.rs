@@ -5,8 +5,6 @@
 //! - Efficient insertions and deletions
 //! - Memory-efficient storage
 
-#![allow(dead_code)] // Methods will be used when editing is implemented
-
 /// A line-based text buffer optimized for editor operations.
 ///
 /// Stores text as a vector of lines for fast random access needed by virtual scrolling.
@@ -54,22 +52,6 @@ impl TextBuffer {
     #[must_use]
     pub fn line(&self, index: usize) -> &str {
         self.lines.get(index).map_or("", |s| s.as_str())
-    }
-
-    /// Returns an iterator over a range of lines.
-    ///
-    /// # Arguments
-    ///
-    /// * `start` - Starting line index (inclusive)
-    /// * `end` - Ending line index (exclusive)
-    ///
-    /// # Returns
-    ///
-    /// An iterator over the line strings
-    pub fn lines(&self, start: usize, end: usize) -> impl Iterator<Item = &str> {
-        let end = end.min(self.lines.len());
-        let start = start.min(end);
-        self.lines[start..end].iter().map(|s| s.as_str())
     }
 
     /// Inserts a character at the specified position.
