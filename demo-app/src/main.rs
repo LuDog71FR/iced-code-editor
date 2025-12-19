@@ -26,7 +26,7 @@ impl EditorTheme {
 impl std::fmt::Display for EditorTheme {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EditorTheme::Dark => write!(f, "🌙 Dark"),
+            EditorTheme::Dark => write!(f, "o Dark"),
             EditorTheme::Light => write!(f, "☀️ Light"),
         }
     }
@@ -42,6 +42,8 @@ struct DemoApp {
     error_message: Option<String>,
     /// Current editor theme
     current_theme: EditorTheme,
+    /// Background color of the application
+    background_color: iced::Color,
 }
 
 /// Application messages.
@@ -116,6 +118,7 @@ person:greet()
                 current_file: None,
                 error_message: None,
                 current_theme: EditorTheme::Dark,
+                background_color: iced::Color::from_rgb(0.15, 0.15, 0.15),
             },
             Task::none(),
         )
@@ -201,6 +204,17 @@ person:greet()
                     EditorTheme::Light => theme::light(&iced::Theme::Light),
                 };
                 self.editor.set_theme(style);
+
+                // Update background color
+                self.background_color = match new_theme {
+                    EditorTheme::Dark => {
+                        iced::Color::from_rgb(0.15, 0.15, 0.15)
+                    }
+                    EditorTheme::Light => {
+                        iced::Color::from_rgb(0.92, 0.92, 0.92)
+                    }
+                };
+
                 Task::none()
             }
         }
@@ -266,6 +280,10 @@ person:greet()
         )
         .padding(0)
         .center(iced::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(iced::Background::Color(self.background_color)),
+            ..Default::default()
+        })
         .into()
     }
 
@@ -280,7 +298,7 @@ person:greet()
 
         let modified = if self.editor.is_modified() { " *" } else { "" };
 
-        format!("📄 {}{}", file_name, modified)
+        format!("{}{}", file_name, modified)
     }
 }
 
