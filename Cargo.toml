@@ -10,10 +10,10 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/LuDog71FR/iced_code_editor"
+repository = "https://github.com/LuDog71FR/iced-code-editor"
 authors = ["LuDog71 <ludog71.trekker238@passmail.net>"]
 
 [workspace.dependencies]
