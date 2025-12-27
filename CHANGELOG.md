@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 None
 
+## 0.2.4 - 2025-12-27
+
+### Fixes
+
+- Key Space not sending to iced-code-editor ([#1](https://github.com/LuDog71FR/iced-code-editor/issues/1)) 
+
+### Changes
+
+- Better handle keyboard entries
+
 ## [0.2.3] - 2025-12-19
 
 ### Fixes

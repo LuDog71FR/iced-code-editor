@@ -76,6 +76,8 @@ pub enum Message {
     Delete,
     /// Enter pressed
     Enter,
+    /// Tab pressed (inserts 4 spaces)
+    Tab,
     /// Arrow key pressed (direction, shift_pressed)
     ArrowKey(ArrowDirection, bool),
     /// Mouse clicked at position

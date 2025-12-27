@@ -216,6 +216,7 @@ impl canvas::Program<Message> for CodeEditor {
             Event::Keyboard(keyboard::Event::KeyPressed {
                 key,
                 modifiers,
+                text,
                 ..
             }) => {
                 // Handle Ctrl+C / Ctrl+Insert (copy)
@@ -295,10 +296,32 @@ impl canvas::Program<Message> for CodeEditor {
                     );
                 }
 
-                let message = match key {
-                    keyboard::Key::Character(c) if !modifiers.control() => {
-                        c.chars().next().map(Message::CharacterInput)
+                // PRIORITY 1: Check if 'text' field has valid printable character
+                // This handles:
+                // - Numpad keys with NumLock ON (key=Named(ArrowDown), text=Some("2"))
+                // - Regular typing with shift, accents, international layouts
+                if let Some(text_content) = text
+                    && !text_content.is_empty()
+                    && !modifiers.control()
+                    && !modifiers.alt()
+                {
+                    // Check if it's a printable character (not a control character)
+                    // This filters out Enter (\n), Tab (\t), Delete (U+007F), etc.
+                    if let Some(first_char) = text_content.chars().next()
+                        && !first_char.is_control()
+                    {
+                        return Some(
+                            Action::publish(Message::CharacterInput(
+                                first_char,
+                            ))
+                            .and_capture(),
+                        );
                     }
+                }
+
+                // PRIORITY 2: Handle special named keys (navigation, editing)
+                // These are only processed if text didn't contain a printable character
+                let message = match key {
                     keyboard::Key::Named(keyboard::key::Named::Backspace) => {
                         Some(Message::Backspace)
                     }
@@ -307,6 +330,10 @@ impl canvas::Program<Message> for CodeEditor {
                     }
                     keyboard::Key::Named(keyboard::key::Named::Enter) => {
                         Some(Message::Enter)
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::Tab) => {
+                        // Insert 4 spaces for Tab
+                        Some(Message::Tab)
                     }
                     keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
                         Some(Message::ArrowKey(
@@ -344,7 +371,22 @@ impl canvas::Program<Message> for CodeEditor {
                     keyboard::Key::Named(keyboard::key::Named::End) => {
                         Some(Message::End(modifiers.shift()))
                     }
-                    _ => None,
+                    // PRIORITY 3: Fallback to extracting from 'key' if text was empty/control char
+                    // This handles edge cases where text field is not populated
+                    _ => {
+                        if !modifiers.control()
+                            && !modifiers.alt()
+                            && let keyboard::Key::Character(c) = key
+                            && !c.is_empty()
+                        {
+                            return c
+                                .chars()
+                                .next()
+                                .map(Message::CharacterInput)
+                                .map(|msg| Action::publish(msg).and_capture());
+                        }
+                        None
+                    }
                 };
 
                 message.map(|msg| Action::publish(msg).and_capture())

@@ -117,6 +117,32 @@ impl CodeEditor {
                 self.cache.clear();
                 self.scroll_to_cursor()
             }
+            Message::Tab => {
+                // Insert 4 spaces for Tab
+                // Start grouping if not already grouping
+                if !self.is_grouping {
+                    self.history.begin_group("Tab");
+                    self.is_grouping = true;
+                }
+
+                let (line, col) = self.cursor;
+                // Insert 4 spaces
+                for i in 0..4 {
+                    let current_col = col + i;
+                    let mut cmd = InsertCharCommand::new(
+                        line,
+                        current_col,
+                        ' ',
+                        (line, current_col),
+                    );
+                    cmd.execute(&mut self.buffer, &mut self.cursor);
+                    self.history.push(Box::new(cmd));
+                }
+
+                self.reset_cursor_blink();
+                self.cache.clear();
+                Task::none()
+            }
             Message::ArrowKey(direction, shift_pressed) => {
                 // End grouping on navigation
                 if self.is_grouping {
