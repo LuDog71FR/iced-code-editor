@@ -221,24 +221,33 @@ person:greet()
 
     /// Renders the user interface.
     fn view(&self) -> Element<'_, Message> {
-        // Theme selector
+        // Theme-aware text color
+        let text_color = match self.current_theme {
+            EditorTheme::Dark => iced::Color::from_rgb(0.9, 0.9, 0.9),
+            EditorTheme::Light => iced::Color::from_rgb(0.0, 0.0, 0.0),
+        };
+
+        // Row 1: Buttons and file status
+        let buttons_row = row![
+            button(text("Open")).on_press(Message::OpenFile),
+            button(text("Save")).on_press(Message::SaveFile),
+            button(text("Save As...")).on_press(Message::SaveFileAs),
+            text(self.file_status()).style(move |_theme| {
+                text::Style { color: Some(text_color) }
+            }),
+        ]
+        .spacing(10)
+        .padding(10);
+
+        // Row 2: Theme selector
         let theme_picker = pick_list(
             &EditorTheme::ALL[..],
             Some(self.current_theme),
             Message::ThemeChanged,
         );
 
-        // Toolbar at the top with theme-aware text color
-        let text_color = match self.current_theme {
-            EditorTheme::Dark => iced::Color::from_rgb(0.9, 0.9, 0.9),
-            EditorTheme::Light => iced::Color::from_rgb(0.0, 0.0, 0.0),
-        };
-
-        let toolbar = row![
-            button(text("Open")).on_press(Message::OpenFile),
-            button(text("Save")).on_press(Message::SaveFile),
-            button(text("Save As...")).on_press(Message::SaveFileAs),
-            text(self.file_status()).style(move |_theme| {
+        let theme_row = row![
+            text("Theme:").style(move |_theme| {
                 text::Style { color: Some(text_color) }
             }),
             theme_picker,
@@ -274,7 +283,7 @@ person:greet()
 
         // Main layout
         container(
-            column![toolbar, error_view, editor_view]
+            column![buttons_row, theme_row, error_view, editor_view]
                 .spacing(0)
                 .width(iced::Fill)
                 .height(iced::Fill),
