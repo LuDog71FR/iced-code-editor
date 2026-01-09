@@ -34,6 +34,14 @@ pub enum Language {
     French,
     /// Spanish language
     Spanish,
+    /// German language
+    German,
+    /// Italian language
+    Italian,
+    /// Portuguese (Brazilian) language
+    PortugueseBR,
+    /// Portuguese (European) language
+    PortuguesePT,
 }
 
 impl Language {
@@ -47,6 +55,10 @@ impl Language {
     /// assert_eq!(Language::English.to_locale(), "en");
     /// assert_eq!(Language::French.to_locale(), "fr");
     /// assert_eq!(Language::Spanish.to_locale(), "es");
+    /// assert_eq!(Language::German.to_locale(), "de");
+    /// assert_eq!(Language::Italian.to_locale(), "it");
+    /// assert_eq!(Language::PortugueseBR.to_locale(), "pt-BR");
+    /// assert_eq!(Language::PortuguesePT.to_locale(), "pt-PT");
     /// ```
     #[must_use]
     pub const fn to_locale(self) -> &'static str {
@@ -54,6 +66,10 @@ impl Language {
             Self::English => "en",
             Self::French => "fr",
             Self::Spanish => "es",
+            Self::German => "de",
+            Self::Italian => "it",
+            Self::PortugueseBR => "pt-BR",
+            Self::PortuguesePT => "pt-PT",
         }
     }
 }
@@ -350,6 +366,94 @@ mod tests {
     }
 
     #[test]
+    fn test_german_translations() {
+        let t = Translations::new(Language::German);
+        assert_eq!(t.search_placeholder(), "Suchen...");
+        assert_eq!(t.replace_placeholder(), "Ersetzen...");
+        assert_eq!(t.case_sensitive_label(), "Groß-/Kleinschreibung");
+        assert_eq!(
+            t.previous_match_tooltip(),
+            "Vorheriger Treffer (Umschalt+F3)"
+        );
+        assert_eq!(t.next_match_tooltip(), "Nächster Treffer (F3 / Enter)");
+        assert_eq!(t.close_search_tooltip(), "Suchdialog schließen (Esc)");
+        assert_eq!(t.replace_current_tooltip(), "Aktuellen Treffer ersetzen");
+        assert_eq!(t.replace_all_tooltip(), "Alle ersetzen");
+    }
+
+    #[test]
+    fn test_italian_translations() {
+        let t = Translations::new(Language::Italian);
+        assert_eq!(t.search_placeholder(), "Cerca...");
+        assert_eq!(t.replace_placeholder(), "Sostituisci...");
+        assert_eq!(t.case_sensitive_label(), "Distingui maiuscole/minuscole");
+        assert_eq!(
+            t.previous_match_tooltip(),
+            "Risultato precedente (Maiusc+F3)"
+        );
+        assert_eq!(t.next_match_tooltip(), "Risultato successivo (F3 / Invio)");
+        assert_eq!(
+            t.close_search_tooltip(),
+            "Chiudi finestra di ricerca (Esc)"
+        );
+        assert_eq!(
+            t.replace_current_tooltip(),
+            "Sostituisci risultato corrente"
+        );
+        assert_eq!(t.replace_all_tooltip(), "Sostituisci tutto");
+    }
+
+    #[test]
+    fn test_portuguese_br_translations() {
+        let t = Translations::new(Language::PortugueseBR);
+        assert_eq!(t.search_placeholder(), "Pesquisar...");
+        assert_eq!(t.replace_placeholder(), "Substituir...");
+        assert_eq!(t.case_sensitive_label(), "Diferenciar maiúsculas");
+        assert_eq!(
+            t.previous_match_tooltip(),
+            "Correspondência anterior (Shift+F3)"
+        );
+        assert_eq!(
+            t.next_match_tooltip(),
+            "Próxima correspondência (F3 / Enter)"
+        );
+        assert_eq!(
+            t.close_search_tooltip(),
+            "Fechar diálogo de pesquisa (Esc)"
+        );
+        assert_eq!(
+            t.replace_current_tooltip(),
+            "Substituir correspondência atual"
+        );
+        assert_eq!(t.replace_all_tooltip(), "Substituir tudo");
+    }
+
+    #[test]
+    fn test_portuguese_pt_translations() {
+        let t = Translations::new(Language::PortuguesePT);
+        assert_eq!(t.search_placeholder(), "Pesquisar...");
+        assert_eq!(t.replace_placeholder(), "Substituir...");
+        assert_eq!(t.case_sensitive_label(), "Diferenciar maiúsculas");
+        assert_eq!(
+            t.previous_match_tooltip(),
+            "Correspondência anterior (Shift+F3)"
+        );
+        assert_eq!(
+            t.next_match_tooltip(),
+            "Próxima correspondência (F3 / Enter)"
+        );
+        assert_eq!(
+            t.close_search_tooltip(),
+            "Fechar diálogo de pesquisa (Esc)"
+        );
+        assert_eq!(
+            t.replace_current_tooltip(),
+            "Substituir correspondência actual"
+        );
+        assert_eq!(t.replace_all_tooltip(), "Substituir tudo");
+    }
+
+    #[test]
     fn test_language_switching() {
         let mut t = Translations::new(Language::English);
         assert_eq!(t.search_placeholder(), "Search...");
@@ -359,5 +463,17 @@ mod tests {
 
         t.set_language(Language::Spanish);
         assert_eq!(t.search_placeholder(), "Buscar...");
+
+        t.set_language(Language::German);
+        assert_eq!(t.search_placeholder(), "Suchen...");
+
+        t.set_language(Language::Italian);
+        assert_eq!(t.search_placeholder(), "Cerca...");
+
+        t.set_language(Language::PortugueseBR);
+        assert_eq!(t.search_placeholder(), "Pesquisar...");
+
+        t.set_language(Language::PortuguesePT);
+        assert_eq!(t.search_placeholder(), "Pesquisar...");
     }
 }

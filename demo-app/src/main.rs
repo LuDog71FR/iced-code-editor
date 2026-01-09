@@ -32,10 +32,14 @@ fn main() -> iced::Result {
 struct LanguageOption(Language);
 
 impl LanguageOption {
-    const ALL: [LanguageOption; 3] = [
+    const ALL: [LanguageOption; 7] = [
+        LanguageOption(Language::German),
         LanguageOption(Language::English),
-        LanguageOption(Language::French),
         LanguageOption(Language::Spanish),
+        LanguageOption(Language::French),
+        LanguageOption(Language::Italian),
+        LanguageOption(Language::PortugueseBR),
+        LanguageOption(Language::PortuguesePT),
     ];
 
     fn inner(&self) -> Language {
@@ -55,6 +59,10 @@ impl std::fmt::Display for LanguageOption {
             Language::English => write!(f, "English"),
             Language::French => write!(f, "Français"),
             Language::Spanish => write!(f, "Español"),
+            Language::German => write!(f, "Deutsch"),
+            Language::Italian => write!(f, "Italiano"),
+            Language::PortugueseBR => write!(f, "Português (BR)"),
+            Language::PortuguesePT => write!(f, "Português (PT)"),
         }
     }
 }
