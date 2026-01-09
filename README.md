@@ -192,24 +192,31 @@ The editor natively supports all built-in Iced themes with automatic color adapt
 ### Supported Themes
 
 **Basic Themes:**
+
 - Light, Dark
 
 **Popular Color Schemes:**
+
 - Dracula, Nord, Solarized (Light/Dark), Gruvbox (Light/Dark)
 
 **Catppuccin Variants:**
+
 - Latte, Frappé, Macchiato, Mocha
 
 **Tokyo Night Variants:**
+
 - Tokyo Night, Tokyo Night Storm, Tokyo Night Light
 
 **Kanagawa Variants:**
+
 - Wave, Dragon, Lotus
 
 **Additional Themes:**
+
 - Moonfly, Nightfly, Oxocarbon, Ferra
 
 Each theme automatically provides:
+
 - Optimized background and foreground colors
 - Adaptive gutter (line numbers) styling
 - Appropriate text selection colors
@@ -255,6 +262,8 @@ cargo run --package demo-app --release
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+Check [docs\DEV.md]((https://github.com/LuDog71FR/iced-code-editor/blob/main/docs\DEV.md) for more details.
 
 ## License
 
