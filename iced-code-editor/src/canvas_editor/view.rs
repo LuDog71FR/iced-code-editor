@@ -4,7 +4,10 @@ use iced::widget::canvas::Canvas;
 use iced::widget::{Row, Scrollable, Space, container, scrollable};
 use iced::{Background, Border, Color, Element, Length, Shadow};
 
-use super::{CodeEditor, GUTTER_WIDTH, LINE_HEIGHT, Message};
+use super::{
+    CodeEditor, GUTTER_WIDTH, LINE_HEIGHT, Message,
+    wrapping::WrappingCalculator,
+};
 
 impl CodeEditor {
     /// Creates the view element with scrollable wrapper.
@@ -13,11 +16,20 @@ impl CodeEditor {
     /// to ensure proper clipping when the pane is resized.
     pub fn view(&self) -> Element<'_, Message> {
         // Calculate total content height based on actual lines
+        // When wrapping is enabled, use visual line count
+        let wrapping_calc =
+            WrappingCalculator::new(self.wrap_enabled, self.wrap_column);
+
+        // Use viewport width for calculating visual lines
+        let visual_lines = wrapping_calc
+            .calculate_visual_lines(&self.buffer, self.viewport_width);
+
+        let total_visual_lines = visual_lines.len();
+        let content_height = total_visual_lines as f32 * LINE_HEIGHT;
+
         // Use max of content height and viewport height to ensure the canvas
         // always covers the visible area (prevents visual artifacts when
         // content is shorter than viewport after reset/file change)
-        let total_lines = self.buffer.line_count();
-        let content_height = total_lines as f32 * LINE_HEIGHT;
         let canvas_height = content_height.max(self.viewport_height);
 
         // Create canvas with height that covers at least the viewport

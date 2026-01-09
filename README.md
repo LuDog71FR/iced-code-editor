@@ -16,8 +16,8 @@ A high-performance, canvas-based code editor widget for [Iced](https://github.co
 
 This crate provides a fully-featured code editor widget with syntax highlighting, line numbers, text selection, and comprehensive keyboard navigation for the Iced GUI framework.
 
-![Demo Screenshot Dark Theme](screenshot_dark_theme.png)
-![Demo Screenshot Light Theme](screenshot_light_theme.png)
+![Demo Screenshot Dark Theme](https://github.com/LuDog71FR/iced-code-editor/blob/main/screenshot_dark_theme.png)
+![Demo Screenshot Light Theme](https://github.com/LuDog71FR/iced-code-editor/blob/main/screenshot_light_theme.png)
 
 ## Features
 
@@ -29,12 +29,12 @@ This crate provides a fully-featured code editor widget with syntax highlighting
 - **Custom scrollbars** with themed styling
 - **Focus management** for multiple editors
 - **Native Iced theme support** - Automatically adapts to all 23+ built-in Iced themes
+- **Line wrapping** to split long lines
 - **High performance** canvas-based rendering
 
 ## Planned features
 
 - [ ] Search and replace
-- [ ] Line wrapping
 - [ ] Multiple cursors for simultaneous editing at multiple positions
 - [ ] Collapse/expand blocks
 - [ ] Indentation-based or syntax-aware
@@ -48,7 +48,7 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 iced = "0.14"
-iced-code-editor = "0.2"
+iced-code-editor = "0.3"
 ```
 
 ### Basic Example
@@ -247,7 +247,7 @@ cargo run --package demo-app --release
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-Check [docs\DEV.md]((https://github.com/LuDog71FR/iced-code-editor/blob/main/docs\DEV.md) for more details.
+Check [docs\DEV.md](https://github.com/LuDog71FR/iced-code-editor/blob/main/docs\DEV.md) for more details.
 
 ## License
 

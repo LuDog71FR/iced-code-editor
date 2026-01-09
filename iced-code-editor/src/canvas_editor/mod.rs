@@ -20,6 +20,7 @@ pub mod history;
 mod selection;
 mod update;
 mod view;
+mod wrapping;
 
 /// Canvas-based text editor constants
 pub(crate) const FONT_SIZE: f32 = 14.0;
@@ -59,10 +60,16 @@ pub struct CodeEditor {
     pub(crate) viewport_scroll: f32,
     /// Viewport height (visible area)
     pub(crate) viewport_height: f32,
+    /// Viewport width (visible area)
+    pub(crate) viewport_width: f32,
     /// Command history for undo/redo
     pub(crate) history: CommandHistory,
     /// Whether we're currently grouping commands (for smart undo)
     pub(crate) is_grouping: bool,
+    /// Line wrapping enabled
+    pub(crate) wrap_enabled: bool,
+    /// Wrap column (None = wrap at viewport width)
+    pub(crate) wrap_column: Option<usize>,
 }
 
 /// Messages emitted by the code editor
@@ -150,8 +157,11 @@ impl CodeEditor {
             scrollable_id: Id::unique(),
             viewport_scroll: 0.0,
             viewport_height: 600.0, // Default, will be updated
+            viewport_width: 800.0,  // Default, will be updated
             history: CommandHistory::new(100),
             is_grouping: false,
+            wrap_enabled: true,
+            wrap_column: None,
         }
     }
 
@@ -288,5 +298,85 @@ impl CodeEditor {
     /// Returns whether redo is available.
     pub fn can_redo(&self) -> bool {
         self.history.can_redo()
+    }
+
+    /// Sets whether line wrapping is enabled.
+    ///
+    /// When enabled, long lines will wrap at the viewport width or at a
+    /// configured column width.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable line wrapping
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_wrap_enabled(false); // Disable wrapping
+    /// ```
+    pub fn set_wrap_enabled(&mut self, enabled: bool) {
+        if self.wrap_enabled != enabled {
+            self.wrap_enabled = enabled;
+            self.cache.clear(); // Force redraw
+        }
+    }
+
+    /// Returns whether line wrapping is enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` if line wrapping is enabled, `false` otherwise
+    pub fn wrap_enabled(&self) -> bool {
+        self.wrap_enabled
+    }
+
+    /// Sets the line wrapping with builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable line wrapping
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_wrap_enabled(false);
+    /// ```
+    #[must_use]
+    pub fn with_wrap_enabled(mut self, enabled: bool) -> Self {
+        self.wrap_enabled = enabled;
+        self
+    }
+
+    /// Sets the wrap column (fixed width wrapping).
+    ///
+    /// When set to `Some(n)`, lines will wrap at column `n`.
+    /// When set to `None`, lines will wrap at the viewport width.
+    ///
+    /// # Arguments
+    ///
+    /// * `column` - The column to wrap at, or None for viewport-based wrapping
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_wrap_column(Some(80)); // Wrap at 80 characters
+    /// ```
+    #[must_use]
+    pub fn with_wrap_column(mut self, column: Option<usize>) -> Self {
+        self.wrap_column = column;
+        self
     }
 }

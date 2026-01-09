@@ -6,11 +6,6 @@ None ?? ;-)
 
 ## Features
 
-1. **Line wrapping**
-
-   - Soft wraps for long lines
-   - Configurable wrap column
-
 2. **Multiple cursors**
 
    - Simultaneous editing at multiple positions

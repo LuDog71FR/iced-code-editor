@@ -10,8 +10,8 @@
 //! This layout is designed to test overflow and z-index issues.
 
 use iced::widget::{
-    PaneGrid, Space, button, column, container, pane_grid, pick_list, row,
-    scrollable, text,
+    PaneGrid, Space, button, checkbox, column, container, pane_grid, pick_list,
+    row, scrollable, text,
 };
 use iced::{Color, Element, Length, Subscription, Task, Theme, window};
 use iced_aw::widget::drop_down::DropDown;
@@ -149,6 +149,8 @@ enum Message {
     ClearLog,
     /// Run code (simulated)
     RunCode,
+    /// Toggle line wrapping
+    ToggleWrap(bool),
 }
 
 impl DemoApp {
@@ -296,6 +298,17 @@ greet("World")
                 let line_count = self.editor.content().lines().count();
                 self.log("OUTPUT", &format!("Script has {} lines", line_count));
                 self.log("OUTPUT", "Execution completed (simulated)");
+                Task::none()
+            }
+            Message::ToggleWrap(enabled) => {
+                self.log(
+                    "INFO",
+                    &format!(
+                        "Line wrapping: {}",
+                        if enabled { "enabled" } else { "disabled" }
+                    ),
+                );
+                self.editor.set_wrap_enabled(enabled);
                 Task::none()
             }
         }
@@ -498,6 +511,12 @@ greet("World")
         )
         .on_dismiss(Message::DropdownToggle);
 
+        // Wrap checkbox
+        let wrap_checkbox = checkbox(self.editor.wrap_enabled())
+            .label("Line wrapping")
+            .on_toggle(Message::ToggleWrap)
+            .text_size(14);
+
         // Editor in a constrained container (400px height, clipped)
         let editor_view =
             container(self.editor.view().map(Message::EditorEvent))
@@ -513,10 +532,14 @@ greet("World")
                 });
 
         container(
-            column![row![dropdown].padding(10), editor_view,]
-                .spacing(5)
-                .width(Length::Fill)
-                .height(Length::Fill),
+            column![
+                row![dropdown, Space::new().width(10), wrap_checkbox]
+                    .padding(10),
+                editor_view,
+            ]
+            .spacing(5)
+            .width(Length::Fill)
+            .height(Length::Fill),
         )
         .width(Length::Fill)
         .height(Length::Fill)

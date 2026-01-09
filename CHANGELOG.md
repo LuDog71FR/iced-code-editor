@@ -14,7 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- feat!: Native support for all built-in Iced themes
+- feat: line wrapping
+
+  - Long lines are split into multiple visual lines at viewport width
+  - Continuation lines display a ↪ indicator in the gutter
+  - Toggle feature on/off via checkbox in editor toolbar
+  - Cursor navigation and text selection work across wrapped lines
+
+- feat!: native support for all built-in Iced themes
+
   - New `theme::from_iced_theme()` function that automatically adapts editor colors to any Iced theme palette
   - Color helper functions for optimal code editor appearance (darken, lighten, dim_color, with_alpha)
   - Demo app now uses native Iced theme system with full theme picker

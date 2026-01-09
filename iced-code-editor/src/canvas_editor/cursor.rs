@@ -6,6 +6,7 @@ use iced::{Point, Task};
 
 use super::{
     ArrowDirection, CHAR_WIDTH, CodeEditor, GUTTER_WIDTH, LINE_HEIGHT, Message,
+    wrapping::WrappingCalculator,
 };
 
 impl CodeEditor {
@@ -14,18 +15,75 @@ impl CodeEditor {
         let (line, col) = self.cursor;
 
         match direction {
-            ArrowDirection::Up => {
-                if line > 0 {
-                    let new_line = line - 1;
-                    let line_len = self.buffer.line_len(new_line);
-                    self.cursor = (new_line, col.min(line_len));
-                }
-            }
-            ArrowDirection::Down => {
-                if line + 1 < self.buffer.line_count() {
-                    let new_line = line + 1;
-                    let line_len = self.buffer.line_len(new_line);
-                    self.cursor = (new_line, col.min(line_len));
+            ArrowDirection::Up | ArrowDirection::Down => {
+                // For up/down, we need to handle wrapped lines
+                let wrapping_calc = WrappingCalculator::new(
+                    self.wrap_enabled,
+                    self.wrap_column,
+                );
+                let visual_lines = wrapping_calc
+                    .calculate_visual_lines(&self.buffer, self.viewport_width);
+
+                // Find current visual line
+                if let Some(current_visual) =
+                    WrappingCalculator::logical_to_visual(
+                        &visual_lines,
+                        line,
+                        col,
+                    )
+                {
+                    let target_visual = match direction {
+                        ArrowDirection::Up => {
+                            if current_visual > 0 {
+                                current_visual - 1
+                            } else {
+                                return; // Already at top
+                            }
+                        }
+                        ArrowDirection::Down => {
+                            if current_visual + 1 < visual_lines.len() {
+                                current_visual + 1
+                            } else {
+                                return; // Already at bottom
+                            }
+                        }
+                        _ => {
+                            // This should never happen as we're in the Up/Down branch
+                            return;
+                        }
+                    };
+
+                    let target_vl = &visual_lines[target_visual];
+                    let current_vl = &visual_lines[current_visual];
+
+                    // Try to maintain column position, clamped to segment
+                    let new_col = if target_vl.logical_line == line {
+                        // Same logical line, different segment
+                        // Calculate relative position in current segment
+                        let offset_in_current =
+                            col.saturating_sub(current_vl.start_col);
+                        // Apply to target segment, ensuring we stay within bounds
+                        let target_col =
+                            target_vl.start_col + offset_in_current;
+                        // Clamp to segment bounds: stay strictly within [start_col, end_col)
+                        // but make sure we don't go to exactly end_col unless it's the last segment
+                        if target_col >= target_vl.end_col {
+                            target_vl
+                                .end_col
+                                .saturating_sub(1)
+                                .max(target_vl.start_col)
+                        } else {
+                            target_col
+                        }
+                    } else {
+                        // Different logical line
+                        let target_line_len =
+                            self.buffer.line_len(target_vl.logical_line);
+                        (target_vl.start_col + col.min(target_vl.len()))
+                            .min(target_line_len)
+                    };
+
+                    self.cursor = (target_vl.logical_line, new_col);
                 }
             }
             ArrowDirection::Left => {
@@ -57,23 +115,57 @@ impl CodeEditor {
             return; // Clicked in gutter
         }
 
-        // Calculate line number
-        let line = ((point.y + self.scroll_offset) / LINE_HEIGHT) as usize;
-        let line = line.min(self.buffer.line_count().saturating_sub(1));
+        // Calculate visual line number based on viewport scroll
+        let visual_line_idx =
+            ((point.y + self.viewport_scroll) / LINE_HEIGHT) as usize;
 
-        // Calculate column
-        let x_in_text = point.x - GUTTER_WIDTH;
-        let col = (x_in_text / CHAR_WIDTH) as usize;
-        let line_len = self.buffer.line_len(line);
-        let col = col.min(line_len);
+        // Use wrapping calculator to find logical position
+        let wrapping_calc =
+            WrappingCalculator::new(self.wrap_enabled, self.wrap_column);
+        let visual_lines = wrapping_calc
+            .calculate_visual_lines(&self.buffer, self.viewport_width);
 
-        self.cursor = (line, col);
+        if visual_line_idx >= visual_lines.len() {
+            // Clicked beyond last line - move to end of document
+            let last_line = self.buffer.line_count().saturating_sub(1);
+            let last_col = self.buffer.line_len(last_line);
+            self.cursor = (last_line, last_col);
+            self.cache.clear();
+            return;
+        }
+
+        let visual_line = &visual_lines[visual_line_idx];
+
+        // Calculate column within the segment
+        let x_in_text = point.x - GUTTER_WIDTH - 5.0;
+        let col_offset = (x_in_text / CHAR_WIDTH).max(0.0) as usize;
+        let col = (visual_line.start_col + col_offset).min(visual_line.end_col);
+
+        self.cursor = (visual_line.logical_line, col);
         self.cache.clear();
     }
 
     /// Returns a scroll command to make the cursor visible.
     pub(crate) fn scroll_to_cursor(&self) -> Task<Message> {
-        let cursor_y = self.cursor.0 as f32 * LINE_HEIGHT;
+        // Use wrapping calculator to find visual line
+        let wrapping_calc =
+            WrappingCalculator::new(self.wrap_enabled, self.wrap_column);
+        let visual_lines = wrapping_calc
+            .calculate_visual_lines(&self.buffer, self.viewport_width);
+
+        let cursor_visual = WrappingCalculator::logical_to_visual(
+            &visual_lines,
+            self.cursor.0,
+            self.cursor.1,
+        );
+
+        let cursor_y = if let Some(visual_idx) = cursor_visual {
+            visual_idx as f32 * LINE_HEIGHT
+        } else {
+            // Fallback to logical line if visual not found
+            self.cursor.0 as f32 * LINE_HEIGHT
+        };
+
         let viewport_top = self.viewport_scroll;
         let viewport_bottom = self.viewport_scroll + self.viewport_height;
 
@@ -131,17 +223,31 @@ impl CodeEditor {
             return;
         }
 
-        // Calculate line and column (same as mouse click)
-        let line = ((point.y + self.scroll_offset) / LINE_HEIGHT) as usize;
-        let line = line.min(self.buffer.line_count().saturating_sub(1));
+        // Calculate visual line based on viewport scroll (same as click)
+        let visual_line_idx =
+            ((point.y + self.viewport_scroll) / LINE_HEIGHT) as usize;
 
-        let x_in_text = point.x - GUTTER_WIDTH;
-        let col = (x_in_text / CHAR_WIDTH) as usize;
-        let line_len = self.buffer.line_len(line);
-        let col = col.min(line_len);
+        let wrapping_calc =
+            WrappingCalculator::new(self.wrap_enabled, self.wrap_column);
+        let visual_lines =
+            wrapping_calc.calculate_visual_lines(&self.buffer, 800.0);
+
+        if visual_line_idx >= visual_lines.len() {
+            let last_line = self.buffer.line_count().saturating_sub(1);
+            let last_col = self.buffer.line_len(last_line);
+            self.cursor = (last_line, last_col);
+            self.selection_end = Some(self.cursor);
+            return;
+        }
+
+        let visual_line = &visual_lines[visual_line_idx];
+
+        let x_in_text = point.x - GUTTER_WIDTH - 5.0;
+        let col_offset = (x_in_text / CHAR_WIDTH).max(0.0) as usize;
+        let col = (visual_line.start_col + col_offset).min(visual_line.end_col);
 
         // Update cursor and selection end
-        self.cursor = (line, col);
+        self.cursor = (visual_line.logical_line, col);
         self.selection_end = Some(self.cursor);
     }
 }

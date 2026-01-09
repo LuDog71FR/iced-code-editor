@@ -9,7 +9,7 @@ use syntect::parsing::SyntaxSet;
 
 use super::{
     ArrowDirection, CHAR_WIDTH, CodeEditor, FONT_SIZE, GUTTER_WIDTH,
-    LINE_HEIGHT, Message,
+    LINE_HEIGHT, Message, wrapping::WrappingCalculator,
 };
 use iced::widget::canvas::Action;
 
@@ -25,11 +25,15 @@ impl canvas::Program<Message> for CodeEditor {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let geometry = self.cache.draw(renderer, bounds.size(), |frame| {
-            let total_lines = self.buffer.line_count();
+            // Initialize wrapping calculator
+            let wrapping_calc =
+                WrappingCalculator::new(self.wrap_enabled, self.wrap_column);
+
+            // Calculate visual lines
+            let visual_lines = wrapping_calc
+                .calculate_visual_lines(&self.buffer, bounds.width);
 
             // Calculate visible line range based on viewport for optimized rendering
-            // This ensures we only draw lines that are visible, preventing overflow
-            // and improving performance for large files.
             // Use bounds.height as fallback when viewport_height is not yet initialized
             let effective_viewport_height = if self.viewport_height > 0.0 {
                 self.viewport_height
@@ -40,8 +44,8 @@ impl canvas::Program<Message> for CodeEditor {
                 (self.viewport_scroll / LINE_HEIGHT).floor() as usize;
             let visible_lines_count =
                 (effective_viewport_height / LINE_HEIGHT).ceil() as usize + 2;
-            let last_visible_line =
-                (first_visible_line + visible_lines_count).min(total_lines);
+            let last_visible_line = (first_visible_line + visible_lines_count)
+                .min(visual_lines.len());
 
             // Load syntax highlighting
             let syntax_set = SyntaxSet::load_defaults_newlines();
@@ -64,25 +68,43 @@ impl canvas::Program<Message> for CodeEditor {
             };
 
             // Draw only visible lines (virtual scrolling optimization)
-            for line_idx in first_visible_line..last_visible_line {
-                let y = line_idx as f32 * LINE_HEIGHT;
+            for (idx, visual_line) in visual_lines
+                .iter()
+                .enumerate()
+                .skip(first_visible_line)
+                .take(last_visible_line - first_visible_line)
+            {
+                let y = idx as f32 * LINE_HEIGHT;
 
                 // Note: Gutter background is handled by a container in view.rs
                 // to ensure proper clipping when the pane is resized.
 
-                // Draw line number
-                let line_num_text = format!("{:>4}", line_idx + 1);
-                frame.fill_text(canvas::Text {
-                    content: line_num_text,
-                    position: Point::new(5.0, y + 2.0),
-                    color: self.style.line_number_color,
-                    size: FONT_SIZE.into(),
-                    font: iced::Font::MONOSPACE,
-                    ..canvas::Text::default()
-                });
+                // Draw line number only for first segment
+                if visual_line.is_first_segment() {
+                    let line_num_text =
+                        format!("{:>4}", visual_line.logical_line + 1);
+                    frame.fill_text(canvas::Text {
+                        content: line_num_text,
+                        position: Point::new(5.0, y + 2.0),
+                        color: self.style.line_number_color,
+                        size: FONT_SIZE.into(),
+                        font: iced::Font::MONOSPACE,
+                        ..canvas::Text::default()
+                    });
+                } else {
+                    // Draw wrap indicator for continuation lines
+                    frame.fill_text(canvas::Text {
+                        content: "↪".to_string(),
+                        position: Point::new(GUTTER_WIDTH - 20.0, y + 2.0),
+                        color: self.style.line_number_color,
+                        size: FONT_SIZE.into(),
+                        font: iced::Font::MONOSPACE,
+                        ..canvas::Text::default()
+                    });
+                }
 
-                // Highlight current line
-                if line_idx == self.cursor.0 {
+                // Highlight current line (based on logical line)
+                if visual_line.logical_line == self.cursor.0 {
                     frame.fill_rectangle(
                         Point::new(GUTTER_WIDTH, y),
                         Size::new(bounds.width - GUTTER_WIDTH, LINE_HEIGHT),
@@ -91,40 +113,71 @@ impl canvas::Program<Message> for CodeEditor {
                 }
 
                 // Draw text content with syntax highlighting
-                let line_content = self.buffer.line(line_idx);
+                let full_line_content =
+                    self.buffer.line(visual_line.logical_line);
+                let line_segment = &full_line_content
+                    [visual_line.start_col..visual_line.end_col];
 
                 if let Some(syntax) = syntax_ref {
                     let mut highlighter =
                         HighlightLines::new(syntax, syntax_theme);
-                    let ranges = highlighter
-                        .highlight_line(line_content, &syntax_set)
+
+                    // Highlight the full line to get correct token colors
+                    let full_line_ranges = highlighter
+                        .highlight_line(full_line_content, &syntax_set)
                         .unwrap_or_else(|_| {
-                            vec![(Style::default(), line_content)]
+                            vec![(Style::default(), full_line_content)]
                         });
 
+                    // Extract only the ranges that fall within our segment
                     let mut x_offset = GUTTER_WIDTH + 5.0;
-                    for (style, text) in ranges {
-                        let color = Color::from_rgb(
-                            f32::from(style.foreground.r) / 255.0,
-                            f32::from(style.foreground.g) / 255.0,
-                            f32::from(style.foreground.b) / 255.0,
-                        );
+                    let mut char_pos = 0;
 
-                        frame.fill_text(canvas::Text {
-                            content: text.to_string(),
-                            position: Point::new(x_offset, y + 2.0),
-                            color,
-                            size: FONT_SIZE.into(),
-                            font: iced::Font::MONOSPACE,
-                            ..canvas::Text::default()
-                        });
+                    for (style, text) in full_line_ranges {
+                        let text_len = text.len();
+                        let text_end = char_pos + text_len;
 
-                        x_offset += text.len() as f32 * CHAR_WIDTH;
+                        // Check if this token intersects with our segment
+                        if text_end > visual_line.start_col
+                            && char_pos < visual_line.end_col
+                        {
+                            // Calculate the intersection
+                            let segment_start =
+                                char_pos.max(visual_line.start_col);
+                            let segment_end = text_end.min(visual_line.end_col);
+
+                            let text_start_offset =
+                                segment_start.saturating_sub(char_pos);
+                            let text_end_offset = text_start_offset
+                                + (segment_end - segment_start);
+
+                            let segment_text =
+                                &text[text_start_offset..text_end_offset];
+
+                            let color = Color::from_rgb(
+                                f32::from(style.foreground.r) / 255.0,
+                                f32::from(style.foreground.g) / 255.0,
+                                f32::from(style.foreground.b) / 255.0,
+                            );
+
+                            frame.fill_text(canvas::Text {
+                                content: segment_text.to_string(),
+                                position: Point::new(x_offset, y + 2.0),
+                                color,
+                                size: FONT_SIZE.into(),
+                                font: iced::Font::MONOSPACE,
+                                ..canvas::Text::default()
+                            });
+
+                            x_offset += segment_text.len() as f32 * CHAR_WIDTH;
+                        }
+
+                        char_pos = text_end;
                     }
                 } else {
                     // Fallback to plain text
                     frame.fill_text(canvas::Text {
-                        content: line_content.to_string(),
+                        content: line_segment.to_string(),
                         position: Point::new(GUTTER_WIDTH + 5.0, y + 2.0),
                         color: self.style.text_color,
                         size: FONT_SIZE.into(),
@@ -141,72 +194,156 @@ impl canvas::Program<Message> for CodeEditor {
                 let selection_color = Color { r: 0.3, g: 0.5, b: 0.8, a: 0.3 };
 
                 if start.0 == end.0 {
-                    // Single line selection
-                    let y = start.0 as f32 * LINE_HEIGHT;
-                    let x_start =
-                        GUTTER_WIDTH + 5.0 + start.1 as f32 * CHAR_WIDTH;
-                    let x_end = GUTTER_WIDTH + 5.0 + end.1 as f32 * CHAR_WIDTH;
-
-                    frame.fill_rectangle(
-                        Point::new(x_start, y + 2.0),
-                        Size::new(x_end - x_start, LINE_HEIGHT - 4.0),
-                        selection_color,
+                    // Single line selection - need to handle wrapped segments
+                    let start_visual = WrappingCalculator::logical_to_visual(
+                        &visual_lines,
+                        start.0,
+                        start.1,
                     );
+                    let end_visual = WrappingCalculator::logical_to_visual(
+                        &visual_lines,
+                        end.0,
+                        end.1,
+                    );
+
+                    if let (Some(start_v), Some(end_v)) =
+                        (start_visual, end_visual)
+                    {
+                        if start_v == end_v {
+                            // Selection within same visual line
+                            let y = start_v as f32 * LINE_HEIGHT;
+                            let x_start = GUTTER_WIDTH
+                                + 5.0
+                                + start.1 as f32 * CHAR_WIDTH;
+                            let x_end =
+                                GUTTER_WIDTH + 5.0 + end.1 as f32 * CHAR_WIDTH;
+
+                            frame.fill_rectangle(
+                                Point::new(x_start, y + 2.0),
+                                Size::new(x_end - x_start, LINE_HEIGHT - 4.0),
+                                selection_color,
+                            );
+                        } else {
+                            // Selection spans multiple visual lines (same logical line)
+                            for (v_idx, vl) in visual_lines
+                                .iter()
+                                .enumerate()
+                                .skip(start_v)
+                                .take(end_v - start_v + 1)
+                            {
+                                let y = v_idx as f32 * LINE_HEIGHT;
+
+                                let sel_start_col = if v_idx == start_v {
+                                    start.1
+                                } else {
+                                    vl.start_col
+                                };
+                                let sel_end_col = if v_idx == end_v {
+                                    end.1
+                                } else {
+                                    vl.end_col
+                                };
+
+                                let x_start = GUTTER_WIDTH
+                                    + 5.0
+                                    + (sel_start_col - vl.start_col) as f32
+                                        * CHAR_WIDTH;
+                                let x_end = GUTTER_WIDTH
+                                    + 5.0
+                                    + (sel_end_col - vl.start_col) as f32
+                                        * CHAR_WIDTH;
+
+                                frame.fill_rectangle(
+                                    Point::new(x_start, y + 2.0),
+                                    Size::new(
+                                        x_end - x_start,
+                                        LINE_HEIGHT - 4.0,
+                                    ),
+                                    selection_color,
+                                );
+                            }
+                        }
+                    }
                 } else {
                     // Multi-line selection
-                    // First line - from start column to end of line
-                    let y_start = start.0 as f32 * LINE_HEIGHT;
-                    let x_start =
-                        GUTTER_WIDTH + 5.0 + start.1 as f32 * CHAR_WIDTH;
-                    let first_line_len = self.buffer.line_len(start.0);
-                    let x_end_first =
-                        GUTTER_WIDTH + 5.0 + first_line_len as f32 * CHAR_WIDTH;
-
-                    frame.fill_rectangle(
-                        Point::new(x_start, y_start + 2.0),
-                        Size::new(x_end_first - x_start, LINE_HEIGHT - 4.0),
-                        selection_color,
+                    let start_visual = WrappingCalculator::logical_to_visual(
+                        &visual_lines,
+                        start.0,
+                        start.1,
+                    );
+                    let end_visual = WrappingCalculator::logical_to_visual(
+                        &visual_lines,
+                        end.0,
+                        end.1,
                     );
 
-                    // Middle lines - full width
-                    for line_idx in (start.0 + 1)..end.0 {
-                        let y = line_idx as f32 * LINE_HEIGHT;
-                        let line_len = self.buffer.line_len(line_idx);
-                        let width = line_len as f32 * CHAR_WIDTH;
+                    if let (Some(start_v), Some(end_v)) =
+                        (start_visual, end_visual)
+                    {
+                        for (v_idx, vl) in visual_lines
+                            .iter()
+                            .enumerate()
+                            .skip(start_v)
+                            .take(end_v - start_v + 1)
+                        {
+                            let y = v_idx as f32 * LINE_HEIGHT;
 
-                        frame.fill_rectangle(
-                            Point::new(GUTTER_WIDTH + 5.0, y + 2.0),
-                            Size::new(width, LINE_HEIGHT - 4.0),
-                            selection_color,
-                        );
+                            let sel_start_col = if vl.logical_line == start.0
+                                && v_idx == start_v
+                            {
+                                start.1
+                            } else {
+                                vl.start_col
+                            };
+
+                            let sel_end_col =
+                                if vl.logical_line == end.0 && v_idx == end_v {
+                                    end.1
+                                } else {
+                                    vl.end_col
+                                };
+
+                            let x_start = GUTTER_WIDTH
+                                + 5.0
+                                + (sel_start_col - vl.start_col) as f32
+                                    * CHAR_WIDTH;
+                            let x_end = GUTTER_WIDTH
+                                + 5.0
+                                + (sel_end_col - vl.start_col) as f32
+                                    * CHAR_WIDTH;
+
+                            frame.fill_rectangle(
+                                Point::new(x_start, y + 2.0),
+                                Size::new(x_end - x_start, LINE_HEIGHT - 4.0),
+                                selection_color,
+                            );
+                        }
                     }
-
-                    // Last line - from start of line to end column
-                    let y_end = end.0 as f32 * LINE_HEIGHT;
-                    let x_end = GUTTER_WIDTH + 5.0 + end.1 as f32 * CHAR_WIDTH;
-
-                    frame.fill_rectangle(
-                        Point::new(GUTTER_WIDTH + 5.0, y_end + 2.0),
-                        Size::new(
-                            x_end - (GUTTER_WIDTH + 5.0),
-                            LINE_HEIGHT - 4.0,
-                        ),
-                        selection_color,
-                    );
                 }
             }
 
             // Draw cursor
             if self.cursor_visible {
-                let cursor_x =
-                    GUTTER_WIDTH + 5.0 + self.cursor.1 as f32 * CHAR_WIDTH;
-                let cursor_y = self.cursor.0 as f32 * LINE_HEIGHT;
+                // Find the visual line containing the cursor
+                if let Some(cursor_visual) =
+                    WrappingCalculator::logical_to_visual(
+                        &visual_lines,
+                        self.cursor.0,
+                        self.cursor.1,
+                    )
+                {
+                    let vl = &visual_lines[cursor_visual];
+                    let cursor_x = GUTTER_WIDTH
+                        + 5.0
+                        + (self.cursor.1 - vl.start_col) as f32 * CHAR_WIDTH;
+                    let cursor_y = cursor_visual as f32 * LINE_HEIGHT;
 
-                frame.fill_rectangle(
-                    Point::new(cursor_x, cursor_y + 2.0),
-                    Size::new(2.0, LINE_HEIGHT - 4.0),
-                    self.style.text_color,
-                );
+                    frame.fill_rectangle(
+                        Point::new(cursor_x, cursor_y + 2.0),
+                        Size::new(2.0, LINE_HEIGHT - 4.0),
+                        self.style.text_color,
+                    );
+                }
             }
         });
 

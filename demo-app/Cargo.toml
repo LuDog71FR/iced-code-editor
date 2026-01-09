@@ -8,7 +8,7 @@ publish = false
 iced.workspace = true
 iced-code-editor = { path = "../iced-code-editor" }
 iced_aw = "0.13.0"
-rfd = "0.16"
+rfd = "0.17"
 
 [lints]
 workspace = true

@@ -301,15 +301,19 @@ impl CodeEditor {
                 self.scroll_to_cursor()
             }
             Message::Scrolled(viewport) => {
-                // Track viewport scroll position and height
+                // Track viewport scroll position, height, and width
                 self.viewport_scroll = viewport.absolute_offset().y;
                 let new_height = viewport.bounds().height;
-                // Clear cache when viewport height changes significantly
+                let new_width = viewport.bounds().width;
+                // Clear cache when viewport dimensions change significantly
                 // to ensure proper redraw (e.g., window resize)
-                if (self.viewport_height - new_height).abs() > 1.0 {
+                if (self.viewport_height - new_height).abs() > 1.0
+                    || (self.viewport_width - new_width).abs() > 1.0
+                {
                     self.cache.clear();
                 }
                 self.viewport_height = new_height;
+                self.viewport_width = new_width;
                 Task::none()
             }
             Message::Undo => {
