@@ -18,21 +18,24 @@ Increase version number in Cargo.toml (check VERSIONING.md file).
 ## [0.3.0] - 2025-01-XX
 
 ### Added
+
 - Delete key now deletes text selection when text is selected
 
 ### Changed
+
 - Updated documentation to reflect new deletion behavior
 
 ### Fixed
+
 - Doctest compilation error in CommandHistory::new (#1)
 
 ## [0.2.0] - 2024-12-XX
 
 ### Added
+
 - Initial release on crates.io
 - Canvas-based code editor widget
 ```
-
 
 ## Last checks
 
@@ -88,3 +91,18 @@ Generate automatically when publishing to crates.io !
 Wait 5-15 minutes after publishing the crate and go to https://docs.rs/iced-code-editor.
 Check if the documentation is well displayed.
 
+## Magic script
+
+Now the cherry on the cake ;-)
+
+All above steps (last checks, commit, publish ...) could be done in one go with the script below:
+
+```bash
+publish_release.sh <commit_message>
+```
+
+Example:
+
+```bash
+./publish_release.sh "fix: editor background overflow"
+```
