@@ -6,6 +6,7 @@
 //!   - Top pane: DropDown menu + CodeEditor (height constrained to 400px)
 //!   - Bottom pane: Output/Log area
 //!
+//! Remarks:
 //! This layout is designed to test overflow and z-index issues.
 
 use iced::widget::{
@@ -530,7 +531,6 @@ greet("World")
         let editor_view =
             container(self.editor.view().map(Message::EditorEvent))
                 .width(Length::Fill)
-                .height(Length::Fixed(400.0))
                 .clip(true)
                 .style(|_| container::Style {
                     border: iced::Border {
@@ -541,22 +541,11 @@ greet("World")
                     ..Default::default()
                 });
 
-        // Info text
-        let info_text = text("Editor is constrained to 400px height. Try scrolling and resizing the panes.")
-            .size(12)
-            .style(move |_| text::Style {
-                color: Some(Color::from_rgb(0.6, 0.6, 0.6)),
-            });
-
         container(
-            column![
-                row![dropdown].padding(10),
-                editor_view,
-                container(info_text).padding(5),
-            ]
-            .spacing(5)
-            .width(Length::Fill)
-            .height(Length::Fill),
+            column![row![dropdown].padding(10), editor_view,]
+                .spacing(5)
+                .width(Length::Fill)
+                .height(Length::Fill),
         )
         .width(Length::Fill)
         .height(Length::Fill)
