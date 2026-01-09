@@ -199,7 +199,9 @@
 mod canvas_editor;
 mod text_buffer;
 
+pub mod i18n;
 pub mod theme;
 
 pub use canvas_editor::{ArrowDirection, CodeEditor, CommandHistory, Message};
+pub use i18n::{Language, Translations};
 pub use theme::{Catalog, Style, StyleFn, from_iced_theme};

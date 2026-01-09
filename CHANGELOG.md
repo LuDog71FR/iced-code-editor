@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- feat: Search and replace text
+
+  - Dialog box to search/replace text
+  - Pagination thru results
+  - Replace one by one or all
+  - Undo capability
+
 - feat: line wrapping
 
   - Long lines are split into multiple visual lines at viewport width

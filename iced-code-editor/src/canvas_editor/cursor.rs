@@ -115,9 +115,8 @@ impl CodeEditor {
             return; // Clicked in gutter
         }
 
-        // Calculate visual line number based on viewport scroll
-        let visual_line_idx =
-            ((point.y + self.viewport_scroll) / LINE_HEIGHT) as usize;
+        // Calculate visual line number - point.y is already in canvas coordinates
+        let visual_line_idx = (point.y / LINE_HEIGHT) as usize;
 
         // Use wrapping calculator to find logical position
         let wrapping_calc =
@@ -223,9 +222,8 @@ impl CodeEditor {
             return;
         }
 
-        // Calculate visual line based on viewport scroll (same as click)
-        let visual_line_idx =
-            ((point.y + self.viewport_scroll) / LINE_HEIGHT) as usize;
+        // Calculate visual line - point.y is already in canvas coordinates
+        let visual_line_idx = (point.y / LINE_HEIGHT) as usize;
 
         let wrapping_calc =
             WrappingCalculator::new(self.wrap_enabled, self.wrap_column);

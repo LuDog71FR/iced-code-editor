@@ -4,10 +4,9 @@ use iced::widget::canvas::Canvas;
 use iced::widget::{Row, Scrollable, Space, container, scrollable};
 use iced::{Background, Border, Color, Element, Length, Shadow};
 
-use super::{
-    CodeEditor, GUTTER_WIDTH, LINE_HEIGHT, Message,
-    wrapping::WrappingCalculator,
-};
+use super::search_dialog;
+use super::wrapping::WrappingCalculator;
+use super::{CodeEditor, GUTTER_WIDTH, LINE_HEIGHT, Message};
 
 impl CodeEditor {
     /// Creates the view element with scrollable wrapper.
@@ -119,7 +118,7 @@ impl CodeEditor {
 
         // Main layout: use a Stack to layer the backgrounds behind the scrollable
         // The scrollable has a transparent background so the colors show through
-        let editor_content = iced::widget::Stack::new()
+        let mut editor_stack = iced::widget::Stack::new()
             .push(
                 // Background layer (bottom): gutter + code backgrounds
                 Row::new()
@@ -131,8 +130,27 @@ impl CodeEditor {
                 scrollable,
             );
 
+        // Add search dialog overlay if open
+        if self.search_state.is_open {
+            let search_dialog =
+                search_dialog::view(&self.search_state, &self.translations);
+
+            // Position the dialog in top-right corner with 20px margin
+            // Use a Row with Fill space to push the dialog to the right
+            let positioned_dialog = container(
+                Row::new()
+                    .push(Space::new().width(Length::Fill)) // Push to right
+                    .push(search_dialog),
+            )
+            .padding(20) // 20px margin from edges
+            .width(Length::Fill)
+            .height(Length::Shrink);
+
+            editor_stack = editor_stack.push(positioned_dialog);
+        }
+
         // Wrap in a container with clip to ensure proper bounds
-        container(editor_content)
+        container(editor_stack)
             .width(Length::Fill)
             .height(Length::Fill)
             .clip(true)

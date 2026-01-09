@@ -187,6 +187,105 @@ impl canvas::Program<Message> for CodeEditor {
                 }
             }
 
+            // Draw search match highlights
+            if self.search_state.is_open && !self.search_state.query.is_empty()
+            {
+                let query_len = self.search_state.query.chars().count();
+
+                for (match_idx, search_match) in
+                    self.search_state.matches.iter().enumerate()
+                {
+                    // Determine if this is the current match
+                    let is_current = self.search_state.current_match_index
+                        == Some(match_idx);
+
+                    let highlight_color = if is_current {
+                        // Orange for current match
+                        Color { r: 1.0, g: 0.6, b: 0.0, a: 0.4 }
+                    } else {
+                        // Yellow for other matches
+                        Color { r: 1.0, g: 1.0, b: 0.0, a: 0.3 }
+                    };
+
+                    // Convert logical position to visual line
+                    let start_visual = WrappingCalculator::logical_to_visual(
+                        &visual_lines,
+                        search_match.line,
+                        search_match.col,
+                    );
+                    let end_visual = WrappingCalculator::logical_to_visual(
+                        &visual_lines,
+                        search_match.line,
+                        search_match.col + query_len,
+                    );
+
+                    if let (Some(start_v), Some(end_v)) =
+                        (start_visual, end_visual)
+                    {
+                        if start_v == end_v {
+                            // Match within same visual line
+                            let y = start_v as f32 * LINE_HEIGHT;
+                            let x_start = GUTTER_WIDTH
+                                + 5.0
+                                + search_match.col as f32 * CHAR_WIDTH;
+                            let x_end = GUTTER_WIDTH
+                                + 5.0
+                                + (search_match.col + query_len) as f32
+                                    * CHAR_WIDTH;
+
+                            frame.fill_rectangle(
+                                Point::new(x_start, y + 2.0),
+                                Size::new(x_end - x_start, LINE_HEIGHT - 4.0),
+                                highlight_color,
+                            );
+                        } else {
+                            // Match spans multiple visual lines
+                            for (v_idx, vl) in visual_lines
+                                .iter()
+                                .enumerate()
+                                .skip(start_v)
+                                .take(end_v - start_v + 1)
+                            {
+                                let y = v_idx as f32 * LINE_HEIGHT;
+
+                                let match_start_col = search_match.col;
+                                let match_end_col =
+                                    search_match.col + query_len;
+
+                                let sel_start_col = if v_idx == start_v {
+                                    match_start_col
+                                } else {
+                                    vl.start_col
+                                };
+                                let sel_end_col = if v_idx == end_v {
+                                    match_end_col
+                                } else {
+                                    vl.end_col
+                                };
+
+                                let x_start = GUTTER_WIDTH
+                                    + 5.0
+                                    + (sel_start_col - vl.start_col) as f32
+                                        * CHAR_WIDTH;
+                                let x_end = GUTTER_WIDTH
+                                    + 5.0
+                                    + (sel_end_col - vl.start_col) as f32
+                                        * CHAR_WIDTH;
+
+                                frame.fill_rectangle(
+                                    Point::new(x_start, y + 2.0),
+                                    Size::new(
+                                        x_end - x_start,
+                                        LINE_HEIGHT - 4.0,
+                                    ),
+                                    highlight_color,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             // Draw selection highlight
             if let Some((start, end)) = self.get_selection_range()
                 && start != end
@@ -388,6 +487,71 @@ impl canvas::Program<Message> for CodeEditor {
                     && matches!(key, keyboard::Key::Character(y) if y.as_str() == "y")
                 {
                     return Some(Action::publish(Message::Redo).and_capture());
+                }
+
+                // Handle Ctrl+F (open search)
+                if modifiers.control()
+                    && matches!(key, keyboard::Key::Character(f) if f.as_str() == "f")
+                {
+                    return Some(
+                        Action::publish(Message::OpenSearch).and_capture(),
+                    );
+                }
+
+                // Handle Ctrl+H (open search and replace)
+                if modifiers.control()
+                    && matches!(key, keyboard::Key::Character(h) if h.as_str() == "h")
+                {
+                    return Some(
+                        Action::publish(Message::OpenSearchReplace)
+                            .and_capture(),
+                    );
+                }
+
+                // Handle Escape (close search dialog if open)
+                if matches!(
+                    key,
+                    keyboard::Key::Named(keyboard::key::Named::Escape)
+                ) {
+                    return Some(
+                        Action::publish(Message::CloseSearch).and_capture(),
+                    );
+                }
+
+                // Handle Tab (cycle forward in search dialog if open)
+                if matches!(
+                    key,
+                    keyboard::Key::Named(keyboard::key::Named::Tab)
+                ) && self.search_state.is_open
+                {
+                    if modifiers.shift() {
+                        // Shift+Tab: cycle backward
+                        return Some(
+                            Action::publish(Message::SearchDialogShiftTab)
+                                .and_capture(),
+                        );
+                    } else {
+                        // Tab: cycle forward
+                        return Some(
+                            Action::publish(Message::SearchDialogTab)
+                                .and_capture(),
+                        );
+                    }
+                }
+
+                // Handle F3 (find next) and Shift+F3 (find previous)
+                if matches!(key, keyboard::Key::Named(keyboard::key::Named::F3))
+                {
+                    if modifiers.shift() {
+                        return Some(
+                            Action::publish(Message::FindPrevious)
+                                .and_capture(),
+                        );
+                    } else {
+                        return Some(
+                            Action::publish(Message::FindNext).and_capture(),
+                        );
+                    }
                 }
 
                 // Handle Ctrl+V / Shift+Insert (paste) - read clipboard and send paste message

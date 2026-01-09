@@ -1,8 +1,8 @@
-# Iced Code Editor
-
 <div align="center">
 
 ![Logo](https://github.com/LuDog71FR/iced-code-editor/blob/main/logo.svg)
+
+# Iced Code Editor
 
 A high-performance, canvas-based code editor widget for [Iced](https://github.com/iced-rs/iced).
 
@@ -33,10 +33,10 @@ This crate provides a fully-featured code editor widget with syntax highlighting
 - **Native Iced theme support** - Automatically adapts to all 23+ built-in Iced themes
 - **Line wrapping** to split long lines
 - **High performance** canvas-based rendering
+- **Search and replace** text
 
 ## Planned features
 
-- [ ] Search and replace
 - [ ] Multiple cursors for simultaneous editing at multiple positions
 - [ ] Collapse/expand blocks
 - [ ] Indentation-based or syntax-aware

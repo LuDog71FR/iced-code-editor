@@ -33,8 +33,6 @@
    - [Command History Grouping](#3-command-history-grouping)
    - [Selection Direction](#4-selection-direction)
 8. [Future Enhancements](#future-enhancements)
-   - [Planned Features](#planned-features)
-   - [Performance Improvements](#performance-improvements)
 9. [Contributing Guidelines](#contributing-guidelines)
    - [Code Style](#code-style)
    - [Pull Request Process](#pull-request-process)
@@ -579,39 +577,7 @@ let (start, end) = self.get_selection_range()?;
 
 ## Future Enhancements
 
-### Planned Features
-
-2. **Multiple cursors**
-
-   - Simultaneous editing at multiple positions
-   - Requires refactoring cursor from `(usize, usize)` to `Vec<(usize, usize)>`
-
-3. **Code folding**
-
-   - Collapse/expand blocks
-   - Indentation-based or syntax-aware
-
-4. **Minimap**
-
-   - Overview of entire file
-   - Clickable navigation
-
-5. **Search and replace**
-
-   - Regex support
-   - Incremental search
-   - Replace with undo support
-
-6. **Auto-completion**
-   - LSP integration
-   - Context-aware suggestions
-
-### Performance Improvements
-
-1. **Rope data structure** for better large-file performance
-2. **Incremental syntax highlighting** to avoid re-highlighting entire file
-3. **Virtual scrolling for horizontal** axis (long lines)
-4. **Web Worker for highlighting** (when targeting WASM)
+Check [TODO.md](https://github.com/LuDog71FR/iced-code-editor/blob/main/TODO.md) for details.
 
 ## Contributing Guidelines
 

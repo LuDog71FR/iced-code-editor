@@ -6,28 +6,30 @@ None ?? ;-)
 
 ## Features
 
-2. **Multiple cursors**
+1. **Multiple cursors**
 
    - Simultaneous editing at multiple positions
    - Requires refactoring cursor from `(usize, usize)` to `Vec<(usize, usize)>`
 
-3. **Code folding**
+2. **Code folding**
 
    - Collapse/expand blocks
    - Indentation-based or syntax-aware
 
-4. **Minimap**
+3. **Minimap**
 
    - Overview of entire file
    - Clickable navigation
 
-5. **Search and replace**
-
-   - Regex support
-   - Incremental search
-   - Replace with undo support
-
-6. **Auto-completion**
+4. **Auto-completion**
 
    - LSP integration
    - Context-aware suggestions
+
+## Performance Improvements
+
+1. **Rope data structure** for better large-file performance
+2. **Incremental syntax highlighting** to avoid re-highlighting entire file
+3. **Virtual scrolling for horizontal** axis (long lines)
+4. **Web Worker for highlighting** (when targeting WASM)
+5. **Search & Replace** for better large-file performance

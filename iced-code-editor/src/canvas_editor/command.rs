@@ -545,6 +545,85 @@ impl Command for CompositeCommand {
     }
 }
 
+/// Command for replacing text (used in search/replace functionality).
+#[derive(Debug, Clone)]
+pub struct ReplaceTextCommand {
+    position: (usize, usize),
+    old_text: String,
+    new_text: String,
+    cursor_before: (usize, usize),
+    cursor_after: (usize, usize),
+}
+
+impl ReplaceTextCommand {
+    /// Creates a new replace text command.
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - The text buffer (to read the old text)
+    /// * `position` - Start position (line, col) of text to replace
+    /// * `old_text_len` - Length of text to replace (in characters)
+    /// * `new_text` - Text to insert in place
+    /// * `cursor` - Current cursor position
+    pub fn new(
+        buffer: &TextBuffer,
+        position: (usize, usize),
+        old_text_len: usize,
+        new_text: String,
+        cursor: (usize, usize),
+    ) -> Self {
+        // Extract the old text being replaced
+        let line = buffer.line(position.0);
+        let chars: Vec<char> = line.chars().collect();
+        let old_text: String =
+            chars.iter().skip(position.1).take(old_text_len).collect();
+
+        let cursor_after = (position.0, position.1 + new_text.chars().count());
+
+        Self {
+            position,
+            old_text,
+            new_text,
+            cursor_before: cursor,
+            cursor_after,
+        }
+    }
+}
+
+impl Command for ReplaceTextCommand {
+    fn execute(
+        &mut self,
+        buffer: &mut TextBuffer,
+        cursor: &mut (usize, usize),
+    ) {
+        // Delete the old text
+        for _ in 0..self.old_text.chars().count() {
+            buffer.delete_forward(self.position.0, self.position.1);
+        }
+
+        // Insert the new text
+        for (i, ch) in self.new_text.chars().enumerate() {
+            buffer.insert_char(self.position.0, self.position.1 + i, ch);
+        }
+
+        *cursor = self.cursor_after;
+    }
+
+    fn undo(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) {
+        // Delete the new text
+        for _ in 0..self.new_text.chars().count() {
+            buffer.delete_forward(self.position.0, self.position.1);
+        }
+
+        // Restore the old text
+        for (i, ch) in self.old_text.chars().enumerate() {
+            buffer.insert_char(self.position.0, self.position.1 + i, ch);
+        }
+
+        *cursor = self.cursor_before;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,5 +722,85 @@ mod tests {
 
         composite.undo(&mut buffer, &mut cursor);
         assert_eq!(buffer.line(0), "hello");
+    }
+
+    #[test]
+    fn test_replace_text_command() {
+        let mut buffer = TextBuffer::new("hello world");
+        let mut cursor = (0, 0);
+        let mut cmd = ReplaceTextCommand::new(
+            &buffer,
+            (0, 0),
+            5,
+            "goodbye".to_string(),
+            cursor,
+        );
+
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.line(0), "goodbye world");
+        assert_eq!(cursor, (0, 7));
+
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.line(0), "hello world");
+        assert_eq!(cursor, (0, 0));
+    }
+
+    #[test]
+    fn test_replace_text_different_lengths() {
+        let mut buffer = TextBuffer::new("foo bar baz");
+        let mut cursor = (0, 4);
+
+        // Replace "bar" (3 chars) with "x" (1 char)
+        let mut cmd = ReplaceTextCommand::new(
+            &buffer,
+            (0, 4),
+            3,
+            "x".to_string(),
+            cursor,
+        );
+
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.line(0), "foo x baz");
+        assert_eq!(cursor, (0, 5));
+
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.line(0), "foo bar baz");
+        assert_eq!(cursor, (0, 4));
+    }
+
+    #[test]
+    fn test_replace_all_composite() {
+        let mut buffer = TextBuffer::new("foo foo foo");
+        let mut cursor = (0, 0);
+        let mut composite = CompositeCommand::new("Replace all".to_string());
+
+        // Replace all "foo" with "bar" (in reverse order to preserve positions)
+        composite.add(Box::new(ReplaceTextCommand::new(
+            &buffer,
+            (0, 8),
+            3,
+            "bar".to_string(),
+            cursor,
+        )));
+        composite.add(Box::new(ReplaceTextCommand::new(
+            &buffer,
+            (0, 4),
+            3,
+            "bar".to_string(),
+            cursor,
+        )));
+        composite.add(Box::new(ReplaceTextCommand::new(
+            &buffer,
+            (0, 0),
+            3,
+            "bar".to_string(),
+            cursor,
+        )));
+
+        composite.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.line(0), "bar bar bar");
+
+        composite.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.line(0), "foo foo foo");
     }
 }

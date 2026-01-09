@@ -1,10 +1,11 @@
 //! Message handling and update logic.
 
 use iced::Task;
+use iced::widget::operation::{focus, select_all};
 
 use super::command::{
-    Command, DeleteCharCommand, DeleteForwardCommand, InsertCharCommand,
-    InsertNewlineCommand,
+    Command, CompositeCommand, DeleteCharCommand, DeleteForwardCommand,
+    InsertCharCommand, InsertNewlineCommand, ReplaceTextCommand,
 };
 use super::{CURSOR_BLINK_INTERVAL, CodeEditor, Message};
 
@@ -34,6 +35,7 @@ impl CodeEditor {
                 self.history.push(Box::new(cmd));
 
                 self.reset_cursor_blink();
+                self.refresh_search_matches_if_needed();
                 self.cache.clear();
                 Task::none()
             }
@@ -50,6 +52,7 @@ impl CodeEditor {
                 {
                     self.delete_selection();
                     self.reset_cursor_blink();
+                    self.refresh_search_matches_if_needed();
                     self.cache.clear();
                     return self.scroll_to_cursor();
                 }
@@ -66,6 +69,7 @@ impl CodeEditor {
                 self.history.push(Box::new(cmd));
 
                 self.reset_cursor_blink();
+                self.refresh_search_matches_if_needed();
                 self.cache.clear();
                 self.scroll_to_cursor()
             }
@@ -82,6 +86,7 @@ impl CodeEditor {
                 {
                     self.delete_selection();
                     self.reset_cursor_blink();
+                    self.refresh_search_matches_if_needed();
                     self.cache.clear();
                     return self.scroll_to_cursor();
                 }
@@ -98,6 +103,7 @@ impl CodeEditor {
                 self.history.push(Box::new(cmd));
 
                 self.reset_cursor_blink();
+                self.refresh_search_matches_if_needed();
                 self.cache.clear();
                 Task::none()
             }
@@ -114,6 +120,7 @@ impl CodeEditor {
                 self.history.push(Box::new(cmd));
 
                 self.reset_cursor_blink();
+                self.refresh_search_matches_if_needed();
                 self.cache.clear();
                 self.scroll_to_cursor()
             }
@@ -209,6 +216,7 @@ impl CodeEditor {
                 } else {
                     // We have the text, paste it
                     self.paste_text(text);
+                    self.refresh_search_matches_if_needed();
                     self.cache.clear();
                     self.scroll_to_cursor()
                 }
@@ -326,6 +334,7 @@ impl CodeEditor {
                 if self.history.undo(&mut self.buffer, &mut self.cursor) {
                     self.clear_selection();
                     self.reset_cursor_blink();
+                    self.refresh_search_matches_if_needed();
                     self.cache.clear();
                     self.scroll_to_cursor()
                 } else {
@@ -336,10 +345,185 @@ impl CodeEditor {
                 if self.history.redo(&mut self.buffer, &mut self.cursor) {
                     self.clear_selection();
                     self.reset_cursor_blink();
+                    self.refresh_search_matches_if_needed();
                     self.cache.clear();
                     self.scroll_to_cursor()
                 } else {
                     Task::none()
+                }
+            }
+            Message::OpenSearch => {
+                self.search_state.open_search();
+                self.cache.clear();
+
+                // Focus the search input and select all text if any
+                Task::batch([
+                    focus(self.search_state.search_input_id.clone()),
+                    select_all(self.search_state.search_input_id.clone()),
+                ])
+            }
+            Message::OpenSearchReplace => {
+                self.search_state.open_replace();
+                self.cache.clear();
+
+                // Focus the search input and select all text if any
+                Task::batch([
+                    focus(self.search_state.search_input_id.clone()),
+                    select_all(self.search_state.search_input_id.clone()),
+                ])
+            }
+            Message::CloseSearch => {
+                self.search_state.close();
+                self.cache.clear();
+                Task::none()
+            }
+            Message::SearchQueryChanged(query) => {
+                self.search_state.set_query(query.clone(), &self.buffer);
+                self.cache.clear();
+
+                // Move cursor to first match if any
+                if let Some(match_pos) = self.search_state.current_match() {
+                    self.cursor = (match_pos.line, match_pos.col);
+                    self.clear_selection();
+                    return self.scroll_to_cursor();
+                }
+                Task::none()
+            }
+            Message::ReplaceQueryChanged(replace_text) => {
+                self.search_state.set_replace_with(replace_text.clone());
+                Task::none()
+            }
+            Message::ToggleCaseSensitive => {
+                self.search_state.toggle_case_sensitive(&self.buffer);
+                self.cache.clear();
+
+                // Move cursor to first match if any
+                if let Some(match_pos) = self.search_state.current_match() {
+                    self.cursor = (match_pos.line, match_pos.col);
+                    self.clear_selection();
+                    return self.scroll_to_cursor();
+                }
+                Task::none()
+            }
+            Message::FindNext => {
+                if !self.search_state.matches.is_empty() {
+                    self.search_state.next_match();
+                    if let Some(match_pos) = self.search_state.current_match() {
+                        self.cursor = (match_pos.line, match_pos.col);
+                        self.clear_selection();
+                        self.cache.clear();
+                        return self.scroll_to_cursor();
+                    }
+                }
+                Task::none()
+            }
+            Message::FindPrevious => {
+                if !self.search_state.matches.is_empty() {
+                    self.search_state.previous_match();
+                    if let Some(match_pos) = self.search_state.current_match() {
+                        self.cursor = (match_pos.line, match_pos.col);
+                        self.clear_selection();
+                        self.cache.clear();
+                        return self.scroll_to_cursor();
+                    }
+                }
+                Task::none()
+            }
+            Message::ReplaceNext => {
+                // Replace current match and move to next
+                if let Some(match_pos) = self.search_state.current_match() {
+                    let query_len = self.search_state.query.chars().count();
+                    let replace_text = self.search_state.replace_with.clone();
+
+                    // Create and execute replace command
+                    let mut cmd = ReplaceTextCommand::new(
+                        &self.buffer,
+                        (match_pos.line, match_pos.col),
+                        query_len,
+                        replace_text,
+                        self.cursor,
+                    );
+                    cmd.execute(&mut self.buffer, &mut self.cursor);
+                    self.history.push(Box::new(cmd));
+
+                    // Update matches after replacement
+                    self.search_state.update_matches(&self.buffer);
+
+                    // Move to next match if available
+                    if !self.search_state.matches.is_empty()
+                        && let Some(next_match) =
+                            self.search_state.current_match()
+                    {
+                        self.cursor = (next_match.line, next_match.col);
+                    }
+
+                    self.clear_selection();
+                    self.cache.clear();
+                    return self.scroll_to_cursor();
+                }
+                Task::none()
+            }
+            Message::ReplaceAll => {
+                // Replace all matches in reverse order (to preserve positions)
+                if !self.search_state.matches.is_empty() {
+                    let query_len = self.search_state.query.chars().count();
+                    let replace_text = self.search_state.replace_with.clone();
+
+                    // Create composite command for undo
+                    let mut composite =
+                        CompositeCommand::new("Replace All".to_string());
+
+                    // Process matches in reverse order
+                    for match_pos in self.search_state.matches.iter().rev() {
+                        let cmd = ReplaceTextCommand::new(
+                            &self.buffer,
+                            (match_pos.line, match_pos.col),
+                            query_len,
+                            replace_text.clone(),
+                            self.cursor,
+                        );
+                        composite.add(Box::new(cmd));
+                    }
+
+                    // Execute all replacements
+                    composite.execute(&mut self.buffer, &mut self.cursor);
+                    self.history.push(Box::new(composite));
+
+                    // Update matches (should be empty now)
+                    self.search_state.update_matches(&self.buffer);
+
+                    self.clear_selection();
+                    self.cache.clear();
+                    return self.scroll_to_cursor();
+                }
+                Task::none()
+            }
+            Message::SearchDialogTab => {
+                // Cycle focus forward (Search → Replace → Search)
+                self.search_state.focus_next_field();
+
+                // Focus the appropriate input based on new focused_field
+                match self.search_state.focused_field {
+                    crate::canvas_editor::search::SearchFocusedField::Search => {
+                        focus(self.search_state.search_input_id.clone())
+                    }
+                    crate::canvas_editor::search::SearchFocusedField::Replace => {
+                        focus(self.search_state.replace_input_id.clone())
+                    }
+                }
+            }
+            Message::SearchDialogShiftTab => {
+                // Cycle focus backward (Replace → Search → Replace)
+                self.search_state.focus_previous_field();
+
+                // Focus the appropriate input based on new focused_field
+                match self.search_state.focused_field {
+                    crate::canvas_editor::search::SearchFocusedField::Search => {
+                        focus(self.search_state.search_input_id.clone())
+                    }
+                    crate::canvas_editor::search::SearchFocusedField::Replace => {
+                        focus(self.search_state.replace_input_id.clone())
+                    }
                 }
             }
         }

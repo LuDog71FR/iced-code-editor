@@ -16,7 +16,7 @@ use iced::widget::{
 use iced::{Color, Element, Length, Subscription, Task, Theme, window};
 use iced_aw::widget::drop_down::DropDown;
 use iced_code_editor::Message as EditorMessage;
-use iced_code_editor::{CodeEditor, theme};
+use iced_code_editor::{CodeEditor, Language, theme};
 use std::path::PathBuf;
 
 /// Main entry point for the demo application.
@@ -25,6 +25,38 @@ fn main() -> iced::Result {
         .subscription(DemoApp::subscription)
         .theme(DemoApp::theme)
         .run()
+}
+
+/// Wrapper for Language to implement Display trait for pick_list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LanguageOption(Language);
+
+impl LanguageOption {
+    const ALL: [LanguageOption; 3] = [
+        LanguageOption(Language::English),
+        LanguageOption(Language::French),
+        LanguageOption(Language::Spanish),
+    ];
+
+    fn inner(&self) -> Language {
+        self.0
+    }
+}
+
+impl From<Language> for LanguageOption {
+    fn from(lang: Language) -> Self {
+        LanguageOption(lang)
+    }
+}
+
+impl std::fmt::Display for LanguageOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Language::English => write!(f, "English"),
+            Language::French => write!(f, "Français"),
+            Language::Spanish => write!(f, "Español"),
+        }
+    }
 }
 
 /// Code templates available in the dropdown.
@@ -112,6 +144,8 @@ struct DemoApp {
     error_message: Option<String>,
     /// Current theme
     current_theme: Theme,
+    /// Current UI language
+    current_language: Language,
     /// Pane grid state
     panes: pane_grid::State<PaneType>,
     /// Dropdown expanded state
@@ -137,6 +171,8 @@ enum Message {
     FileSaved(Result<PathBuf, String>),
     /// Cursor blink tick
     Tick,
+    /// UI Language changed
+    LanguageChanged(LanguageOption),
     /// Theme changed
     ThemeChanged(Theme),
     /// Pane resized
@@ -188,6 +224,7 @@ greet("World")
                 current_file: None,
                 error_message: None,
                 current_theme: Theme::TokyoNightStorm,
+                current_language: Language::English,
                 panes,
                 dropdown_expanded: false,
                 log_messages,
@@ -261,6 +298,16 @@ greet("World")
                 .editor
                 .update(&EditorMessage::Tick)
                 .map(Message::EditorEvent),
+            Message::LanguageChanged(lang_option) => {
+                let new_language = lang_option.inner();
+                self.log(
+                    "INFO",
+                    &format!("UI Language changed to: {}", lang_option),
+                );
+                self.current_language = new_language;
+                self.editor.set_language(new_language);
+                Task::none()
+            }
             Message::ThemeChanged(new_theme) => {
                 self.log("INFO", &format!("Theme changed to: {:?}", new_theme));
                 let style = theme::from_iced_theme(&new_theme);
@@ -339,6 +386,13 @@ greet("World")
             text(self.file_status())
                 .style(move |_| text::Style { color: Some(text_color) }),
             Space::new().width(Length::Fill),
+            text("Language:")
+                .style(move |_| text::Style { color: Some(text_color) }),
+            pick_list(
+                LanguageOption::ALL,
+                Some(LanguageOption::from(self.current_language)),
+                Message::LanguageChanged
+            ),
             text("Theme:")
                 .style(move |_| text::Style { color: Some(text_color) }),
             pick_list(

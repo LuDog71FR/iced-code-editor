@@ -7,6 +7,7 @@ use iced::widget::operation::{RelativeOffset, snap_to};
 use iced::widget::{Id, canvas};
 use std::time::Instant;
 
+use crate::i18n::Translations;
 use crate::text_buffer::TextBuffer;
 use crate::theme::Style;
 pub use history::CommandHistory;
@@ -17,6 +18,8 @@ mod clipboard;
 pub mod command;
 mod cursor;
 pub mod history;
+mod search;
+mod search_dialog;
 mod selection;
 mod update;
 mod view;
@@ -70,6 +73,10 @@ pub struct CodeEditor {
     pub(crate) wrap_enabled: bool,
     /// Wrap column (None = wrap at viewport width)
     pub(crate) wrap_column: Option<usize>,
+    /// Search state
+    pub(crate) search_state: search::SearchState,
+    /// Translations for UI text
+    pub(crate) translations: Translations,
 }
 
 /// Messages emitted by the code editor
@@ -119,6 +126,30 @@ pub enum Message {
     Undo,
     /// Redo last undone operation (Ctrl+Y)
     Redo,
+    /// Open search dialog (Ctrl+F)
+    OpenSearch,
+    /// Open search and replace dialog (Ctrl+H)
+    OpenSearchReplace,
+    /// Close search dialog (Escape)
+    CloseSearch,
+    /// Search query text changed
+    SearchQueryChanged(String),
+    /// Replace text changed
+    ReplaceQueryChanged(String),
+    /// Toggle case sensitivity
+    ToggleCaseSensitive,
+    /// Find next match (F3)
+    FindNext,
+    /// Find previous match (Shift+F3)
+    FindPrevious,
+    /// Replace current match
+    ReplaceNext,
+    /// Replace all matches
+    ReplaceAll,
+    /// Tab pressed in search dialog (cycle forward)
+    SearchDialogTab,
+    /// Shift+Tab pressed in search dialog (cycle backward)
+    SearchDialogShiftTab,
 }
 
 /// Arrow key directions
@@ -162,6 +193,8 @@ impl CodeEditor {
             is_grouping: false,
             wrap_enabled: true,
             wrap_column: None,
+            search_state: search::SearchState::new(),
+            translations: Translations::default(),
         }
     }
 
@@ -220,6 +253,47 @@ impl CodeEditor {
         self.cache.clear(); // Force redraw with new theme
     }
 
+    /// Sets the language for UI translations.
+    ///
+    /// This changes the language used for all UI text elements in the editor,
+    /// including search dialog tooltips, placeholders, and labels.
+    ///
+    /// # Arguments
+    ///
+    /// * `language` - The language to use for UI text
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Language};
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_language(Language::French);
+    /// ```
+    pub fn set_language(&mut self, language: crate::i18n::Language) {
+        self.translations.set_language(language);
+        self.cache.clear(); // Force UI redraw
+    }
+
+    /// Returns the current UI language.
+    ///
+    /// # Returns
+    ///
+    /// The current language setting
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Language};
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert_eq!(editor.language(), Language::English);
+    /// ```
+    #[must_use]
+    pub const fn language(&self) -> crate::i18n::Language {
+        self.translations.language()
+    }
+
     /// Resets the editor with new content.
     ///
     /// This method replaces the buffer content and resets all editor state
@@ -272,6 +346,21 @@ impl CodeEditor {
     pub(crate) fn reset_cursor_blink(&mut self) {
         self.last_blink = Instant::now();
         self.cursor_visible = true;
+    }
+
+    /// Refreshes search matches after buffer modification.
+    ///
+    /// Should be called after any operation that modifies the buffer.
+    /// If search is active, recalculates matches and selects the one
+    /// closest to the current cursor position.
+    pub(crate) fn refresh_search_matches_if_needed(&mut self) {
+        if self.search_state.is_open && !self.search_state.query.is_empty() {
+            // Recalculate matches with current query
+            self.search_state.update_matches(&self.buffer);
+
+            // Select match closest to cursor to maintain context
+            self.search_state.select_match_near_cursor(self.cursor);
+        }
     }
 
     /// Returns whether the editor has unsaved changes.
