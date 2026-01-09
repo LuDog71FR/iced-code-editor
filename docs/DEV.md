@@ -581,11 +581,6 @@ let (start, end) = self.get_selection_range()?;
 
 ### Planned Features
 
-1. **Line wrapping**
-
-   - Soft wraps for long lines
-   - Configurable wrap column
-
 2. **Multiple cursors**
 
    - Simultaneous editing at multiple positions
