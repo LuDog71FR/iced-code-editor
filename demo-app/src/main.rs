@@ -152,6 +152,8 @@ struct DemoApp {
     dropdown_expanded: bool,
     /// Log messages for output pane
     log_messages: Vec<String>,
+    /// Search/replace enabled flag
+    search_replace_enabled: bool,
 }
 
 /// Application messages.
@@ -187,6 +189,8 @@ enum Message {
     RunCode,
     /// Toggle line wrapping
     ToggleWrap(bool),
+    /// Toggle search/replace
+    ToggleSearchReplace(bool),
 }
 
 impl DemoApp {
@@ -228,6 +232,7 @@ greet("World")
                 panes,
                 dropdown_expanded: false,
                 log_messages,
+                search_replace_enabled: true,
             },
             Task::none(),
         )
@@ -356,6 +361,18 @@ greet("World")
                     ),
                 );
                 self.editor.set_wrap_enabled(enabled);
+                Task::none()
+            }
+            Message::ToggleSearchReplace(enabled) => {
+                self.log(
+                    "INFO",
+                    &format!(
+                        "Search/Replace: {}",
+                        if enabled { "enabled" } else { "disabled" }
+                    ),
+                );
+                self.search_replace_enabled = enabled;
+                self.editor.set_search_replace_enabled(enabled);
                 Task::none()
             }
         }
@@ -571,6 +588,12 @@ greet("World")
             .on_toggle(Message::ToggleWrap)
             .text_size(14);
 
+        // Search/replace checkbox
+        let search_replace_checkbox = checkbox(self.search_replace_enabled)
+            .label("Allow search/replace")
+            .on_toggle(Message::ToggleSearchReplace)
+            .text_size(14);
+
         // Editor in a constrained container (400px height, clipped)
         let editor_view =
             container(self.editor.view().map(Message::EditorEvent))
@@ -587,8 +610,14 @@ greet("World")
 
         container(
             column![
-                row![dropdown, Space::new().width(10), wrap_checkbox]
-                    .padding(10),
+                row![
+                    dropdown,
+                    Space::new().width(10),
+                    wrap_checkbox,
+                    Space::new().width(10),
+                    search_replace_checkbox
+                ]
+                .padding(10),
                 editor_view,
             ]
             .spacing(5)

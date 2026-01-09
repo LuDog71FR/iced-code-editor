@@ -77,6 +77,8 @@ pub struct CodeEditor {
     pub(crate) search_state: search::SearchState,
     /// Translations for UI text
     pub(crate) translations: Translations,
+    /// Whether search/replace functionality is enabled
+    pub(crate) search_replace_enabled: bool,
 }
 
 /// Messages emitted by the code editor
@@ -195,6 +197,7 @@ impl CodeEditor {
             wrap_column: None,
             search_state: search::SearchState::new(),
             translations: Translations::default(),
+            search_replace_enabled: true,
         }
     }
 
@@ -420,6 +423,39 @@ impl CodeEditor {
     /// `true` if line wrapping is enabled, `false` otherwise
     pub fn wrap_enabled(&self) -> bool {
         self.wrap_enabled
+    }
+
+    /// Enables or disables the search/replace functionality.
+    ///
+    /// When disabled, search/replace keyboard shortcuts (Ctrl+F, Ctrl+H, F3)
+    /// will be ignored. If the search dialog is currently open, it will be closed.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable search/replace functionality
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_search_replace_enabled(false); // Disable search/replace
+    /// ```
+    pub fn set_search_replace_enabled(&mut self, enabled: bool) {
+        self.search_replace_enabled = enabled;
+        if !enabled && self.search_state.is_open {
+            self.search_state.close();
+        }
+    }
+
+    /// Returns whether search/replace functionality is enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` if search/replace is enabled, `false` otherwise
+    pub fn search_replace_enabled(&self) -> bool {
+        self.search_replace_enabled
     }
 
     /// Sets the line wrapping with builder pattern.

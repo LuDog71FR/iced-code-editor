@@ -492,6 +492,7 @@ impl canvas::Program<Message> for CodeEditor {
                 // Handle Ctrl+F (open search)
                 if modifiers.control()
                     && matches!(key, keyboard::Key::Character(f) if f.as_str() == "f")
+                    && self.search_replace_enabled
                 {
                     return Some(
                         Action::publish(Message::OpenSearch).and_capture(),
@@ -501,6 +502,7 @@ impl canvas::Program<Message> for CodeEditor {
                 // Handle Ctrl+H (open search and replace)
                 if modifiers.control()
                     && matches!(key, keyboard::Key::Character(h) if h.as_str() == "h")
+                    && self.search_replace_enabled
                 {
                     return Some(
                         Action::publish(Message::OpenSearchReplace)
@@ -541,6 +543,7 @@ impl canvas::Program<Message> for CodeEditor {
 
                 // Handle F3 (find next) and Shift+F3 (find previous)
                 if matches!(key, keyboard::Key::Named(keyboard::key::Named::F3))
+                    && self.search_replace_enabled
                 {
                     if modifiers.shift() {
                         return Some(
