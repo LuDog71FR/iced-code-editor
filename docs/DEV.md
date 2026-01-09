@@ -1,5 +1,52 @@
 # Development Documentation
 
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Architecture](#architecture)
+   - [High-Level Structure](#high-level-structure)
+   - [Core Components](#core-components)
+3. [Design Patterns](#design-patterns)
+   - [Command Pattern (Undo/Redo)](#1-command-pattern-undoredo)
+   - [Elm Architecture (Message-Update-View)](#2-elm-architecture-message-update-view)
+   - [Module Separation by Concern](#3-module-separation-by-concern)
+   - [Canvas-Based Rendering](#4-canvas-based-rendering)
+   - [Interior Mutability for History](#5-interior-mutability-for-history)
+4. [Key Implementation Details](#key-implementation-details)
+   - [Syntax Highlighting](#syntax-highlighting)
+   - [Virtual Scrolling](#virtual-scrolling)
+   - [Cursor Blinking](#cursor-blinking)
+   - [Selection Rendering](#selection-rendering)
+   - [Scroll-to-Cursor](#scroll-to-cursor)
+5. [Performance Considerations](#performance-considerations)
+   - [Canvas Caching](#1-canvas-caching)
+   - [Syntax Highlighting Optimization](#2-syntax-highlighting-optimization)
+   - [Text Buffer Performance](#3-text-buffer-performance)
+   - [Memory Usage](#4-memory-usage)
+6. [Testing Strategy](#testing-strategy)
+   - [Unit Tests](#unit-tests)
+   - [Integration Tests](#integration-tests)
+   - [Running Tests](#running-tests)
+7. [Common Pitfalls](#common-pitfalls)
+   - [UTF-8 Character Boundaries](#1-utf-8-character-boundaries)
+   - [Cache Invalidation](#2-cache-invalidation)
+   - [Command History Grouping](#3-command-history-grouping)
+   - [Selection Direction](#4-selection-direction)
+8. [Future Enhancements](#future-enhancements)
+   - [Planned Features](#planned-features)
+   - [Performance Improvements](#performance-improvements)
+9. [Contributing Guidelines](#contributing-guidelines)
+   - [Code Style](#code-style)
+   - [Pull Request Process](#pull-request-process)
+   - [Commit Messages](#commit-messages)
+   - [Documentation](#documentation)
+10. [Resources](#resources)
+    - [Iced Framework](#iced-framework)
+    - [Syntax Highlighting](#syntax-highlighting-1)
+    - [Design Patterns](#design-patterns-1)
+    - [Text Editor Algorithms](#text-editor-algorithms)
+11. [License](#license)
+
 ## Overview
 
 This document describes the architecture, design patterns, and implementation details of the `iced-code-editor` widget. It is intended for developers who want to understand how the widget works internally, contribute to the project, or extend its functionality.
@@ -48,6 +95,7 @@ pub struct CodeEditor {
 ```
 
 **Key characteristics:**
+
 - Single source of truth for editor state
 - No external dependencies on text buffer format
 - All state transitions happen through message handling
@@ -63,12 +111,14 @@ pub struct TextBuffer {
 ```
 
 **Design decisions:**
+
 - **Line-based storage**: Fast random access for virtual scrolling
 - **No rope data structure**: Simple implementation, sufficient for typical code files
 - **UTF-8 aware**: Proper handling of multi-byte characters
 - **Trade-offs**: O(n) for large insertions, but O(1) for line access
 
 **Operations:**
+
 - `insert_char()` - Insert single character
 - `insert_newline()` - Split line at position
 - `delete_char()` - Delete before cursor (backspace)
@@ -95,6 +145,7 @@ pub struct Style {
 ```
 
 **Features:**
+
 - Implements Iced's `Catalog` trait for seamless integration
 - Function-based styling (`StyleFn`) for dynamic themes
 - **Native support for all 23+ Iced themes** via `from_iced_theme()`
@@ -103,6 +154,7 @@ pub struct Style {
 
 **Theme Adaptation:**
 The `from_iced_theme()` function automatically extracts colors from any Iced theme's extended palette:
+
 - **Background/Text**: Uses `palette.background.base` for primary colors
 - **Gutter**: Uses `palette.background.weak` for subtle distinction
 - **Line Numbers**: Intelligently dimmed/blended based on theme darkness
@@ -110,6 +162,7 @@ The `from_iced_theme()` function automatically extracts colors from any Iced the
 - **Scrollbar**: Uses `palette.secondary.weak` for visibility
 
 **Color Helpers:**
+
 - `darken()` / `lighten()` - Adjust color brightness
 - `dim_color()` - Reduce intensity for dark themes
 - `blend_colors()` - Mix colors for light themes
@@ -117,6 +170,7 @@ The `from_iced_theme()` function automatically extracts colors from any Iced the
 
 **Supported Themes:**
 All native Iced themes are automatically supported:
+
 - Basic: Light, Dark
 - Popular: Dracula, Nord, Solarized, Gruvbox
 - Catppuccin: Latte, Frappé, Macchiato, Mocha
@@ -140,6 +194,7 @@ pub trait Command: Send + std::fmt::Debug {
 ```
 
 **Command types:**
+
 - `InsertCharCommand` - Single character insertion
 - `DeleteCharCommand` - Backspace operation
 - `DeleteForwardCommand` - Delete key operation
@@ -149,6 +204,7 @@ pub trait Command: Send + std::fmt::Debug {
 - `CompositeCommand` - Groups multiple commands
 
 **Smart grouping:**
+
 ```rust
 // Consecutive typing is grouped into one undo operation
 history.begin_group("Typing");
@@ -157,6 +213,7 @@ history.end_group();  // Now undoable as single operation
 ```
 
 **Benefits:**
+
 - Complete undo/redo support
 - Command grouping for natural undo boundaries
 - Save point tracking for modified state detection
@@ -186,6 +243,7 @@ pub enum Message {
 ```
 
 **Benefits:**
+
 - Predictable state management
 - Easy to test (pure functions)
 - Clear data flow
@@ -218,12 +276,14 @@ impl canvas::Program<Message> for CodeEditor {
 ```
 
 **Why Canvas?**
+
 - **Performance**: No widget tree overhead for large files
 - **Control**: Pixel-perfect rendering of editor elements
 - **Syntax highlighting**: Direct integration with syntect
 - **Custom scrolling**: Fine-grained control over viewport
 
 **Cache optimization:**
+
 ```rust
 self.cache.clear();  // Invalidate on changes
 // Canvas automatically caches unchanged frames
@@ -242,6 +302,7 @@ pub struct CommandHistory {
 ```
 
 **Why?**
+
 - Allows immutable borrows of `CodeEditor` while mutating history
 - Thread-safe design (though used single-threaded in GUI)
 - Enables cloning of `CommandHistory` without cloning commands
@@ -268,6 +329,7 @@ for line in visible_lines {
 ```
 
 **Optimizations:**
+
 - Only highlight visible lines
 - Cache highlighted regions (future enhancement)
 - Lazy loading of syntax definitions
@@ -287,6 +349,7 @@ for line_idx in first_visible_line..last_visible_line {
 ```
 
 **Benefits:**
+
 - Constant rendering cost regardless of file size
 - Smooth scrolling even for large files
 - Memory efficient
@@ -319,7 +382,7 @@ Message::Tick => {
 ```rust
 fn get_selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
     let (start, end) = (self.selection_start?, self.selection_end?);
-    
+
     // Ensure start comes before end
     if start.0 < end.0 || (start.0 == end.0 && start.1 < end.1) {
         Some((start, end))
@@ -330,6 +393,7 @@ fn get_selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
 ```
 
 **Rendering:**
+
 - Single-line: Simple rectangle
 - Multi-line: Three rectangles (first line, middle lines, last line)
 
@@ -340,13 +404,13 @@ fn get_selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
 ```rust
 pub fn scroll_to_cursor(&self) -> Task<Message> {
     let cursor_y = self.cursor.0 as f32 * LINE_HEIGHT;
-    
+
     if cursor_y < viewport_top + margin {
         // Scroll up
     } else if cursor_y > viewport_bottom - margin {
         // Scroll down
     }
-    
+
     scroll_to(self.scrollable_id.clone(), AbsoluteOffset { y: new_scroll })
 }
 ```
@@ -369,6 +433,7 @@ Iced automatically caches canvas frames. We clear the cache only when content ch
 **Current:** Highlight all visible lines on every frame
 
 **Future improvements:**
+
 - Cache highlighted regions per line
 - Incremental re-highlighting on edits
 - Background parsing for large files
@@ -376,18 +441,22 @@ Iced automatically caches canvas frames. We clear the cache only when content ch
 ### 3. Text Buffer Performance
 
 **Current limitations:**
+
 - O(n) for inserting text in middle of line (string operations)
 - O(1) for line access (vector indexing)
 
 **Sufficient for:**
+
 - Files up to ~10,000 lines
 - Typical editing patterns (typing, deleting)
 
 **Not optimal for:**
+
 - Inserting/deleting large blocks in huge files
 - Real-time collaborative editing
 
 **Potential improvements:**
+
 - Rope data structure for O(log n) operations
 - Gap buffer for cursor-local edits
 - Piece table for large file handling
@@ -395,12 +464,14 @@ Iced automatically caches canvas frames. We clear the cache only when content ch
 ### 4. Memory Usage
 
 **Per editor instance:**
+
 - Text buffer: ~1 byte per character + vector overhead
 - Command history: Configurable (default 100 commands)
 - Each command: ~80-200 bytes depending on type
 - Canvas cache: ~memory of rendered frame
 
 **Typical usage:**
+
 - 1000-line file: ~50KB text + ~10KB history = ~60KB
 - Very manageable for modern systems
 
@@ -414,13 +485,14 @@ Each module has comprehensive unit tests:
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_insert_char() { ... }
 }
 ```
 
 **Coverage:**
+
 - `text_buffer.rs`: All buffer operations
 - `command.rs`: All command types and undo/redo
 - `cursor.rs`: Cursor movement edge cases
@@ -431,6 +503,7 @@ mod tests {
 ### Integration Tests
 
 The demo application serves as an integration test, covering:
+
 - File loading/saving
 - Theme switching
 - Clipboard operations
@@ -509,22 +582,27 @@ let (start, end) = self.get_selection_range()?;
 ### Planned Features
 
 1. **Line wrapping**
+
    - Soft wraps for long lines
    - Configurable wrap column
 
 2. **Multiple cursors**
+
    - Simultaneous editing at multiple positions
    - Requires refactoring cursor from `(usize, usize)` to `Vec<(usize, usize)>`
 
 3. **Code folding**
+
    - Collapse/expand blocks
    - Indentation-based or syntax-aware
 
 4. **Minimap**
+
    - Overview of entire file
    - Clickable navigation
 
 5. **Search and replace**
+
    - Regex support
    - Incremental search
    - Replace with undo support
@@ -560,6 +638,29 @@ let (start, end) = self.get_selection_range()?;
 6. Format code (`cargo fmt`)
 7. Commit with clear message
 8. Push and create pull request
+
+### Commit messages
+
+Follow the [Conventional Commits](https://www.conventionalcommits.org/) specification.
+
+**Format:** `<type>(<scope>): <description>`
+
+Where `<scope>` is optional and can be the affected module (e.g., `api`, `models`, `scheduler`).
+
+**Types:**
+
+- `feat` - New feature (e.g., `feat(api): add endpoint for task scheduling`)
+- `fix` - Bug fix (e.g., `fix(models): correct timezone handling in timestamps`)
+- `docs` - Documentation only (e.g., `docs: update installation instructions`)
+- `style` - Code style/formatting (e.g., `style: apply rustfmt changes`)
+- `refactor` - Code refactoring (e.g., `refactor(tasks): extract common validation logic`)
+- `perf` - Performance improvement (e.g., `perf(db): optimize query with index`)
+- `test` - Add or modify tests (e.g., `test(models): add unit tests for User model`)
+- `build` - Build system changes (e.g., `build: update sqlx to 0.7`)
+- `ci` - CI configuration (e.g., `ci: add clippy check to workflow`)
+- `chore` - Maintenance tasks (e.g., `chore: update dependencies`)
+
+**Breaking changes:** Add `!` after type/scope (e.g., `feat!: rename API endpoint` or `feat(api)!: change response format`)
 
 ### Documentation
 
