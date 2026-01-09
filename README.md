@@ -143,6 +143,13 @@ The editor supports a comprehensive set of keyboard shortcuts:
 
 The editor features smart command grouping - consecutive typing is grouped into single undo operations, while navigation or deletion actions create separate undo points.
 
+### Search and Replace
+
+| Shortcut     | Action                      |
+| ------------ | --------------------------- |
+| **Ctrl + F** | Open search dialog          |
+| **Ctrl + H** | Open search and replace dialog |
+
 ## Usage Examples
 
 ### Changing Themes
