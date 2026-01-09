@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+None ;-)
+
+## [0.3.0] - 2026-01-09
+
 ### Changed
 
 - **BREAKING**: Removed `theme::dark()` and `theme::light()` functions
