@@ -440,8 +440,8 @@ impl canvas::Program<Message> for CodeEditor {
                 }
             }
 
-            // Draw cursor
-            if self.cursor_visible {
+            // Draw cursor (only when editor has focus)
+            if self.cursor_visible && self.is_focused() {
                 // Find the visual line containing the cursor
                 if let Some(cursor_visual) =
                     WrappingCalculator::logical_to_visual(

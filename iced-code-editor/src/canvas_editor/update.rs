@@ -241,8 +241,10 @@ impl CodeEditor {
                 self.scroll_to_cursor()
             }
             Message::Tick => {
-                // Handle cursor blinking
-                if self.last_blink.elapsed() >= CURSOR_BLINK_INTERVAL {
+                // Handle cursor blinking only if editor has focus
+                if self.is_focused()
+                    && self.last_blink.elapsed() >= CURSOR_BLINK_INTERVAL
+                {
                     self.cursor_visible = !self.cursor_visible;
                     self.last_blink = std::time::Instant::now();
                     self.cache.clear();

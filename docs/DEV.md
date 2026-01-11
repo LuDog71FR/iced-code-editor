@@ -16,6 +16,7 @@
    - [Syntax Highlighting](#syntax-highlighting)
    - [Virtual Scrolling](#virtual-scrolling)
    - [Cursor Blinking](#cursor-blinking)
+   - [Focus Management](#focus-management)
    - [Selection Rendering](#selection-rendering)
    - [Scroll-to-Cursor](#scroll-to-cursor)
    - [Internationalization (i18n)](#internationalization-i18n)
@@ -365,7 +366,8 @@ fn subscription(&self) -> Subscription<Message> {
 
 // In update()
 Message::Tick => {
-    if self.last_blink.elapsed() >= CURSOR_BLINK_INTERVAL {
+    // Only process blinking if editor has focus (optimization)
+    if self.is_focused() && self.last_blink.elapsed() >= CURSOR_BLINK_INTERVAL {
         self.cursor_visible = !self.cursor_visible;
         self.cache.clear();  // Force redraw
     }
@@ -373,6 +375,65 @@ Message::Tick => {
 ```
 
 **Interval:** 530ms (standard cursor blink rate)
+
+**Focus integration:** Blinking only occurs for the focused editor, reducing CPU usage when multiple editors are present. See [Focus Management](#focus-management) for details.
+
+### Focus Management
+
+**Location:** `canvas_editor/mod.rs`, `canvas_editor/update.rs`, `canvas_editor/canvas_impl.rs`
+
+When multiple `CodeEditor` instances exist, only one should receive keyboard input and display a cursor. The focus system uses global atomic counters for coordination.
+
+**Architecture:**
+
+```rust
+// Unique ID per editor instance
+static EDITOR_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+// ID of currently focused editor (0 = none)
+static FOCUSED_EDITOR_ID: AtomicU64 = AtomicU64::new(0);
+
+pub struct CodeEditor {
+    editor_id: u64,  // Assigned at creation
+    // ...
+}
+```
+
+**API:**
+
+```rust
+// Check if this editor has focus
+pub fn is_focused(&self) -> bool {
+    FOCUSED_EDITOR_ID.load(Ordering::Relaxed) == self.editor_id
+}
+
+// Request focus programmatically
+pub fn request_focus(&self) {
+    FOCUSED_EDITOR_ID.store(self.editor_id, Ordering::Relaxed);
+}
+```
+
+**Automatic focus capture:**
+
+- Mouse clicks inside an editor automatically capture focus
+- First editor created receives focus by default
+
+**Keyboard event filtering:**
+
+```rust
+// Only process keyboard events if focused
+let focused_id = FOCUSED_EDITOR_ID.load(Ordering::Relaxed);
+if focused_id != self.editor_id {
+    return None;  // Ignore event
+}
+```
+
+**Visual feedback:**
+
+- Cursor only visible when editor has focus: `if self.cursor_visible && self.is_focused() { ... }`
+- Cursor blinking paused for unfocused editors (performance optimization)
+
+**Design rationale:** Global `AtomicU64` provides thread-safe coordination without locking overhead or parameter threading. `Ordering::Relaxed` is sufficient for single-threaded GUI context.
 
 ### Selection Rendering
 

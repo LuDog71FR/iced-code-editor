@@ -579,35 +579,15 @@ greet("World")
 
                 match pane {
                     PaneType::EditorLeft => {
-                        let is_active = self.active_editor == EditorId::Left;
-                        let title_text = if is_active {
-                            "Editor (Left) ●"
-                        } else {
-                            "Editor (Left)"
-                        };
-
                         let title = pane_grid::TitleBar::new(
-                            text(title_text).style(move |_| text::Style {
-                                color: Some(if is_active {
-                                    Color::from_rgb(0.4, 0.8, 1.0)
-                                } else {
-                                    text_color
-                                }),
+                            text("Editor (Left)").style(move |_| text::Style {
+                                color: Some(text_color),
                             }),
                         )
                         .style(move |_| container::Style {
                             background: Some(iced::Background::Color(
                                 title_bar_style,
                             )),
-                            border: if is_active {
-                                iced::Border {
-                                    color: Color::from_rgb(0.4, 0.8, 1.0),
-                                    width: 2.0,
-                                    radius: 0.0.into(),
-                                }
-                            } else {
-                                iced::Border::default()
-                            },
                             ..Default::default()
                         })
                         .padding(5);
@@ -626,35 +606,15 @@ greet("World")
                         })
                     }
                     PaneType::EditorRight => {
-                        let is_active = self.active_editor == EditorId::Right;
-                        let title_text = if is_active {
-                            "Editor (Right) ●"
-                        } else {
-                            "Editor (Right)"
-                        };
-
                         let title = pane_grid::TitleBar::new(
-                            text(title_text).style(move |_| text::Style {
-                                color: Some(if is_active {
-                                    Color::from_rgb(0.4, 0.8, 1.0)
-                                } else {
-                                    text_color
-                                }),
+                            text("Editor (Right)").style(move |_| {
+                                text::Style { color: Some(text_color) }
                             }),
                         )
                         .style(move |_| container::Style {
                             background: Some(iced::Background::Color(
                                 title_bar_style,
                             )),
-                            border: if is_active {
-                                iced::Border {
-                                    color: Color::from_rgb(0.4, 0.8, 1.0),
-                                    width: 2.0,
-                                    radius: 0.0.into(),
-                                }
-                            } else {
-                                iced::Border::default()
-                            },
                             ..Default::default()
                         })
                         .padding(5);
