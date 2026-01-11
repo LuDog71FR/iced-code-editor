@@ -18,8 +18,8 @@ A high-performance, canvas-based code editor widget for [Iced](https://github.co
 
 This crate provides a fully-featured code editor widget with syntax highlighting, line numbers, text selection, and comprehensive keyboard navigation for the Iced GUI framework.
 
-![Demo Screenshot Dark Theme](https://github.com/LuDog71FR/iced-code-editor/blob/main/screenshot_dark_theme.png)
-![Demo Screenshot Light Theme](https://github.com/LuDog71FR/iced-code-editor/blob/main/screenshot_light_theme.png)
+![Demo App](https://github.com/LuDog71FR/iced-code-editor/blob/main/screenshot_demo_app.png)
+![Demo Screenshot Dark Theme](https://github.com/LuDog71FR/iced-code-editor/blob/main/screenshot_dark_theme.png) ![Demo Screenshot Light Theme](https://github.com/LuDog71FR/iced-code-editor/blob/main/screenshot_light_theme.png)
 
 ## Features
 
