@@ -386,7 +386,7 @@ mod tests {
         let t = Translations::new(Language::Italian);
         assert_eq!(t.search_placeholder(), "Cerca...");
         assert_eq!(t.replace_placeholder(), "Sostituisci...");
-        assert_eq!(t.case_sensitive_label(), "Distingui maiuscole/minuscole");
+        assert_eq!(t.case_sensitive_label(), "Distingui maiuscole");
         assert_eq!(
             t.previous_match_tooltip(),
             "Risultato precedente (Maiusc+F3)"
