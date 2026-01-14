@@ -2,7 +2,9 @@
 
 ## Bugs
 
-None ?? ;-)
+fix: text disappear when scrolling with mouse
+fix: ghost cursor and line highlight appears when scrolling or resizing window
+fix: keyboard events are interpreted when editor has no more the focus
 
 ## Features
 

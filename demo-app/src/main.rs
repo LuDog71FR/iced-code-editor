@@ -11,7 +11,7 @@
 
 use iced::widget::{
     PaneGrid, Space, button, checkbox, column, container, pane_grid, pick_list,
-    row, scrollable, text,
+    row, scrollable, text, text_input,
 };
 use iced::{Color, Element, Length, Subscription, Task, Theme, window};
 use iced_code_editor::Message as EditorMessage;
@@ -184,6 +184,8 @@ struct DemoApp {
     line_numbers_enabled_right: bool,
     /// Active editor (receives Open/Save/Run commands)
     active_editor: EditorId,
+    /// Test text input value
+    text_input_value: String,
 }
 
 /// Application messages.
@@ -221,6 +223,8 @@ enum Message {
     ToggleSearchReplace(EditorId, bool),
     /// Toggle line numbers
     ToggleLineNumbers(EditorId, bool),
+    /// Test text input changed
+    TextInputChanged(String),
 }
 
 impl DemoApp {
@@ -270,6 +274,7 @@ greet("World")
                 line_numbers_enabled_left: true,
                 line_numbers_enabled_right: true,
                 active_editor: EditorId::Left,
+                text_input_value: String::new(),
             },
             Task::none(),
         )
@@ -391,6 +396,7 @@ greet("World")
                 Task::none()
             }
             Message::Tick => {
+                // Handle cursor blinking only if editor has focus
                 let task_left = self
                     .editor_left
                     .update(&EditorMessage::Tick)
@@ -547,12 +553,16 @@ greet("World")
                 editor.set_line_numbers_enabled(enabled);
                 Task::none()
             }
+            Message::TextInputChanged(value) => {
+                self.text_input_value = value;
+                Task::none()
+            }
         }
     }
 
     /// Subscription for periodic updates.
     fn subscription(&self) -> Subscription<Message> {
-        let _ = self;
+        // Cursor blink
         window::frames().map(|_| Message::Tick)
     }
 
@@ -575,6 +585,10 @@ greet("World")
             text(self.file_status())
                 .style(move |_| text::Style { color: Some(text_color) }),
             Space::new().width(Length::Fill),
+            text_input("Test input...", &self.text_input_value)
+                .on_input(Message::TextInputChanged)
+                .width(200),
+            Space::new().width(10),
             text("Language:")
                 .style(move |_| text::Style { color: Some(text_color) }),
             pick_list(
