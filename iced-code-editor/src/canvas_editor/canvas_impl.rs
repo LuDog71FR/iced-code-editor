@@ -516,15 +516,15 @@ impl canvas::Program<Message> for CodeEditor {
 
                 // Cursor outside canvas bounds
                 if !is_cursor_in_bounds(&cursor, bounds) {
-                   return None;
+                    return None;
                 }
 
                 // Only process keyboard events if canvas has focus
-               if !self.has_canvas_focus {
-                   return None;
+                if !self.has_canvas_focus {
+                    return None;
                 }
 
-               // Handle Ctrl+C / Ctrl+Insert (copy)
+                // Handle Ctrl+C / Ctrl+Insert (copy)
                 if (modifiers.control()
                     && matches!(key, keyboard::Key::Character(c) if c.as_str() == "c"))
                     || (modifiers.control()

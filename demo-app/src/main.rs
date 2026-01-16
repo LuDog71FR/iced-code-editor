@@ -556,16 +556,16 @@ greet("World")
                 Task::none()
             }
             Message::TextInputChanged(value) => {
-               self.text_input_value = value;
+                self.text_input_value = value;
                 // Immediately lose focus to prevent race condition with keyboard events
                 self.editor_left.lose_focus();
                 self.editor_right.lose_focus();
-               Task::none()
+                Task::none()
             }
             Message::TextInputClicked => {
-               self.editor_left.lose_focus();
+                self.editor_left.lose_focus();
                 self.editor_right.lose_focus();
-               Task::none()
+                Task::none()
             }
         }
     }
