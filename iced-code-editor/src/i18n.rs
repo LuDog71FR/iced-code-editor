@@ -42,6 +42,8 @@ pub enum Language {
     PortugueseBR,
     /// Portuguese (European) language
     PortuguesePT,
+    /// Simplified Chinese language
+    ChineseSimplified,
 }
 
 impl Language {
@@ -70,6 +72,7 @@ impl Language {
             Self::Italian => "it",
             Self::PortugueseBR => "pt-BR",
             Self::PortuguesePT => "pt-PT",
+            Self::ChineseSimplified => "zh-CN",
         }
     }
 }
@@ -475,5 +478,8 @@ mod tests {
 
         t.set_language(Language::PortuguesePT);
         assert_eq!(t.search_placeholder(), "Pesquisar...");
+
+        t.set_language(Language::ChineseSimplified);
+        assert_eq!(t.search_placeholder(), "搜索...");
     }
 }
