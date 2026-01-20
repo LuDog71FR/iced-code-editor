@@ -126,7 +126,6 @@ impl WrappingCalculator {
         let mut visual_lines = Vec::new();
 
         for logical_line in 0..text_buffer.line_count() {
-            let line_len = text_buffer.line_len(logical_line);
             let line_content = text_buffer.line(logical_line);
 
             if line_content.is_empty() {
@@ -156,17 +155,18 @@ impl WrappingCalculator {
                     visual_lines.push(VisualLine::new(
                         logical_line,
                         segment_index,
-                        start_col,
                         current_segment_start_col,
                         i, // end_col is exclusive (当前字符属于下一行)
                     ));
-                    start_col = end_col;
 
                     segment_index += 1;
+                    current_segment_start_col = i;
                     current_width = 0.0;
                 }
+
                 current_width += char_width;
             }
+
             // Push remaining segment
             // 添加该逻辑行的最后一个片段
             visual_lines.push(VisualLine::new(
@@ -218,7 +218,6 @@ impl WrappingCalculator {
                 })
             })
     }
-
 }
 
 #[cfg(test)]
@@ -317,6 +316,7 @@ mod tests {
         assert!(vl1.is_first_segment());
         assert!(!vl2.is_first_segment());
     }
+
     #[test]
     fn test_wrap_cjk() {
         // CJK characters are wide (FONT_SIZE = 14.0)
