@@ -561,27 +561,26 @@ impl CodeEditor {
                 Task::none()
             }
             Message::ImeOpened => {
-                // 输入法开启事件 (Opened)
+                // IME opened event
                 // -------------------------------------------------------------
-                // 当用户激活输入法（如切换到中文）时触发。
-                // 动作：清空当前的预编辑内容 (ime_preedit)，准备接收新的输入。
-                // 这确保了不会残留上一次的输入状态。
+                // Triggered when the user activates the input method.
+                // Action: clear current preedit content (ime_preedit) to accept new input.
+                // This avoids carrying over the previous composition state.
                 // -------------------------------------------------------------
                 self.ime_preedit = None;
                 self.cache.clear();
                 Task::none()
             }
             Message::ImePreedit(content, selection) => {
-                // 输入法预编辑事件 (Preedit)
+                // IME preedit event
                 // -------------------------------------------------------------
-                // 当用户正在打字但未选定词语时触发（例如输入拼音 "nihao"）。
-                // 参数：
-                // - content: 当前显示的预编辑文本（如 "ni h"）。
-                // - selection: 预编辑文本内的光标或选区位置。
+                // Triggered while the user is composing text but not committed yet.
+                // Params:
+                // - content: current preedit text (e.g. "ni h").
+                // - selection: caret/selection inside the preedit text.
                 //
-                // 注意：Iced 传递的 selection 是基于“字节索引 (byte index)”的范围，
-                // 而非字符索引。在渲染或处理时，必须按照 UTF-8 字节偏移量来截取字符串，
-                // 否则会导致多字节字符（如中文）处理崩溃。
+                // Note: Iced provides selection as a byte index range, not character indices.
+                // When rendering or slicing, use UTF-8 byte offsets to avoid panics.
                 // -------------------------------------------------------------
                 if content.is_empty() {
                     self.ime_preedit = None;
@@ -596,15 +595,13 @@ impl CodeEditor {
                 Task::none()
             }
             Message::ImeCommit(text) => {
-                // 输入法提交事件 (Commit)
+                // IME commit event
                 // -------------------------------------------------------------
-                // 当用户完成选词并上屏时触发。
-                // 动作：
-                // 1. 清空预编辑状态 (ime_preedit = None)。
-                // 2. 如果文本不为空，将其插入到编辑器当前光标位置。
-                // 3. 开启 "Typing" 撤销分组 (undo group)：
-                //    这样连续的输入法提交可以被视为一次操作，方便用户按 Ctrl+Z 一次性撤销，
-                //    而不是逐字撤销，提升体验。
+                // Triggered when the user confirms a candidate and commits text.
+                // Actions:
+                // 1. Clear preedit state (ime_preedit = None).
+                // 2. If text is not empty, insert it at the current cursor position.
+                // 3. Begin a "Typing" undo group so consecutive IME commits undo together.
                 // -------------------------------------------------------------
                 self.ime_preedit = None;
 
@@ -625,10 +622,10 @@ impl CodeEditor {
                 self.scroll_to_cursor()
             }
             Message::ImeClosed => {
-                // 输入法关闭事件 (Closed)
+                // IME closed event
                 // -------------------------------------------------------------
-                // 当输入法被关闭或切换回英文模式时触发。
-                // 动作：彻底清空预编辑状态，确保编辑器回到干净的普通输入模式。
+                // Triggered when the input method is closed or loses focus.
+                // Action: clear preedit state to return to normal input mode.
                 // -------------------------------------------------------------
                 self.ime_preedit = None;
                 self.cache.clear();

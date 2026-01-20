@@ -42,11 +42,11 @@ pub(crate) const GUTTER_WIDTH: f32 = 45.0;
 pub(crate) const CURSOR_BLINK_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(530);
 
-/// 测量文本的显示宽度，考虑 CJK（中日韩）宽字符。
+/// Measures rendered text width, accounting for CJK wide characters.
 ///
-/// - 宽字符（如中文）宽度为 FONT_SIZE。
-/// - 窄字符（如英文）宽度为 CHAR_WIDTH。
-/// - 控制字符宽度为 0。
+/// - Wide characters (e.g. Chinese) use FONT_SIZE.
+/// - Narrow characters (e.g. Latin) use CHAR_WIDTH.
+/// - Control characters have width 0.
 pub(crate) fn measure_text_width(text: &str) -> f32 {
     text.chars()
         .map(|c| {

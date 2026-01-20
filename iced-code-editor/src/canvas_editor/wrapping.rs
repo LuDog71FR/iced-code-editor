@@ -115,8 +115,8 @@ impl WrappingCalculator {
         }
 
         // Calculate wrap width in pixels
-        // 如果设置了 wrap_column，则宽度为 列数 * 字符宽度。
-        // 否则为 viewport 宽度减去 gutter 宽度。
+        // If wrap_column is set, width is columns * character width.
+        // Otherwise, use viewport width minus gutter width.
         let wrap_width_pixels = if let Some(cols) = self.wrap_column {
             cols as f32 * CHAR_WIDTH
         } else {
@@ -138,25 +138,25 @@ impl WrappingCalculator {
             let mut current_segment_start_col = 0;
 
             for (i, c) in line_content.chars().enumerate() {
-                // 计算当前字符的像素宽度
+                // Compute pixel width for the current character
                 let char_width = match c.width() {
-                    Some(w) if w > 1 => FONT_SIZE, // 宽字符（如汉字）
-                    Some(_) => CHAR_WIDTH,         // 窄字符（如英文）
-                    None => 0.0,                   // 控制字符
+                    Some(w) if w > 1 => FONT_SIZE, // wide characters (e.g. CJK)
+                    Some(_) => CHAR_WIDTH,         // narrow characters (e.g. Latin)
+                    None => 0.0,                   // control characters
                 };
 
-                // 如果加上当前字符超过了换行宽度，则在前一个字符处换行。
-                // 必须确保至少有一个字符（如果单个字符宽度就超过了 wrap_width）。
-                // 使用 epsilon 处理浮点数误差。
+                // If adding the current character exceeds wrap width, wrap at the previous char.
+                // Ensure at least one character per segment even if a single char exceeds wrap_width.
+                // Use epsilon to handle floating-point error.
                 if current_width + char_width > wrap_width_pixels + 0.001
                     && i > current_segment_start_col
                 {
-                    // 创建一个新的可视片段
+                    // Create a new visual segment
                     visual_lines.push(VisualLine::new(
                         logical_line,
                         segment_index,
                         current_segment_start_col,
-                        i, // end_col is exclusive (当前字符属于下一行)
+                        i, // end_col is exclusive (current char belongs to next line)
                     ));
 
                     segment_index += 1;
@@ -168,7 +168,7 @@ impl WrappingCalculator {
             }
 
             // Push remaining segment
-            // 添加该逻辑行的最后一个片段
+            // Add the last segment of the logical line
             visual_lines.push(VisualLine::new(
                 logical_line,
                 segment_index,

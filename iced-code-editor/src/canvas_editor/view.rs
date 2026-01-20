@@ -17,23 +17,25 @@ use super::{CodeEditor, GUTTER_WIDTH, LINE_HEIGHT, Message};
 #[derive(Debug, Clone)]
 struct ImeRequester {
     // -------------------------------------------------------------------------
-    // 输入法请求器状态字段说明
+    // IME requester state fields
     // -------------------------------------------------------------------------
     
-    // 是否启用输入法
-    // 逻辑：只有当编辑器同时拥有 Iced 焦点（is_focused）和内部画布焦点（has_canvas_focus）时，
-    // 该值才为 true。这对应了 `shell.request_input_method` 的 Enabled/Disabled 状态。
+    // Whether IME is enabled
+    // Logic: true only when the editor has both Iced focus (is_focused) and
+    // internal canvas focus (has_canvas_focus). This maps to the
+    // Enabled/Disabled state of `shell.request_input_method`.
     enabled: bool,
 
-    // 输入法光标矩形（Caret Rectangle）
-    // 作用：告诉操作系统当前光标在屏幕上的确切位置（x, y, w, h）。
-    // 系统利用此信息将输入法候选窗口（Candidate Window）定位在光标旁边，
-    // 避免候选窗口遮挡光标或出现在屏幕角落（即 "Over-the-spot" 风格）。
+    // IME caret rectangle
+    // Purpose: tells the OS the exact caret location on screen (x, y, w, h).
+    // The OS uses this to position the candidate window near the caret and
+    // avoid covering it (the "over-the-spot" style).
     cursor: Rectangle,
 
-    // 当前预编辑内容
-    // 作用：将当前的预编辑文本（如 "nihao"）回传给 Shell，
-    // 虽然通常是 Shell 发给 View，但这里作为状态保持，确保请求一致性。
+    // Current preedit content
+    // Purpose: send current preedit text (e.g. "nihao") back to the Shell.
+    // Although the Shell usually sends it to the View, we keep it here to keep
+    // requests consistent.
     preedit: Option<input_method::Preedit<String>>,
 }
 
@@ -95,18 +97,18 @@ where
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
     ) {
-        // IME 请求核心逻辑
+        // Core IME request logic
         // ---------------------------------------------------------------------
-        // 为什么在 `RedrawRequested` 事件中请求？
-        // 1. Iced 的输入法协议要求每一帧（或状态变化时）显式声明输入法状态。
-        // 2. `RedrawRequested` 是渲染周期的开始，此时请求能确保系统获得最新的光标位置，
-        //    从而让候选窗口紧跟光标移动（尤其是在打字或滚动时）。
+        // Why request on `RedrawRequested`?
+        // 1. Iced's IME protocol requires explicit IME state each frame or on changes.
+        // 2. `RedrawRequested` starts the render cycle, ensuring the OS gets the
+        //    latest caret position so the candidate window tracks movement.
         //
-        // 逻辑分支：
-        // - enabled = true: 编辑器激活且聚焦。请求 `InputMethod::Enabled`，
-        //   并附带当前的光标矩形（cursor）和预编辑内容（preedit）。
-        // - enabled = false: 编辑器失焦。请求 `InputMethod::Disabled`，
-        //   告知系统关闭软键盘或重置输入法状态。
+        // Branches:
+        // - enabled = true: editor active and focused. Request `InputMethod::Enabled`
+        //   with the caret rectangle (cursor) and preedit content (preedit).
+        // - enabled = false: editor unfocused. Request `InputMethod::Disabled`
+        //   to close the soft keyboard or reset IME state.
         // ---------------------------------------------------------------------
         if let Event::Window(window::Event::RedrawRequested(_)) = event {
             if self.enabled {
@@ -325,8 +327,8 @@ impl CodeEditor {
                 text_size: None,
             });
 
-        // 不可见的 IME 请求层：用于在每次重绘时向 Shell 传递输入法状态与插入点
-        // 说明：Canvas 的 Program 无法直接访问 Shell，因此通过该 Widget 间接完成输入法激活
+        // Invisible IME request layer: sends IME state and caret on each redraw
+        // Note: Canvas Program cannot access Shell directly, so this widget bridges it
         let ime_layer = ImeRequester::new(ime_enabled, cursor_rect, preedit);
         editor_stack = editor_stack.push(iced::Element::new(ime_layer));
 

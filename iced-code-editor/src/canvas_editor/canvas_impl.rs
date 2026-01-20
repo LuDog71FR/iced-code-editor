@@ -16,18 +16,18 @@ fn is_cursor_in_bounds(cursor: &mouse::Cursor, bounds: Rectangle) -> bool {
     }
 }
 
-/// 计算文本片段用于渲染或高亮的几何信息（X坐标和宽度）。
+/// Computes geometry (x start and width) for a text segment used in rendering or highlighting.
 ///
-/// 返回值: (x_start, width)
+/// Returns: (x_start, width)
 ///
-/// 参数:
-/// - `line_content`: 当前行的完整文本内容。
-/// - `visual_start_col`: 当前可视行的起始列索引。
-/// - `segment_start_col`: 目标片段（如高亮区域）的起始列索引。
-/// - `segment_end_col`: 目标片段的结束列索引。
-/// - `base_offset`: 基础 X 偏移量（通常是 gutter_width + padding）。
+/// Parameters:
+/// - `line_content`: full text content of the current line.
+/// - `visual_start_col`: start column index of the current visual line.
+/// - `segment_start_col`: start column index of the target segment (e.g. highlight).
+/// - `segment_end_col`: end column index of the target segment.
+/// - `base_offset`: base X offset (usually gutter_width + padding).
 ///
-/// 该函数会正确处理 CJK 字符宽度，确保高亮位置准确。
+/// This function handles CJK character widths correctly to keep highlights accurate.
 fn calculate_segment_geometry(
     line_content: &str,
     visual_start_col: usize,
@@ -309,7 +309,7 @@ impl canvas::Program<Message> for CodeEditor {
                             let line_content =
                                 self.buffer.line(vl.logical_line);
 
-                            // 使用 calculate_segment_geometry 计算搜索匹配项的位置和宽度
+                            // Use calculate_segment_geometry to compute match position and width
                             let (x_start, match_width) =
                                 calculate_segment_geometry(
                                     line_content,
@@ -528,14 +528,14 @@ impl canvas::Program<Message> for CodeEditor {
                 }
             }
 
-            // 绘制光标逻辑（仅当编辑器具备焦点时执行）
+            // Cursor drawing logic (only when the editor has focus)
             // -------------------------------------------------------------------------
-            // 核心逻辑说明：
-            // 1. 系统根据是否存在 IME 预编辑（ime_preedit）决定走哪条绘制路径。
-            // 2. 必须同时满足 `is_focused()`（Iced 焦点）和 `has_canvas_focus()`（内部逻辑焦点），
-            //    才能确保光标只在当前活跃的编辑器中绘制，避免多光标问题。
-            // 3. 使用 `WrappingCalculator` 将逻辑坐标（行、列）转换为可视坐标（x, y），
-            //    以支持自动换行情况下的正确光标定位。
+            // Core notes:
+            // 1. Choose the drawing path based on whether IME preedit is present.
+            // 2. Require both `is_focused()` (Iced focus) and `has_canvas_focus()` (internal focus)
+            //    so the cursor is drawn only in the active editor, avoiding multiple cursors.
+            // 3. Use `WrappingCalculator` to map logical (line, col) to visual (x, y)
+            //    for correct cursor positioning with line wrapping.
             // -------------------------------------------------------------------------
             if self.show_cursor
                 && self.cursor_visible
@@ -543,14 +543,14 @@ impl canvas::Program<Message> for CodeEditor {
                 && self.has_canvas_focus
                 && self.ime_preedit.is_some()
             {
-                // [分支 A] IME 预编辑绘制模式
+                // [Branch A] IME preedit rendering mode
                 // ---------------------------------------------------------------------
-                // 当用户正在使用输入法输入（如拼音未回车上屏）时，会进入此分支。
-                // 此时不绘制普通光标，而是绘制“预编辑区”，包含：
-                // - 预编辑文本背景（高亮显示正在输入的字符）
-                // - 预编辑文本内容（preedit.content）
-                // - 预编辑选区（如下划线或选中背景）
-                // - 预编辑插入点（caret）
+                // When the user is composing with an IME (e.g. pinyin before commit),
+                // draw a preedit region instead of the normal caret, including:
+                // - preedit background (highlighting the composing text)
+                // - preedit text content (preedit.content)
+                // - preedit selection (underline or selection background)
+                // - preedit caret
                 // ---------------------------------------------------------------------
                 if let Some(cursor_visual) =
                     WrappingCalculator::logical_to_visual(
@@ -562,8 +562,8 @@ impl canvas::Program<Message> for CodeEditor {
                     let vl = &visual_lines[cursor_visual];
                     let line_content = self.buffer.line(vl.logical_line);
 
-                    // 计算预编辑区的起始 X 坐标
-                    // 使用 calculate_segment_geometry 确保字符宽度计算准确（处理 CJK 字符）
+                    // Compute the preedit region start X
+                    // Use calculate_segment_geometry to ensure correct CJK width handling
                     let (cursor_x, _) = calculate_segment_geometry(
                         line_content,
                         vl.start_col,
@@ -577,17 +577,17 @@ impl canvas::Program<Message> for CodeEditor {
                         let preedit_width =
                             measure_text_width(&preedit.content);
 
-                        // 1. 绘制预编辑文本的背景（淡白色半透明）
-                        // 这让用户知道这部分文本尚未提交，处于编辑状态
+                        // 1. Draw preedit background (light translucent)
+                        // This indicates the text is not committed yet
                         frame.fill_rectangle(
                             Point::new(cursor_x, cursor_y + 2.0),
                             Size::new(preedit_width, LINE_HEIGHT - 4.0),
                             Color { r: 1.0, g: 1.0, b: 1.0, a: 0.08 },
                         );
 
-                        // 2. 绘制预编辑中的选区（如果有）
-                        // 输入法可能会在预编辑文本中标记一段“选区”（如拼音分词选择）
-                        // 这里的 range 是 UTF-8 字节索引，需注意 slice 安全
+                        // 2. Draw preedit selection (if any)
+                        // IME may mark a selection inside preedit text (e.g. segmentation)
+                        // The range uses UTF-8 byte indices, so slices must be safe
                         if let Some(range) = preedit.selection.as_ref()
                             && range.start != range.end
                         {
@@ -608,7 +608,7 @@ impl canvas::Program<Message> for CodeEditor {
                             );
                         }
 
-                        // 3. 绘制预编辑文本本身
+                        // 3. Draw preedit text itself
                         frame.fill_text(canvas::Text {
                             content: preedit.content.clone(),
                             position: Point::new(cursor_x, cursor_y + 2.0),
@@ -618,15 +618,15 @@ impl canvas::Program<Message> for CodeEditor {
                             ..canvas::Text::default()
                         });
 
-                        // 4. 绘制底部下划线（指示输入法状态）
+                        // 4. Draw bottom underline (IME state indicator)
                         frame.fill_rectangle(
                             Point::new(cursor_x, cursor_y + LINE_HEIGHT - 3.0),
                             Size::new(preedit_width, 1.0),
                             self.style.text_color,
                         );
 
-                        // 5. 绘制预编辑内部的光标（Caret）
-                        // 如果输入法提供了光标位置（通常是 selection 的 end），则绘制细竖线
+                        // 5. Draw preedit caret
+                        // If IME provides a caret position (usually selection end), draw a thin bar
                         if let Some(range) = preedit.selection.as_ref() {
                             let caret_end =
                                 range.end.min(preedit.content.len());
@@ -650,17 +650,17 @@ impl canvas::Program<Message> for CodeEditor {
                 && self.is_focused()
                 && self.has_canvas_focus
             {
-                // [分支 B] 普通光标绘制模式
+                // [Branch B] Normal caret rendering mode
                 // ---------------------------------------------------------------------
-                // 当没有 IME 预编辑时，绘制标准的编辑器光标。
-                // 关键检查：
-                // - is_focused(): 整个 Widget 是否获得 Iced 焦点
-                // - has_canvas_focus: 内部状态是否标记为获得焦点（处理鼠标点击等）
-                // - 只有两者同时满足，才绘制光标，确保不会出现“幽灵光标”
+                // When there is no IME preedit, draw the standard editor caret.
+                // Key checks:
+                // - is_focused(): the widget has Iced focus
+                // - has_canvas_focus: internal focus state (mouse clicks, etc.)
+                // - draw only when both are true to avoid ghost cursors
                 // ---------------------------------------------------------------------
                 
-                // 将逻辑光标位置 (Line, Col) 转换为可视位置 (Visual Line Index)
-                // 处理自动换行带来的行号变化
+                // Map logical cursor position (Line, Col) to visual line index
+                // to handle line wrapping changes
                 if let Some(cursor_visual) =
                     WrappingCalculator::logical_to_visual(
                         &visual_lines,
@@ -671,8 +671,8 @@ impl canvas::Program<Message> for CodeEditor {
                     let vl = &visual_lines[cursor_visual];
                     let line_content = self.buffer.line(vl.logical_line);
 
-                    // 计算光标的精确 X 坐标
-                    // 考虑了行号 gutter 宽度、左侧 padding 以及前缀字符的实际渲染宽度
+                    // Compute exact caret X position
+                    // Account for gutter width, left padding, and rendered prefix width
                     let (cursor_x, _) = calculate_segment_geometry(
                         line_content,
                         vl.start_col,
@@ -682,7 +682,7 @@ impl canvas::Program<Message> for CodeEditor {
                     );
                     let cursor_y = cursor_visual as f32 * LINE_HEIGHT;
 
-                    // 绘制标准光标（2px 宽的竖线）
+                    // Draw standard caret (2px vertical bar)
                     frame.fill_rectangle(
                         Point::new(cursor_x, cursor_y + 2.0),
                         Size::new(2.0, LINE_HEIGHT - 4.0),
@@ -1008,22 +1008,22 @@ impl canvas::Program<Message> for CodeEditor {
                     return None;
                 }
 
-                // 输入法事件处理逻辑
+                // IME event handling
                 // ---------------------------------------------------------------------
-                // 核心映射：将 Iced 系统的输入法事件转换为编辑器内部的 Message
+                // Core mapping: convert Iced IME events into editor Messages
                 //
-                // 事件流说明：
-                // 1. Opened: 输入法激活（如切换到中文输入法）。此时我们清空旧的预编辑状态。
-                // 2. Preedit: 用户正在输入（如输入拼音 "nihao" 但未选词）。
-                //    - content: 当前的候选文本
-                //    - selection: 文本中的选区（如分词高亮），注意是字节范围
-                // 3. Commit: 用户完成选词，文本上屏。此时将文本正式插入编辑器缓冲区。
-                // 4. Closed: 输入法关闭或失去焦点。
+                // Flow:
+                // 1. Opened: IME activated (e.g. switching input method). Clear old preedit state.
+                // 2. Preedit: User is composing (e.g. typing "nihao" before commit).
+                //    - content: current candidate text
+                //    - selection: selection range within the text, in bytes
+                // 3. Commit: User confirms a candidate and commits text into the buffer.
+                // 4. Closed: IME closed or lost focus.
                 //
-                // 安全性检查：
-                // - 仅当 `focused_id` 匹配当前编辑器 ID 时处理
-                // - 仅当 `has_canvas_focus` 为真时处理
-                // 这确保了如果界面上有多个编辑器或搜索框，输入法事件不会被错误的组件接收。
+                // Safety checks:
+                // - handle only when `focused_id` matches this editor ID
+                // - handle only when `has_canvas_focus` is true
+                // This ensures IME events are not delivered to the wrong widget.
                 // ---------------------------------------------------------------------
                 let message = match event {
                     input_method::Event::Opened => Message::ImeOpened,

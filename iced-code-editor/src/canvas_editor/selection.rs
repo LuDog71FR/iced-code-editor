@@ -41,10 +41,10 @@ impl CodeEditor {
         if start.0 == end.0 {
             // Single line selection
             let line = self.buffer.line(start.0);
-            // 说明：
-            // - 本编辑器中的列索引（start.1 / end.1）是“字符索引”（按 Unicode 字符计数）
-            // - Rust 字符串底层是 UTF-8 字节序列，直接用字符索引做切片会导致“字节边界不合法”的 panic
-            // - 解决方案：通过 char_indices() 将“字符索引”转换为“字节索引”，再进行安全切片
+            // Notes:
+            // - Column indices (start.1 / end.1) are character indices (Unicode scalar count).
+            // - Rust strings are UTF-8 bytes; slicing by character indices can panic.
+            // - Convert character indices to byte indices via char_indices() before slicing.
             // Convert UTF-8 character indices to byte indices for safe slicing
             let start_byte = line
                 .char_indices()
@@ -59,7 +59,7 @@ impl CodeEditor {
             // Multi-line selection
             // First line
             let first_line = self.buffer.line(start.0);
-            // 首行：从起始“字符索引”转换到字节位置后，安全截取至该行结尾
+            // First line: convert the starting character index to a byte index and slice safely
             let start_byte = first_line
                 .char_indices()
                 .nth(start.1)
@@ -75,7 +75,7 @@ impl CodeEditor {
 
             // Last line
             let last_line = self.buffer.line(end.0);
-            // 末行：将结束“字符索引”转换为字节位置后，安全截取
+            // Last line: convert the ending character index to a byte index and slice safely
             let end_byte = last_line
                 .char_indices()
                 .nth(end.1)

@@ -112,12 +112,12 @@ impl CodeEditor {
         self.cache.clear();
     }
 
-    /// 根据屏幕坐标点计算光标的逻辑位置 (行, 列)。
+    /// Computes the cursor logical position (line, col) from a screen point.
     ///
-    /// 这个方法会考虑：
-    /// 1. 是否点击在行号区域（Gutter）。
-    /// 2. 自动换行后的可视行（Visual Line）映射。
-    /// 3. CJK（中日韩）字符的宽度（宽字符占 FONT_SIZE，窄字符占 CHAR_WIDTH）。
+    /// This method considers:
+    /// 1. Whether the click is inside the gutter area.
+    /// 2. Visual line mapping after wrapping.
+    /// 3. CJK character widths (wide characters use FONT_SIZE, narrow use CHAR_WIDTH).
     fn calculate_cursor_from_point(
         &self,
         point: Point,
@@ -180,9 +180,9 @@ impl CodeEditor {
         Some((visual_line.logical_line, col))
     }
 
-    /// 处理鼠标点击事件以定位光标。
+    /// Handles mouse clicks to position the cursor.
     ///
-    /// 复用 `calculate_cursor_from_point` 来计算位置，并更新光标缓存。
+    /// Reuses `calculate_cursor_from_point` to compute the position and updates the cache.
     pub(crate) fn handle_mouse_click(&mut self, point: Point) {
         if let Some(cursor) = self.calculate_cursor_from_point(point) {
             self.cursor = cursor;
@@ -266,7 +266,7 @@ impl CodeEditor {
 
     /// Handles mouse drag for text selection.
     ///
-    /// 复用 `calculate_cursor_from_point` 来计算位置，并更新选区终点。
+    /// Reuses `calculate_cursor_from_point` to compute the position and update selection end.
     pub(crate) fn handle_mouse_drag(&mut self, point: Point) {
         if let Some(cursor) = self.calculate_cursor_from_point(point) {
             self.cursor = cursor;
@@ -353,7 +353,6 @@ mod tests {
         editor.set_line_numbers_enabled(false);
 
         // "你" is 0..14px. "好" is 14..28px. FONT_SIZE=14.0
-
         // Case 1: Click at 5px (inside "你", < half width)
         // Expect col 0
         editor.handle_mouse_click(Point::new(5.0 + 5.0, 10.0)); // +5.0 padding
