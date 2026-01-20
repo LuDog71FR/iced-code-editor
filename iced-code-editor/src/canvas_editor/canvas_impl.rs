@@ -102,7 +102,7 @@ impl canvas::Program<Message> for CodeEditor {
                             position: Point::new(x_pos, y + 2.0),
                             color: self.style.line_number_color,
                             size: FONT_SIZE.into(),
-                            font: iced::Font::MONOSPACE,
+                            font: self.font,
                             ..canvas::Text::default()
                         });
                     } else {
@@ -115,7 +115,7 @@ impl canvas::Program<Message> for CodeEditor {
                             ),
                             color: self.style.line_number_color,
                             size: FONT_SIZE.into(),
-                            font: iced::Font::MONOSPACE,
+                            font: self.font,
                             ..canvas::Text::default()
                         });
                     }
@@ -204,7 +204,7 @@ impl canvas::Program<Message> for CodeEditor {
                                 position: Point::new(x_offset, y + 2.0),
                                 color,
                                 size: FONT_SIZE.into(),
-                                font: iced::Font::MONOSPACE,
+                                font: self.font,
                                 ..canvas::Text::default()
                             });
 
@@ -224,7 +224,7 @@ impl canvas::Program<Message> for CodeEditor {
                         ),
                         color: self.style.text_color,
                         size: FONT_SIZE.into(),
-                        font: iced::Font::MONOSPACE,
+                        font: self.font,
                         ..canvas::Text::default()
                     });
                 }
