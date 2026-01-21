@@ -9,6 +9,10 @@ use crate::text_buffer::TextBuffer;
 use super::{CHAR_WIDTH, FONT_SIZE};
 use unicode_width::UnicodeWidthChar;
 
+/// Epsilon value for floating-point comparisons when calculating wrap width.
+/// This prevents unnecessary wrapping due to floating-point precision errors.
+const WRAP_WIDTH_EPSILON: f32 = 0.001;
+
 /// Represents a visual line segment in the editor.
 ///
 /// When line wrapping is enabled, a single logical line may be split into
@@ -148,7 +152,7 @@ impl WrappingCalculator {
                 // If adding the current character exceeds wrap width, wrap at the previous char.
                 // Ensure at least one character per segment even if a single char exceeds wrap_width.
                 // Use epsilon to handle floating-point error.
-                if current_width + char_width > wrap_width_pixels + 0.001
+                if current_width + char_width > wrap_width_pixels + WRAP_WIDTH_EPSILON
                     && i > current_segment_start_col
                 {
                     // Create a new visual segment
