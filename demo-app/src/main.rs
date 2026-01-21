@@ -11,8 +11,8 @@
 
 use iced::widget::pane_grid::{Content, TitleBar};
 use iced::widget::{
-    PaneGrid, Space, button, checkbox, column, container, mouse_area,
-    pane_grid, pick_list, row, scrollable, text, text_input,
+    PaneGrid, Space, button, center, checkbox, column, container, mouse_area,
+    pane_grid, pick_list, row, scrollable, slider, stack, text, text_input,
 };
 use iced::{Color, Element, Length, Subscription, Task, Theme, window};
 use iced_code_editor::Message as EditorMessage;
@@ -229,6 +229,10 @@ struct DemoApp {
     current_language: Language,
     /// Current font
     current_font: FontOption,
+    /// Current font size
+    current_font_size: f32,
+    /// Current line height
+    current_line_height: f32,
     /// Pane grid state
     panes: pane_grid::State<PaneType>,
     /// Log messages for output pane
@@ -245,11 +249,19 @@ struct DemoApp {
     active_editor: EditorId,
     /// Test text input value
     text_input_value: String,
+    /// Whether to show the settings modal
+    show_settings: bool,
+    /// Whether to automatically adjust line height when font size changes
+    auto_adjust_line_height: bool,
 }
 
 /// Application messages.
 #[derive(Debug, Clone)]
 enum Message {
+    /// Toggle settings modal
+    ToggleSettings,
+    /// Toggle auto adjust line height
+    ToggleAutoLineHeight(bool),
     /// Editor event
     EditorEvent(EditorId, EditorMessage),
     /// Open file
@@ -266,6 +278,10 @@ enum Message {
     Tick,
     /// Font changed
     FontChanged(FontOption),
+    /// Font size changed
+    FontSizeChanged(f32),
+    /// Line height changed
+    LineHeightChanged(f32),
     /// UI Language changed
     LanguageChanged(LanguageOption),
     /// Theme changed
@@ -332,6 +348,8 @@ greet("World")
                 current_theme: Theme::TokyoNightStorm,
                 current_language: Language::English,
                 current_font,
+                current_font_size: 14.0,
+                current_line_height: 20.0,
                 panes,
                 log_messages,
                 search_replace_enabled_left: true,
@@ -340,6 +358,8 @@ greet("World")
                 line_numbers_enabled_right: true,
                 active_editor: EditorId::Left,
                 text_input_value: String::new(),
+                show_settings: false,
+                auto_adjust_line_height: true,
             },
             Task::none(),
         )
@@ -353,6 +373,14 @@ greet("World")
     /// Handles messages and updates the application state.
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::ToggleSettings => {
+                self.show_settings = !self.show_settings;
+                Task::none()
+            }
+            Message::ToggleAutoLineHeight(enabled) => {
+                self.auto_adjust_line_height = enabled;
+                Task::none()
+            }
             Message::EditorEvent(editor_id, event) => {
                 let editor = match editor_id {
                     EditorId::Left => &mut self.editor_left,
@@ -482,6 +510,25 @@ greet("World")
                 let font = font_option.font();
                 self.editor_left.set_font(font);
                 self.editor_right.set_font(font);
+                Task::none()
+            }
+            Message::FontSizeChanged(size) => {
+                self.current_font_size = size;
+                
+                if self.auto_adjust_line_height {
+                    // Auto-adjust line height ratio is 20/14 ~ 1.428
+                    let new_line_height = size * (20.0 / 14.0);
+                    self.current_line_height = new_line_height;
+                }
+                
+                self.editor_left.set_font_size(size, self.auto_adjust_line_height);
+                self.editor_right.set_font_size(size, self.auto_adjust_line_height);
+                Task::none()
+            }
+            Message::LineHeightChanged(height) => {
+                self.current_line_height = height;
+                self.editor_left.set_line_height(height);
+                self.editor_right.set_line_height(height);
                 Task::none()
             }
             Message::LanguageChanged(lang_option) => {
@@ -680,27 +727,7 @@ greet("World")
             )
             .on_press(Message::TextInputClicked),
             Space::new().width(10),
-            text("Font:")
-                .style(move |_| text::Style { color: Some(text_color) }),
-            pick_list(
-                FontOption::ALL,
-                Some(self.current_font),
-                Message::FontChanged
-            ),
-            text("Language:")
-                .style(move |_| text::Style { color: Some(text_color) }),
-            pick_list(
-                LanguageOption::ALL,
-                Some(LanguageOption::from(self.current_language)),
-                Message::LanguageChanged
-            ),
-            text("Theme:")
-                .style(move |_| text::Style { color: Some(text_color) }),
-            pick_list(
-                Theme::ALL,
-                Some(self.current_theme.clone()),
-                Message::ThemeChanged
-            ),
+            button(text("Settings")).on_press(Message::ToggleSettings),
         ]
         .spacing(10)
         .padding(10)
@@ -810,7 +837,7 @@ greet("World")
             .height(Length::FillPortion(3)); // 30% of available height
 
         // Main layout: column with toolbar, error_bar, editors, and output
-        container(
+        let content = container(
             column![toolbar, error_bar, editors_pane_grid, output_view]
                 .spacing(2)
                 .width(Length::Fill)
@@ -823,8 +850,101 @@ greet("World")
             ..Default::default()
         })
         .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        .height(Length::Fill);
+
+        if self.show_settings {
+            let modal = center(
+                container(
+                    column![
+                        text("Settings").size(24),
+                        row![
+                            text("Font:").width(80),
+                            pick_list(
+                                FontOption::ALL,
+                                Some(self.current_font),
+                                Message::FontChanged
+                            )
+                        ]
+                        .spacing(10)
+                        .align_y(iced::Center),
+                        row![
+                            text(format!("Size: {:.0}", self.current_font_size)).width(80),
+                            slider(
+                                10.0..=30.0,
+                                self.current_font_size,
+                                Message::FontSizeChanged
+                            )
+                            .width(150)
+                        ]
+                        .spacing(10)
+                        .align_y(iced::Center),
+                        checkbox(self.auto_adjust_line_height)
+                            .label("Auto-adjust Line Height")
+                            .on_toggle(Message::ToggleAutoLineHeight),
+                        row![
+                            text(format!("Height: {:.1}", self.current_line_height)).width(80),
+                            slider(
+                                10.0..=50.0,
+                                self.current_line_height,
+                                Message::LineHeightChanged
+                            )
+                            .width(150)
+                        ]
+                        .spacing(10)
+                        .align_y(iced::Center),
+                        row![
+                            text("Language:").width(80),
+                            pick_list(
+                                LanguageOption::ALL,
+                                Some(LanguageOption::from(self.current_language)),
+                                Message::LanguageChanged
+                            )
+                        ]
+                        .spacing(10)
+                        .align_y(iced::Center),
+                        row![
+                            text("Theme:").width(80),
+                            pick_list(
+                                Theme::ALL,
+                                Some(self.current_theme.clone()),
+                                Message::ThemeChanged
+                            )
+                        ]
+                        .spacing(10)
+                        .align_y(iced::Center),
+                        button("Close").on_press(Message::ToggleSettings)
+                    ]
+                    .spacing(20)
+                    .padding(20),
+                )
+                .style(move |_| container::Style {
+                    background: Some(iced::Background::Color(palette.background.weak.color)),
+                    border: iced::Border {
+                        color: palette.primary.base.color,
+                        width: 1.0,
+                        radius: 10.0.into(),
+                    },
+                    ..Default::default()
+                }),
+            );
+
+            stack![
+                content,
+                mouse_area(
+                    container(Space::new().width(Length::Fill).height(Length::Fill)).style(
+                        |_| container::Style {
+                            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.5).into()),
+                            ..Default::default()
+                        }
+                    )
+                )
+                .on_press(Message::ToggleSettings),
+                modal
+            ]
+            .into()
+        } else {
+            content.into()
+        }
     }
 
     /// Renders the editor pane content.
