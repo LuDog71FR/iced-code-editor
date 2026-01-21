@@ -1046,3 +1046,144 @@ impl canvas::Program<Message> for CodeEditor {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::canvas_editor::{CHAR_WIDTH, FONT_SIZE};
+
+    #[test]
+    fn test_calculate_segment_geometry_ascii() {
+        // "Hello World"
+        // "Hello " (6 chars) -> prefix
+        // "World" (5 chars) -> segment
+        // width("Hello ") = 6 * CHAR_WIDTH
+        // width("World") = 5 * CHAR_WIDTH
+        let content = "Hello World";
+        let (x, w) = calculate_segment_geometry(content, 0, 6, 11, 0.0);
+        
+        let expected_x = CHAR_WIDTH * 6.0;
+        let expected_w = CHAR_WIDTH * 5.0;
+        
+        assert!((x - expected_x).abs() < 0.001, "X position mismatch for ASCII");
+        assert!((w - expected_w).abs() < 0.001, "Width mismatch for ASCII");
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_cjk() {
+        // "你好世界"
+        // "你好" (2 chars) -> prefix
+        // "世界" (2 chars) -> segment
+        // width("你好") = 2 * FONT_SIZE
+        // width("世界") = 2 * FONT_SIZE
+        let content = "你好世界";
+        let (x, w) = calculate_segment_geometry(content, 0, 2, 4, 10.0);
+        
+        let expected_x = 10.0 + FONT_SIZE * 2.0;
+        let expected_w = FONT_SIZE * 2.0;
+
+        assert!((x - expected_x).abs() < 0.001, "X position mismatch for CJK");
+        assert!((w - expected_w).abs() < 0.001, "Width mismatch for CJK");
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_mixed() {
+        // "Hi你好"
+        // "Hi" (2 chars) -> prefix
+        // "你好" (2 chars) -> segment
+        // width("Hi") = 2 * CHAR_WIDTH
+        // width("你好") = 2 * FONT_SIZE
+        let content = "Hi你好";
+        let (x, w) = calculate_segment_geometry(content, 0, 2, 4, 0.0);
+        
+        let expected_x = CHAR_WIDTH * 2.0;
+        let expected_w = FONT_SIZE * 2.0;
+
+        assert!((x - expected_x).abs() < 0.001, "X position mismatch for mixed content");
+        assert!((w - expected_w).abs() < 0.001, "Width mismatch for mixed content");
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_empty_range() {
+        let content = "Hello";
+        let (x, w) = calculate_segment_geometry(content, 0, 0, 0, 0.0);
+        assert_eq!(x, 0.0);
+        assert_eq!(w, 0.0);
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_with_visual_offset() {
+        // content: "0123456789"
+        // visual_start_col: 2 (starts at '2')
+        // segment: "34" (indices 3 to 5)
+        // prefix: from visual start (2) to segment start (3) -> "2" (length 1)
+        // prefix width: 1 * CHAR_WIDTH
+        // segment width: 2 * CHAR_WIDTH
+        let content = "0123456789";
+        let (x, w) = calculate_segment_geometry(content, 2, 3, 5, 5.0);
+        
+        let expected_x = 5.0 + CHAR_WIDTH * 1.0;
+        let expected_w = CHAR_WIDTH * 2.0;
+
+        assert!((x - expected_x).abs() < 0.001, "X position mismatch with visual offset");
+        assert!((w - expected_w).abs() < 0.001, "Width mismatch with visual offset");
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_out_of_bounds() {
+        // Content length is 5 ("Hello")
+        // Request start at 10, end at 15
+        // visual_start 0
+        // Prefix should consume whole string ("Hello") and stop.
+        // Segment should be empty.
+        let content = "Hello";
+        let (x, w) = calculate_segment_geometry(content, 0, 10, 15, 0.0);
+        
+        let expected_x = CHAR_WIDTH * 5.0; // Width of "Hello"
+        let expected_w = 0.0;
+        
+        assert!((x - expected_x).abs() < 0.001, "X position mismatch for out of bounds start");
+        assert_eq!(w, expected_w, "Width should be 0 for out of bounds segment");
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_special_chars() {
+        // Emoji "👋" (width > 1 => FONT_SIZE)
+        // Tab "\t" (width None => 0.0)
+        let content = "A👋\tB";
+        // Measure "👋" (index 1 to 2)
+        // Indices in chars: 'A' (0), '👋' (1), '\t' (2), 'B' (3)
+        
+        // Segment covering Emoji
+        let (x, w) = calculate_segment_geometry(content, 0, 1, 2, 0.0);
+        let expected_x_emoji = CHAR_WIDTH; // 'A'
+        let expected_w_emoji = FONT_SIZE;  // '👋'
+        
+        assert!((x - expected_x_emoji).abs() < 0.001, "X pos for emoji");
+        assert!((w - expected_w_emoji).abs() < 0.001, "Width for emoji");
+        
+        // Segment covering Tab
+        let (x_tab, w_tab) = calculate_segment_geometry(content, 0, 2, 3, 0.0);
+        let expected_x_tab = CHAR_WIDTH + FONT_SIZE; // 'A' + '👋'
+        let expected_w_tab = 0.0; // Tab width is 0 in this implementation
+        
+        assert!((x_tab - expected_x_tab).abs() < 0.001, "X pos for tab");
+        assert!((w_tab - expected_w_tab).abs() < 0.001, "Width for tab");
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_inverted_range() {
+        // Start 5, End 3
+        // Should result in empty segment at start 5
+        let content = "0123456789";
+        let (x, w) = calculate_segment_geometry(content, 0, 5, 3, 0.0);
+        
+        let expected_x = CHAR_WIDTH * 5.0;
+        let expected_w = 0.0;
+        
+        assert!((x - expected_x).abs() < 0.001, "X pos for inverted range");
+        assert_eq!(w, expected_w, "Width for inverted range");
+    }
+}
+
+
