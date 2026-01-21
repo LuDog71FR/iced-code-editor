@@ -358,27 +358,34 @@ mod tests {
         let mut editor = CodeEditor::new("你好", "txt");
         editor.set_line_numbers_enabled(false);
 
-        // "你" is 0..14px. "好" is 14..28px. FONT_SIZE=14.0
-        // Case 1: Click at 5px (inside "你", < half width)
+        let font_size = editor.font_size();
+        let half_width = font_size / 2.0;
+        let padding = 5.0;
+
+        // Assume each CJK character is `font_size` wide.
+        // "你" is 0..font_size. "好" is font_size..2*font_size.
+        //
+        // Case 1: Click inside "你", at less than half its width.
         // Expect col 0
-        editor.handle_mouse_click(Point::new(5.0 + 5.0, 10.0)); // +5.0 padding
+        editor.handle_mouse_click(Point::new((half_width - 2.0) + padding, 10.0));
+
         assert_eq!(editor.cursor, (0, 0));
 
-        // Case 2: Click at 10px (inside "你", > half width)
+        // Case 2: Click inside "你", at more than half its width.
         // Expect col 1
-        editor.handle_mouse_click(Point::new(10.0 + 5.0, 10.0));
+        editor.handle_mouse_click(Point::new((half_width + 2.0) + padding, 10.0));
         assert_eq!(editor.cursor, (0, 1));
 
-        // Case 3: Click at 18px (inside "好", < half width of "好")
-        // "好" starts at 14. 18 is 4px into "好". 4 < 7.
+        // Case 3: Click inside "好", at less than half its width.
+        // "好" starts at font_size. Offset into "好" is < half_width.
         // Expect col 1 (start of "好")
-        editor.handle_mouse_click(Point::new(18.0 + 5.0, 10.0));
+        editor.handle_mouse_click(Point::new((font_size + half_width - 2.0) + padding, 10.0));
         assert_eq!(editor.cursor, (0, 1));
-
-        // Case 4: Click at 25px (inside "好", > half width of "好")
-        // "好" starts at 14. 25 is 11px into "好". 11 > 7.
+        
+        // Case 4: Click inside "好", at more than half its width.
+        // "好" starts at font_size. Offset into "好" is > half_width.
         // Expect col 2 (end of "好")
-        editor.handle_mouse_click(Point::new(25.0 + 5.0, 10.0));
+        editor.handle_mouse_click(Point::new((font_size + half_width + 2.0) + padding, 10.0));
         assert_eq!(editor.cursor, (0, 2));
     }
 }
