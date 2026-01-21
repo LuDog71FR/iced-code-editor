@@ -1050,7 +1050,8 @@ impl canvas::Program<Message> for CodeEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::canvas_editor::{CHAR_WIDTH, FONT_SIZE};
+    use crate::canvas_editor::{CHAR_WIDTH, FONT_SIZE, compare_floats};
+    use std::cmp::Ordering;
 
     #[test]
     fn test_calculate_segment_geometry_ascii() {
@@ -1065,8 +1066,8 @@ mod tests {
         let expected_x = CHAR_WIDTH * 6.0;
         let expected_w = CHAR_WIDTH * 5.0;
         
-        assert!((x - expected_x).abs() < 0.001, "X position mismatch for ASCII");
-        assert!((w - expected_w).abs() < 0.001, "Width mismatch for ASCII");
+        assert_eq!(compare_floats(x, expected_x), Ordering::Equal, "X position mismatch for ASCII");
+        assert_eq!(compare_floats(w, expected_w), Ordering::Equal, "Width mismatch for ASCII");
     }
 
     #[test]
@@ -1082,8 +1083,8 @@ mod tests {
         let expected_x = 10.0 + FONT_SIZE * 2.0;
         let expected_w = FONT_SIZE * 2.0;
 
-        assert!((x - expected_x).abs() < 0.001, "X position mismatch for CJK");
-        assert!((w - expected_w).abs() < 0.001, "Width mismatch for CJK");
+        assert_eq!(compare_floats(x, expected_x), Ordering::Equal, "X position mismatch for CJK");
+        assert_eq!(compare_floats(w, expected_w), Ordering::Equal, "Width mismatch for CJK");
     }
 
     #[test]
@@ -1099,8 +1100,8 @@ mod tests {
         let expected_x = CHAR_WIDTH * 2.0;
         let expected_w = FONT_SIZE * 2.0;
 
-        assert!((x - expected_x).abs() < 0.001, "X position mismatch for mixed content");
-        assert!((w - expected_w).abs() < 0.001, "Width mismatch for mixed content");
+        assert_eq!(compare_floats(x, expected_x), Ordering::Equal, "X position mismatch for mixed content");
+        assert_eq!(compare_floats(w, expected_w), Ordering::Equal, "Width mismatch for mixed content");
     }
 
     #[test]
@@ -1125,8 +1126,8 @@ mod tests {
         let expected_x = 5.0 + CHAR_WIDTH * 1.0;
         let expected_w = CHAR_WIDTH * 2.0;
 
-        assert!((x - expected_x).abs() < 0.001, "X position mismatch with visual offset");
-        assert!((w - expected_w).abs() < 0.001, "Width mismatch with visual offset");
+        assert_eq!(compare_floats(x, expected_x), Ordering::Equal, "X position mismatch with visual offset");
+        assert_eq!(compare_floats(w, expected_w), Ordering::Equal, "Width mismatch with visual offset");
     }
 
     #[test]
@@ -1142,7 +1143,7 @@ mod tests {
         let expected_x = CHAR_WIDTH * 5.0; // Width of "Hello"
         let expected_w = 0.0;
         
-        assert!((x - expected_x).abs() < 0.001, "X position mismatch for out of bounds start");
+        assert_eq!(compare_floats(x, expected_x), Ordering::Equal, "X position mismatch for out of bounds start");
         assert_eq!(w, expected_w, "Width should be 0 for out of bounds segment");
     }
 
@@ -1159,16 +1160,16 @@ mod tests {
         let expected_x_emoji = CHAR_WIDTH; // 'A'
         let expected_w_emoji = FONT_SIZE;  // '👋'
         
-        assert!((x - expected_x_emoji).abs() < 0.001, "X pos for emoji");
-        assert!((w - expected_w_emoji).abs() < 0.001, "Width for emoji");
+        assert_eq!(compare_floats(x, expected_x_emoji), Ordering::Equal, "X pos for emoji");
+        assert_eq!(compare_floats(w, expected_w_emoji), Ordering::Equal, "Width for emoji");
         
         // Segment covering Tab
         let (x_tab, w_tab) = calculate_segment_geometry(content, 0, 2, 3, 0.0);
         let expected_x_tab = CHAR_WIDTH + FONT_SIZE; // 'A' + '👋'
         let expected_w_tab = 0.0; // Tab width is 0 in this implementation
         
-        assert!((x_tab - expected_x_tab).abs() < 0.001, "X pos for tab");
-        assert!((w_tab - expected_w_tab).abs() < 0.001, "Width for tab");
+        assert_eq!(compare_floats(x_tab, expected_x_tab), Ordering::Equal, "X pos for tab");
+        assert_eq!(compare_floats(w_tab, expected_w_tab), Ordering::Equal, "Width for tab");
     }
 
     #[test]
@@ -1181,9 +1182,10 @@ mod tests {
         let expected_x = CHAR_WIDTH * 5.0;
         let expected_w = 0.0;
         
-        assert!((x - expected_x).abs() < 0.001, "X pos for inverted range");
+        assert_eq!(compare_floats(x, expected_x), Ordering::Equal, "X pos for inverted range");
         assert_eq!(w, expected_w, "Width for inverted range");
     }
 }
+
 
 

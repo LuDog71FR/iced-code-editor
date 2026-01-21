@@ -7,6 +7,7 @@ use iced::widget::operation::{RelativeOffset, snap_to};
 use iced::widget::{Id, canvas};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::cmp::Ordering as CmpOrdering;
 use std::time::Instant;
 use unicode_width::UnicodeWidthChar;
 
@@ -59,6 +60,25 @@ pub(crate) fn measure_text_width(text: &str) -> f32 {
             }
         })
         .sum()
+}
+
+/// Epsilon value for floating-point comparisons in text layout.
+pub(crate) const EPSILON: f32 = 0.001;
+
+/// Compares two floating point numbers with a small epsilon tolerance.
+///
+/// Returns:
+/// - `Ordering::Equal` if `abs(a - b) < EPSILON`
+/// - `Ordering::Greater` if `a > b` (and not equal)
+/// - `Ordering::Less` if `a < b` (and not equal)
+pub(crate) fn compare_floats(a: f32, b: f32) -> CmpOrdering {
+    if (a - b).abs() < EPSILON {
+        CmpOrdering::Equal
+    } else if a > b {
+        CmpOrdering::Greater
+    } else {
+        CmpOrdering::Less
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -718,13 +738,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_compare_floats() {
+        // Equal cases
+        assert_eq!(compare_floats(1.0, 1.0), CmpOrdering::Equal, "Exact equality");
+        assert_eq!(compare_floats(1.0, 1.0 + 0.0001), CmpOrdering::Equal, "Within epsilon (positive)");
+        assert_eq!(compare_floats(1.0, 1.0 - 0.0001), CmpOrdering::Equal, "Within epsilon (negative)");
+        
+        // Greater cases
+        assert_eq!(compare_floats(1.0 + 0.002, 1.0), CmpOrdering::Greater, "Definitely greater");
+        assert_eq!(compare_floats(1.0011, 1.0), CmpOrdering::Greater, "Just above epsilon");
+        
+        // Less cases
+        assert_eq!(compare_floats(1.0, 1.0 + 0.002), CmpOrdering::Less, "Definitely less");
+        assert_eq!(compare_floats(1.0, 1.0011), CmpOrdering::Less, "Just below negative epsilon");
+    }
+
+    #[test]
     fn test_measure_text_width_ascii() {
         // "Hello" (5 chars)
         // width = 5 * CHAR_WIDTH
         let text = "Hello";
         let width = measure_text_width(text);
         let expected = CHAR_WIDTH * 5.0;
-        assert!((width - expected).abs() < 0.001, "Width mismatch for ASCII");
+        assert_eq!(compare_floats(width, expected), CmpOrdering::Equal, "Width mismatch for ASCII");
     }
 
     #[test]
@@ -734,7 +770,7 @@ mod tests {
         let text = "你好";
         let width = measure_text_width(text);
         let expected = FONT_SIZE * 2.0;
-        assert!((width - expected).abs() < 0.001, "Width mismatch for CJK");
+        assert_eq!(compare_floats(width, expected), CmpOrdering::Equal, "Width mismatch for CJK");
     }
 
     #[test]
@@ -745,7 +781,7 @@ mod tests {
         let text = "Hi你好";
         let width = measure_text_width(text);
         let expected = CHAR_WIDTH * 2.0 + FONT_SIZE * 2.0;
-        assert!((width - expected).abs() < 0.001, "Width mismatch for mixed content");
+        assert_eq!(compare_floats(width, expected), CmpOrdering::Equal, "Width mismatch for mixed content");
     }
 
     #[test]
@@ -755,7 +791,7 @@ mod tests {
         let text = "\t\n";
         let width = measure_text_width(text);
         let expected = 0.0;
-        assert!((width - expected).abs() < 0.001, "Width mismatch for control chars");
+        assert_eq!(compare_floats(width, expected), CmpOrdering::Equal, "Width mismatch for control chars");
     }
 
     #[test]
@@ -771,7 +807,7 @@ mod tests {
         let text = "👋";
         let width = measure_text_width(text);
         let expected = FONT_SIZE;
-        assert!((width - expected).abs() < 0.001, "Width mismatch for emoji");
+        assert_eq!(compare_floats(width, expected), CmpOrdering::Equal, "Width mismatch for emoji");
     }
 
     #[test]
@@ -782,7 +818,7 @@ mod tests {
         let text = "안녕하세요";
         let width = measure_text_width(text);
         let expected = FONT_SIZE * 5.0;
-        assert!((width - expected).abs() < 0.001, "Width mismatch for Korean");
+        assert_eq!(compare_floats(width, expected), CmpOrdering::Equal, "Width mismatch for Korean");
     }
 
     #[test]
@@ -794,17 +830,17 @@ mod tests {
         let text_hiragana = "こんにちは";
         let width_hiragana = measure_text_width(text_hiragana);
         let expected_hiragana = FONT_SIZE * 5.0;
-        assert!((width_hiragana - expected_hiragana).abs() < 0.001, "Width mismatch for Hiragana");
+        assert_eq!(compare_floats(width_hiragana, expected_hiragana), CmpOrdering::Equal, "Width mismatch for Hiragana");
 
         let text_katakana = "カタカナ";
         let width_katakana = measure_text_width(text_katakana);
         let expected_katakana = FONT_SIZE * 4.0;
-        assert!((width_katakana - expected_katakana).abs() < 0.001, "Width mismatch for Katakana");
+        assert_eq!(compare_floats(width_katakana, expected_katakana), CmpOrdering::Equal, "Width mismatch for Katakana");
 
         let text_kanji = "漢字";
         let width_kanji = measure_text_width(text_kanji);
         let expected_kanji = FONT_SIZE * 2.0;
-        assert!((width_kanji - expected_kanji).abs() < 0.001, "Width mismatch for Kanji");
+        assert_eq!(compare_floats(width_kanji, expected_kanji), CmpOrdering::Equal, "Width mismatch for Kanji");
     }
 }
 
