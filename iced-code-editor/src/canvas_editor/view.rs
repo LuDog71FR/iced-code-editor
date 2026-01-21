@@ -49,6 +49,11 @@ impl ImeRequester {
     }
 }
 
+// The ImeRequester widget implements a size of Length::Shrink for both dimensions 
+// but returns a zero-size layout. This creates an invisible widget that only exists 
+// to call shell.request_input_method. Consider documenting this design pattern more 
+// explicitly in the struct-level documentation, as it's a non-standard use of the 
+// Widget trait where the widget serves as a bridge rather than a visual element.
 impl<Message> Widget<Message, iced::Theme, iced::Renderer> for ImeRequester
 where
     iced::Renderer: Renderer,
