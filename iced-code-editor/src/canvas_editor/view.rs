@@ -1,162 +1,19 @@
 //! Iced UI view and rendering logic.
 
 use iced::advanced::input_method;
-use iced::advanced::widget::{Widget, tree};
-use iced::advanced::{Renderer, Shell};
 use iced::widget::canvas::Canvas;
 use iced::widget::{Row, Scrollable, Space, container, scrollable};
 use iced::{
-    Background, Border, Color, Element, Event, Length, Rectangle, Shadow,
+    Background, Border, Color, Element, Length, Rectangle, Shadow,
 };
-use iced::{Size, Vector, mouse, window};
+use iced::Size;
 
 use super::search_dialog;
 use super::wrapping::WrappingCalculator;
 use super::{CodeEditor, GUTTER_WIDTH, LINE_HEIGHT, Message};
+use super::ime_requester::ImeRequester;
 
-#[derive(Debug, Clone)]
-struct ImeRequester {
-    // -------------------------------------------------------------------------
-    // IME requester state fields
-    // -------------------------------------------------------------------------
 
-    // Whether IME is enabled
-    // Logic: true only when the editor has both Iced focus (is_focused) and
-    // internal canvas focus (has_canvas_focus). This maps to the
-    // Enabled/Disabled state of `shell.request_input_method`.
-    enabled: bool,
-
-    // IME caret rectangle
-    // Purpose: tells the OS the exact caret location on screen (x, y, w, h).
-    // The OS uses this to position the candidate window near the caret and
-    // avoid covering it (the "over-the-spot" style).
-    cursor: Rectangle,
-
-    // Current preedit content
-    // Purpose: send current preedit text (e.g. "nihao") back to the Shell.
-    // Although the Shell usually sends it to the View, we keep it here to keep
-    // requests consistent.
-    preedit: Option<input_method::Preedit<String>>,
-}
-
-impl ImeRequester {
-    fn new(
-        enabled: bool,
-        cursor: Rectangle,
-        preedit: Option<input_method::Preedit<String>>,
-    ) -> Self {
-        Self { enabled, cursor, preedit }
-    }
-}
-
-// The ImeRequester widget implements a size of Length::Shrink for both dimensions 
-// but returns a zero-size layout. This creates an invisible widget that only exists 
-// to call shell.request_input_method. Consider documenting this design pattern more 
-// explicitly in the struct-level documentation, as it's a non-standard use of the 
-// Widget trait where the widget serves as a bridge rather than a visual element.
-impl<Message> Widget<Message, iced::Theme, iced::Renderer> for ImeRequester
-where
-    iced::Renderer: Renderer,
-{
-    fn size(&self) -> Size<Length> {
-        Size::new(Length::Shrink, Length::Shrink)
-    }
-
-    fn layout(
-        &mut self,
-        _tree: &mut tree::Tree,
-        _renderer: &iced::Renderer,
-        _limits: &iced::advanced::layout::Limits,
-    ) -> iced::advanced::layout::Node {
-        iced::advanced::layout::Node::new(Size::new(0.0, 0.0))
-    }
-
-    fn draw(
-        &self,
-        _tree: &tree::Tree,
-        _renderer: &mut iced::Renderer,
-        _theme: &iced::Theme,
-        _style: &iced::advanced::renderer::Style,
-        _layout: iced::advanced::layout::Layout<'_>,
-        _cursor: mouse::Cursor,
-        _viewport: &Rectangle,
-    ) {
-    }
-
-    fn tag(&self) -> tree::Tag {
-        tree::Tag::stateless()
-    }
-
-    fn state(&self) -> tree::State {
-        tree::State::None
-    }
-
-    fn update(
-        &mut self,
-        _tree: &mut tree::Tree,
-        event: &Event,
-        _layout: iced::advanced::layout::Layout<'_>,
-        _cursor: mouse::Cursor,
-        _renderer: &iced::Renderer,
-        _clipboard: &mut dyn iced::advanced::Clipboard,
-        shell: &mut Shell<'_, Message>,
-        _viewport: &Rectangle,
-    ) {
-        // Core IME request logic
-        // ---------------------------------------------------------------------
-        // Why request on `RedrawRequested`?
-        // 1. Iced's IME protocol requires explicit IME state each frame or on changes.
-        // 2. `RedrawRequested` starts the render cycle, ensuring the OS gets the
-        //    latest caret position so the candidate window tracks movement.
-        //
-        // Branches:
-        // - enabled = true: editor active and focused. Request `InputMethod::Enabled`
-        //   with the caret rectangle (cursor) and preedit content (preedit).
-        // - enabled = false: editor unfocused. Request `InputMethod::Disabled`
-        //   to close the soft keyboard or reset IME state.
-        // ---------------------------------------------------------------------
-        if let Event::Window(window::Event::RedrawRequested(_)) = event {
-            if self.enabled {
-                let ime = input_method::InputMethod::Enabled {
-                    cursor: self.cursor,
-                    purpose: input_method::Purpose::Normal,
-                    preedit: self
-                        .preedit
-                        .as_ref()
-                        .map(input_method::Preedit::as_ref),
-                };
-                shell.request_input_method(&ime);
-            } else {
-                let disabled: input_method::InputMethod<&str> =
-                    input_method::InputMethod::Disabled;
-                shell.request_input_method(&disabled);
-            }
-        }
-    }
-
-    fn mouse_interaction(
-        &self,
-        _tree: &tree::Tree,
-        _layout: iced::advanced::layout::Layout<'_>,
-        _cursor: mouse::Cursor,
-        _viewport: &Rectangle,
-        _renderer: &iced::Renderer,
-    ) -> mouse::Interaction {
-        mouse::Interaction::None
-    }
-
-    fn overlay<'a>(
-        &'a mut self,
-        _tree: &'a mut tree::Tree,
-        _layout: iced::advanced::layout::Layout<'a>,
-        _renderer: &iced::Renderer,
-        _viewport: &Rectangle,
-        _translation: Vector,
-    ) -> Option<iced::overlay::Element<'a, Message, iced::Theme, iced::Renderer>>
-    {
-        None
-    }
-}
 
 impl CodeEditor {
     /// Creates the view element with scrollable wrapper.

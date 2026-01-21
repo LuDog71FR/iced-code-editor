@@ -32,6 +32,7 @@ mod search_dialog;
 mod selection;
 mod update;
 mod view;
+pub mod ime_requester;
 mod wrapping;
 
 /// Canvas-based text editor constants
