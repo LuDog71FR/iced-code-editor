@@ -712,3 +712,66 @@ impl CodeEditor {
         self.ime_preedit = None;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_measure_text_width_ascii() {
+        // "Hello" (5 chars)
+        // width = 5 * CHAR_WIDTH
+        let text = "Hello";
+        let width = measure_text_width(text);
+        let expected = CHAR_WIDTH * 5.0;
+        assert!((width - expected).abs() < 0.001, "Width mismatch for ASCII");
+    }
+
+    #[test]
+    fn test_measure_text_width_cjk() {
+        // "你好" (2 chars)
+        // width = 2 * FONT_SIZE
+        let text = "你好";
+        let width = measure_text_width(text);
+        let expected = FONT_SIZE * 2.0;
+        assert!((width - expected).abs() < 0.001, "Width mismatch for CJK");
+    }
+
+    #[test]
+    fn test_measure_text_width_mixed() {
+        // "Hi你好"
+        // "Hi" (2 chars) -> 2 * CHAR_WIDTH
+        // "你好" (2 chars) -> 2 * FONT_SIZE
+        let text = "Hi你好";
+        let width = measure_text_width(text);
+        let expected = CHAR_WIDTH * 2.0 + FONT_SIZE * 2.0;
+        assert!((width - expected).abs() < 0.001, "Width mismatch for mixed content");
+    }
+
+    #[test]
+    fn test_measure_text_width_control_chars() {
+        // "\t\n" (2 chars)
+        // width = 0.0 (control chars have 0 width in this implementation)
+        let text = "\t\n";
+        let width = measure_text_width(text);
+        let expected = 0.0;
+        assert!((width - expected).abs() < 0.001, "Width mismatch for control chars");
+    }
+
+    #[test]
+    fn test_measure_text_width_empty() {
+        let text = "";
+        let width = measure_text_width(text);
+        assert_eq!(width, 0.0, "Width should be 0 for empty string");
+    }
+
+    #[test]
+    fn test_measure_text_width_emoji() {
+        // "👋" (1 char, width > 1) -> FONT_SIZE
+        let text = "👋";
+        let width = measure_text_width(text);
+        let expected = FONT_SIZE;
+        assert!((width - expected).abs() < 0.001, "Width mismatch for emoji");
+    }
+}
+
