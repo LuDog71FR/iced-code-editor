@@ -34,12 +34,14 @@ fn calculate_segment_geometry(
     segment_start_col: usize,
     segment_end_col: usize,
     base_offset: f32,
+    font_size: f32,
+    char_width: f32,
 ) -> (f32, f32) {
     // Calculate prefix width relative to visual line start
     let prefix_len = segment_start_col.saturating_sub(visual_start_col);
     let prefix_text: String =
         line_content.chars().skip(visual_start_col).take(prefix_len).collect();
-    let prefix_width = measure_text_width(&prefix_text);
+    let prefix_width = measure_text_width(&prefix_text, font_size, char_width);
 
     // Calculate segment width
     let segment_len = segment_end_col.saturating_sub(segment_start_col);
@@ -48,14 +50,14 @@ fn calculate_segment_geometry(
         .skip(segment_start_col)
         .take(segment_len)
         .collect();
-    let segment_width = measure_text_width(&segment_text);
+    let segment_width = measure_text_width(&segment_text, font_size, char_width);
 
     (base_offset + prefix_width, segment_width)
 }
 
 use super::wrapping::WrappingCalculator;
 use super::{
-    ArrowDirection, CodeEditor, FONT_SIZE, LINE_HEIGHT, Message,
+    ArrowDirection, CodeEditor, Message,
     measure_text_width,
 };
 use iced::widget::canvas::Action;
@@ -74,7 +76,7 @@ impl canvas::Program<Message> for CodeEditor {
         let geometry = self.cache.draw(renderer, bounds.size(), |frame| {
             // Initialize wrapping calculator
             let wrapping_calc =
-                WrappingCalculator::new(self.wrap_enabled, self.wrap_column);
+                WrappingCalculator::new(self.wrap_enabled, self.wrap_column, self.font_size, self.char_width);
             let visual_lines = wrapping_calc.calculate_visual_lines(
                 &self.buffer,
                 bounds.width,
@@ -89,9 +91,9 @@ impl canvas::Program<Message> for CodeEditor {
                 bounds.height
             };
             let first_visible_line =
-                (self.viewport_scroll / LINE_HEIGHT).floor() as usize;
+                (self.viewport_scroll / self.line_height).floor() as usize;
             let visible_lines_count =
-                (effective_viewport_height / LINE_HEIGHT).ceil() as usize + 2;
+                (effective_viewport_height / self.line_height).ceil() as usize + 2;
             let last_visible_line = (first_visible_line + visible_lines_count)
                 .min(visual_lines.len());
 
@@ -122,7 +124,7 @@ impl canvas::Program<Message> for CodeEditor {
                 .skip(first_visible_line)
                 .take(last_visible_line - first_visible_line)
             {
-                let y = idx as f32 * LINE_HEIGHT;
+                let y = idx as f32 * self.line_height;
 
                 // Note: Gutter background is handled by a container in view.rs
                 // to ensure proper clipping when the pane is resized.
@@ -133,13 +135,13 @@ impl canvas::Program<Message> for CodeEditor {
                         let line_num = visual_line.logical_line + 1;
                         let line_num_text = format!("{}", line_num);
                         // Calculate actual text width and center in gutter
-                        let text_width = measure_text_width(&line_num_text);
+                        let text_width = measure_text_width(&line_num_text, self.font_size, self.char_width);
                         let x_pos = (self.gutter_width() - text_width) / 2.0;
                         frame.fill_text(canvas::Text {
                             content: line_num_text,
                             position: Point::new(x_pos, y + 2.0),
                             color: self.style.line_number_color,
-                            size: FONT_SIZE.into(),
+                            size: self.font_size.into(),
                             font: self.font,
                             ..canvas::Text::default()
                         });
@@ -152,7 +154,7 @@ impl canvas::Program<Message> for CodeEditor {
                                 y + 2.0,
                             ),
                             color: self.style.line_number_color,
-                            size: FONT_SIZE.into(),
+                            size: self.font_size.into(),
                             font: self.font,
                             ..canvas::Text::default()
                         });
@@ -165,7 +167,7 @@ impl canvas::Program<Message> for CodeEditor {
                         Point::new(self.gutter_width(), y),
                         Size::new(
                             bounds.width - self.gutter_width(),
-                            LINE_HEIGHT,
+                            self.line_height,
                         ),
                         self.style.current_line_highlight,
                     );
@@ -241,12 +243,12 @@ impl canvas::Program<Message> for CodeEditor {
                                 content: segment_text.to_string(),
                                 position: Point::new(x_offset, y + 2.0),
                                 color,
-                                size: FONT_SIZE.into(),
+                                size: self.font_size.into(),
                                 font: self.font,
                                 ..canvas::Text::default()
                             });
 
-                            x_offset += measure_text_width(segment_text);
+                            x_offset += measure_text_width(segment_text, self.font_size, self.char_width);
                         }
 
                         char_pos = text_end;
@@ -260,7 +262,7 @@ impl canvas::Program<Message> for CodeEditor {
                             y + 2.0,
                         ),
                         color: self.style.text_color,
-                        size: FONT_SIZE.into(),
+                        size: self.font_size.into(),
                         font: self.font,
                         ..canvas::Text::default()
                     });
@@ -304,7 +306,7 @@ impl canvas::Program<Message> for CodeEditor {
                     {
                         if start_v == end_v {
                             // Match within same visual line
-                            let y = start_v as f32 * LINE_HEIGHT;
+                            let y = start_v as f32 * self.line_height;
                             let vl = &visual_lines[start_v];
                             let line_content =
                                 self.buffer.line(vl.logical_line);
@@ -317,12 +319,14 @@ impl canvas::Program<Message> for CodeEditor {
                                     search_match.col,
                                     search_match.col + query_len,
                                     self.gutter_width() + 5.0,
+                                    self.font_size,
+                                    self.char_width,
                                 );
                             let x_end = x_start + match_width;
 
                             frame.fill_rectangle(
                                 Point::new(x_start, y + 2.0),
-                                Size::new(x_end - x_start, LINE_HEIGHT - 4.0),
+                                Size::new(x_end - x_start, self.line_height - 4.0),
                                 highlight_color,
                             );
                         } else {
@@ -333,7 +337,7 @@ impl canvas::Program<Message> for CodeEditor {
                                 .skip(start_v)
                                 .take(end_v - start_v + 1)
                             {
-                                let y = v_idx as f32 * LINE_HEIGHT;
+                                let y = v_idx as f32 * self.line_height;
 
                                 let match_start_col = search_match.col;
                                 let match_end_col =
@@ -360,6 +364,8 @@ impl canvas::Program<Message> for CodeEditor {
                                         sel_start_col,
                                         sel_end_col,
                                         self.gutter_width() + 5.0,
+                                        self.font_size,
+                                        self.char_width,
                                     );
                                 let x_end = x_start + sel_width;
 
@@ -367,7 +373,7 @@ impl canvas::Program<Message> for CodeEditor {
                                     Point::new(x_start, y + 2.0),
                                     Size::new(
                                         x_end - x_start,
-                                        LINE_HEIGHT - 4.0,
+                                        self.line_height - 4.0,
                                     ),
                                     highlight_color,
                                 );
@@ -401,7 +407,7 @@ impl canvas::Program<Message> for CodeEditor {
                     {
                         if start_v == end_v {
                             // Selection within same visual line
-                            let y = start_v as f32 * LINE_HEIGHT;
+                            let y = start_v as f32 * self.line_height;
                             let vl = &visual_lines[start_v];
                             let line_content =
                                 self.buffer.line(vl.logical_line);
@@ -413,12 +419,14 @@ impl canvas::Program<Message> for CodeEditor {
                                     start.1,
                                     end.1,
                                     self.gutter_width() + 5.0,
+                                    self.font_size,
+                                    self.char_width,
                                 );
                             let x_end = x_start + sel_width;
 
                             frame.fill_rectangle(
                                 Point::new(x_start, y + 2.0),
-                                Size::new(x_end - x_start, LINE_HEIGHT - 4.0),
+                                Size::new(x_end - x_start, self.line_height - 4.0),
                                 selection_color,
                             );
                         } else {
@@ -429,7 +437,7 @@ impl canvas::Program<Message> for CodeEditor {
                                 .skip(start_v)
                                 .take(end_v - start_v + 1)
                             {
-                                let y = v_idx as f32 * LINE_HEIGHT;
+                                let y = v_idx as f32 * self.line_height;
 
                                 let sel_start_col = if v_idx == start_v {
                                     start.1
@@ -452,17 +460,19 @@ impl canvas::Program<Message> for CodeEditor {
                                         sel_start_col,
                                         sel_end_col,
                                         self.gutter_width() + 5.0,
+                                        self.font_size,
+                                        self.char_width,
                                     );
                                 let x_end = x_start + sel_width;
 
                                 frame.fill_rectangle(
-                                    Point::new(x_start, y + 2.0),
-                                    Size::new(
-                                        x_end - x_start,
-                                        LINE_HEIGHT - 4.0,
-                                    ),
-                                    selection_color,
-                                );
+                                Point::new(x_start, y + 2.0),
+                                Size::new(
+                                    x_end - x_start,
+                                    self.line_height - 4.0,
+                                ),
+                                selection_color,
+                            );
                             }
                         }
                     }
@@ -488,7 +498,7 @@ impl canvas::Program<Message> for CodeEditor {
                             .skip(start_v)
                             .take(end_v - start_v + 1)
                         {
-                            let y = v_idx as f32 * LINE_HEIGHT;
+                            let y = v_idx as f32 * self.line_height;
 
                             let sel_start_col = if vl.logical_line == start.0
                                 && v_idx == start_v
@@ -515,12 +525,14 @@ impl canvas::Program<Message> for CodeEditor {
                                     sel_start_col,
                                     sel_end_col,
                                     self.gutter_width() + 5.0,
+                                    self.font_size,
+                                    self.char_width,
                                 );
                             let x_end = x_start + sel_width;
 
                             frame.fill_rectangle(
                                 Point::new(x_start, y + 2.0),
-                                Size::new(x_end - x_start, LINE_HEIGHT - 4.0),
+                                Size::new(x_end - x_start, self.line_height - 4.0),
                                 selection_color,
                             );
                         }
@@ -570,18 +582,20 @@ impl canvas::Program<Message> for CodeEditor {
                         self.cursor.1,
                         self.cursor.1,
                         self.gutter_width() + 5.0,
+                        self.font_size,
+                        self.char_width,
                     );
-                    let cursor_y = cursor_visual as f32 * LINE_HEIGHT;
+                    let cursor_y = cursor_visual as f32 * self.line_height;
 
                     if let Some(preedit) = self.ime_preedit.as_ref() {
                         let preedit_width =
-                            measure_text_width(&preedit.content);
+                            measure_text_width(&preedit.content, self.font_size, self.char_width);
 
                         // 1. Draw preedit background (light translucent)
                         // This indicates the text is not committed yet
                         frame.fill_rectangle(
                             Point::new(cursor_x, cursor_y + 2.0),
-                            Size::new(preedit_width, LINE_HEIGHT - 4.0),
+                            Size::new(preedit_width, self.line_height - 4.0),
                             Color { r: 1.0, g: 1.0, b: 1.0, a: 0.08 },
                         );
 
@@ -598,12 +612,12 @@ impl canvas::Program<Message> for CodeEditor {
                             let selected_text = &preedit.content[start..end];
 
                             let selection_x =
-                                cursor_x + measure_text_width(selected_prefix);
-                            let selection_w = measure_text_width(selected_text);
+                                cursor_x + measure_text_width(selected_prefix, self.font_size, self.char_width);
+                            let selection_w = measure_text_width(selected_text, self.font_size, self.char_width);
 
                             frame.fill_rectangle(
                                 Point::new(selection_x, cursor_y + 2.0),
-                                Size::new(selection_w, LINE_HEIGHT - 4.0),
+                                Size::new(selection_w, self.line_height - 4.0),
                                 Color { r: 0.3, g: 0.5, b: 0.8, a: 0.3 },
                             );
                         }
@@ -613,14 +627,14 @@ impl canvas::Program<Message> for CodeEditor {
                             content: preedit.content.clone(),
                             position: Point::new(cursor_x, cursor_y + 2.0),
                             color: self.style.text_color,
-                            size: FONT_SIZE.into(),
+                            size: self.font_size.into(),
                             font: self.font,
                             ..canvas::Text::default()
                         });
 
                         // 4. Draw bottom underline (IME state indicator)
                         frame.fill_rectangle(
-                            Point::new(cursor_x, cursor_y + LINE_HEIGHT - 3.0),
+                            Point::new(cursor_x, cursor_y + self.line_height - 3.0),
                             Size::new(preedit_width, 1.0),
                             self.style.text_color,
                         );
@@ -638,11 +652,11 @@ impl canvas::Program<Message> for CodeEditor {
                                 let caret_prefix =
                                     &preedit.content[..caret_end];
                                 let caret_x =
-                                    cursor_x + measure_text_width(caret_prefix);
+                                    cursor_x + measure_text_width(caret_prefix, self.font_size, self.char_width);
 
                                 frame.fill_rectangle(
                                     Point::new(caret_x, cursor_y + 2.0),
-                                    Size::new(2.0, LINE_HEIGHT - 4.0),
+                                    Size::new(2.0, self.line_height - 4.0),
                                     self.style.text_color,
                                 );
                             }
@@ -683,13 +697,15 @@ impl canvas::Program<Message> for CodeEditor {
                         self.cursor.1,
                         self.cursor.1,
                         self.gutter_width() + 5.0,
+                        self.font_size,
+                        self.char_width,
                     );
-                    let cursor_y = cursor_visual as f32 * LINE_HEIGHT;
+                    let cursor_y = cursor_visual as f32 * self.line_height;
 
                     // Draw standard caret (2px vertical bar)
                     frame.fill_rectangle(
                         Point::new(cursor_x, cursor_y + 2.0),
-                        Size::new(2.0, LINE_HEIGHT - 4.0),
+                        Size::new(2.0, self.line_height - 4.0),
                         self.style.text_color,
                     );
                 }
@@ -1061,7 +1077,7 @@ mod tests {
         // width("Hello ") = 6 * CHAR_WIDTH
         // width("World") = 5 * CHAR_WIDTH
         let content = "Hello World";
-        let (x, w) = calculate_segment_geometry(content, 0, 6, 11, 0.0);
+        let (x, w) = calculate_segment_geometry(content, 0, 6, 11, 0.0, FONT_SIZE, CHAR_WIDTH);
         
         let expected_x = CHAR_WIDTH * 6.0;
         let expected_w = CHAR_WIDTH * 5.0;
@@ -1078,7 +1094,7 @@ mod tests {
         // width("你好") = 2 * FONT_SIZE
         // width("世界") = 2 * FONT_SIZE
         let content = "你好世界";
-        let (x, w) = calculate_segment_geometry(content, 0, 2, 4, 10.0);
+        let (x, w) = calculate_segment_geometry(content, 0, 2, 4, 10.0, FONT_SIZE, CHAR_WIDTH);
         
         let expected_x = 10.0 + FONT_SIZE * 2.0;
         let expected_w = FONT_SIZE * 2.0;
@@ -1095,7 +1111,7 @@ mod tests {
         // width("Hi") = 2 * CHAR_WIDTH
         // width("你好") = 2 * FONT_SIZE
         let content = "Hi你好";
-        let (x, w) = calculate_segment_geometry(content, 0, 2, 4, 0.0);
+        let (x, w) = calculate_segment_geometry(content, 0, 2, 4, 0.0, FONT_SIZE, CHAR_WIDTH);
         
         let expected_x = CHAR_WIDTH * 2.0;
         let expected_w = FONT_SIZE * 2.0;
@@ -1107,7 +1123,7 @@ mod tests {
     #[test]
     fn test_calculate_segment_geometry_empty_range() {
         let content = "Hello";
-        let (x, w) = calculate_segment_geometry(content, 0, 0, 0, 0.0);
+        let (x, w) = calculate_segment_geometry(content, 0, 0, 0, 0.0, FONT_SIZE, CHAR_WIDTH);
         assert_eq!(x, 0.0);
         assert_eq!(w, 0.0);
     }
@@ -1121,7 +1137,7 @@ mod tests {
         // prefix width: 1 * CHAR_WIDTH
         // segment width: 2 * CHAR_WIDTH
         let content = "0123456789";
-        let (x, w) = calculate_segment_geometry(content, 2, 3, 5, 5.0);
+        let (x, w) = calculate_segment_geometry(content, 2, 3, 5, 5.0, FONT_SIZE, CHAR_WIDTH);
         
         let expected_x = 5.0 + CHAR_WIDTH * 1.0;
         let expected_w = CHAR_WIDTH * 2.0;
@@ -1138,7 +1154,7 @@ mod tests {
         // Prefix should consume whole string ("Hello") and stop.
         // Segment should be empty.
         let content = "Hello";
-        let (x, w) = calculate_segment_geometry(content, 0, 10, 15, 0.0);
+        let (x, w) = calculate_segment_geometry(content, 0, 10, 15, 0.0, FONT_SIZE, CHAR_WIDTH);
         
         let expected_x = CHAR_WIDTH * 5.0; // Width of "Hello"
         let expected_w = 0.0;
@@ -1156,7 +1172,7 @@ mod tests {
         // Indices in chars: 'A' (0), '👋' (1), '\t' (2), 'B' (3)
         
         // Segment covering Emoji
-        let (x, w) = calculate_segment_geometry(content, 0, 1, 2, 0.0);
+        let (x, w) = calculate_segment_geometry(content, 0, 1, 2, 0.0, FONT_SIZE, CHAR_WIDTH);
         let expected_x_emoji = CHAR_WIDTH; // 'A'
         let expected_w_emoji = FONT_SIZE;  // '👋'
         
@@ -1164,7 +1180,7 @@ mod tests {
         assert_eq!(compare_floats(w, expected_w_emoji), Ordering::Equal, "Width for emoji");
         
         // Segment covering Tab
-        let (x_tab, w_tab) = calculate_segment_geometry(content, 0, 2, 3, 0.0);
+        let (x_tab, w_tab) = calculate_segment_geometry(content, 0, 2, 3, 0.0, FONT_SIZE, CHAR_WIDTH);
         let expected_x_tab = CHAR_WIDTH + FONT_SIZE; // 'A' + '👋'
         let expected_w_tab = 0.0; // Tab width is 0 in this implementation
         
@@ -1177,7 +1193,7 @@ mod tests {
         // Start 5, End 3
         // Should result in empty segment at start 5
         let content = "0123456789";
-        let (x, w) = calculate_segment_geometry(content, 0, 5, 3, 0.0);
+        let (x, w) = calculate_segment_geometry(content, 0, 5, 3, 0.0, FONT_SIZE, CHAR_WIDTH);
         
         let expected_x = CHAR_WIDTH * 5.0;
         let expected_w = 0.0;

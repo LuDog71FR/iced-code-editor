@@ -49,13 +49,13 @@ pub(crate) const CURSOR_BLINK_INTERVAL: std::time::Duration =
 /// - Wide characters (e.g. Chinese) use FONT_SIZE.
 /// - Narrow characters (e.g. Latin) use CHAR_WIDTH.
 /// - Control characters have width 0.
-pub(crate) fn measure_text_width(text: &str) -> f32 {
+pub(crate) fn measure_text_width(text: &str, font_size: f32, char_width: f32) -> f32 {
     text.chars()
         .map(|c| {
             // Check character width: 0 for control, 1 for half-width, 2 for full-width
             match c.width() {
-                Some(w) if w > 1 => FONT_SIZE,
-                Some(_) => CHAR_WIDTH,
+                Some(w) if w > 1 => font_size,
+                Some(_) => char_width,
                 None => 0.0,
             }
         })
@@ -144,6 +144,9 @@ pub struct CodeEditor {
     /// The font used for rendering text
     pub(crate) font: iced::Font,
     pub(crate) ime_preedit: Option<ImePreedit>,
+    pub(crate) font_size: f32,
+    pub(crate) line_height: f32,
+    pub(crate) char_width: f32,
 }
 
 /// Messages emitted by the code editor
@@ -221,9 +224,13 @@ pub enum Message {
     CanvasFocusGained,
     /// Canvas lost focus (external widget interaction)
     CanvasFocusLost,
+    /// IME input method opened
     ImeOpened,
+    /// IME pre-edit update (content, selection range)
     ImePreedit(String, Option<Range<usize>>),
+    /// IME commit text
     ImeCommit(String),
+    /// IME input method closed
     ImeClosed,
 }
 
@@ -285,6 +292,9 @@ impl CodeEditor {
             show_cursor: false,
             font: iced::Font::MONOSPACE,
             ime_preedit: None,
+            font_size: FONT_SIZE,
+            line_height: LINE_HEIGHT,
+            char_width: CHAR_WIDTH,
         }
     }
 
@@ -295,6 +305,63 @@ impl CodeEditor {
     /// * `font` - The iced font to set for the editor
     pub fn set_font(&mut self, font: iced::Font) {
         self.font = font;
+    }
+
+    /// Sets the font size used by the editor
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - The font size in pixels
+    pub fn set_font_size(&mut self, size: f32) {
+        self.font_size = size;
+        self.cache.clear();
+    }
+
+    /// Returns the current font size.
+    ///
+    /// # Returns
+    ///
+    /// The font size in pixels
+    pub fn font_size(&self) -> f32 {
+        self.font_size
+    }
+
+    /// Sets the line height used by the editor
+    ///
+    /// # Arguments
+    ///
+    /// * `height` - The line height in pixels
+    pub fn set_line_height(&mut self, height: f32) {
+        self.line_height = height;
+        self.cache.clear();
+    }
+
+    /// Returns the current line height.
+    ///
+    /// # Returns
+    ///
+    /// The line height in pixels
+    pub fn line_height(&self) -> f32 {
+        self.line_height
+    }
+
+    /// Sets the character width used by the editor
+    ///
+    /// # Arguments
+    ///
+    /// * `width` - The character width in pixels
+    pub fn set_char_width(&mut self, width: f32) {
+        self.char_width = width;
+        self.cache.clear();
+    }
+
+    /// Returns the current character width.
+    ///
+    /// # Returns
+    ///
+    /// The character width in pixels
+    pub fn char_width(&self) -> f32 {
+        self.char_width
     }
 
     /// Returns the current text content as a string.
@@ -755,31 +822,30 @@ mod tests {
 
     #[test]
     fn test_measure_text_width_ascii() {
-        // "Hello" (5 chars)
-        // width = 5 * CHAR_WIDTH
-        let text = "Hello";
-        let width = measure_text_width(text);
-        let expected = CHAR_WIDTH * 5.0;
+        // "abc" (3 chars) -> 3 * CHAR_WIDTH
+        let text = "abc";
+        let width = measure_text_width(text, FONT_SIZE, CHAR_WIDTH);
+        let expected = CHAR_WIDTH * 3.0;
         assert_eq!(compare_floats(width, expected), CmpOrdering::Equal, "Width mismatch for ASCII");
     }
 
     #[test]
     fn test_measure_text_width_cjk() {
-        // "你好" (2 chars)
+        // "你好" (2 chars) -> 2 * FONT_SIZE
+        // Chinese characters are typically full-width.
         // width = 2 * FONT_SIZE
         let text = "你好";
-        let width = measure_text_width(text);
+        let width = measure_text_width(text, FONT_SIZE, CHAR_WIDTH);
         let expected = FONT_SIZE * 2.0;
         assert_eq!(compare_floats(width, expected), CmpOrdering::Equal, "Width mismatch for CJK");
     }
 
     #[test]
     fn test_measure_text_width_mixed() {
-        // "Hi你好"
         // "Hi" (2 chars) -> 2 * CHAR_WIDTH
         // "你好" (2 chars) -> 2 * FONT_SIZE
         let text = "Hi你好";
-        let width = measure_text_width(text);
+        let width = measure_text_width(text, FONT_SIZE, CHAR_WIDTH);
         let expected = CHAR_WIDTH * 2.0 + FONT_SIZE * 2.0;
         assert_eq!(compare_floats(width, expected), CmpOrdering::Equal, "Width mismatch for mixed content");
     }
@@ -789,7 +855,7 @@ mod tests {
         // "\t\n" (2 chars)
         // width = 0.0 (control chars have 0 width in this implementation)
         let text = "\t\n";
-        let width = measure_text_width(text);
+        let width = measure_text_width(text, FONT_SIZE, CHAR_WIDTH);
         let expected = 0.0;
         assert_eq!(compare_floats(width, expected), CmpOrdering::Equal, "Width mismatch for control chars");
     }
@@ -797,7 +863,7 @@ mod tests {
     #[test]
     fn test_measure_text_width_empty() {
         let text = "";
-        let width = measure_text_width(text);
+        let width = measure_text_width(text, FONT_SIZE, CHAR_WIDTH);
         assert_eq!(width, 0.0, "Width should be 0 for empty string");
     }
 
@@ -805,7 +871,7 @@ mod tests {
     fn test_measure_text_width_emoji() {
         // "👋" (1 char, width > 1) -> FONT_SIZE
         let text = "👋";
-        let width = measure_text_width(text);
+        let width = measure_text_width(text, FONT_SIZE, CHAR_WIDTH);
         let expected = FONT_SIZE;
         assert_eq!(compare_floats(width, expected), CmpOrdering::Equal, "Width mismatch for emoji");
     }
@@ -816,7 +882,7 @@ mod tests {
         // Korean characters are typically full-width.
         // width = 5 * FONT_SIZE
         let text = "안녕하세요";
-        let width = measure_text_width(text);
+        let width = measure_text_width(text, FONT_SIZE, CHAR_WIDTH);
         let expected = FONT_SIZE * 5.0;
         assert_eq!(compare_floats(width, expected), CmpOrdering::Equal, "Width mismatch for Korean");
     }
@@ -828,17 +894,17 @@ mod tests {
         // "漢字" (Kanji, 2 chars) -> 2 * FONT_SIZE
         
         let text_hiragana = "こんにちは";
-        let width_hiragana = measure_text_width(text_hiragana);
+        let width_hiragana = measure_text_width(text_hiragana, FONT_SIZE, CHAR_WIDTH);
         let expected_hiragana = FONT_SIZE * 5.0;
         assert_eq!(compare_floats(width_hiragana, expected_hiragana), CmpOrdering::Equal, "Width mismatch for Hiragana");
 
         let text_katakana = "カタカナ";
-        let width_katakana = measure_text_width(text_katakana);
+        let width_katakana = measure_text_width(text_katakana, FONT_SIZE, CHAR_WIDTH);
         let expected_katakana = FONT_SIZE * 4.0;
         assert_eq!(compare_floats(width_katakana, expected_katakana), CmpOrdering::Equal, "Width mismatch for Katakana");
 
         let text_kanji = "漢字";
-        let width_kanji = measure_text_width(text_kanji);
+        let width_kanji = measure_text_width(text_kanji, FONT_SIZE, CHAR_WIDTH);
         let expected_kanji = FONT_SIZE * 2.0;
         assert_eq!(compare_floats(width_kanji, expected_kanji), CmpOrdering::Equal, "Width mismatch for Kanji");
     }

@@ -7,7 +7,7 @@ use unicode_width::UnicodeWidthChar;
 
 use super::wrapping::WrappingCalculator;
 use super::{
-    ArrowDirection, CHAR_WIDTH, CodeEditor, FONT_SIZE, LINE_HEIGHT, Message,
+    ArrowDirection, CodeEditor, Message,
 };
 
 impl CodeEditor {
@@ -21,6 +21,8 @@ impl CodeEditor {
                 let wrapping_calc = WrappingCalculator::new(
                     self.wrap_enabled,
                     self.wrap_column,
+                    self.font_size,
+                    self.char_width,
                 );
                 let visual_lines = wrapping_calc.calculate_visual_lines(
                     &self.buffer,
@@ -128,11 +130,11 @@ impl CodeEditor {
         }
 
         // Calculate visual line number - point.y is already in canvas coordinates
-        let visual_line_idx = (point.y / LINE_HEIGHT) as usize;
+        let visual_line_idx = (point.y / self.line_height) as usize;
 
         // Use wrapping calculator to find logical position
         let wrapping_calc =
-            WrappingCalculator::new(self.wrap_enabled, self.wrap_column);
+            WrappingCalculator::new(self.wrap_enabled, self.wrap_column, self.font_size, self.char_width);
         let visual_lines = wrapping_calc.calculate_visual_lines(
             &self.buffer,
             self.viewport_width,
@@ -164,8 +166,8 @@ impl CodeEditor {
 
         for c in segment_text.chars() {
             let char_width = match c.width() {
-                Some(w) if w > 1 => FONT_SIZE,
-                Some(_) => CHAR_WIDTH,
+                Some(w) if w > 1 => self.font_size,
+                Some(_) => self.char_width,
                 None => 0.0,
             };
 
@@ -193,8 +195,12 @@ impl CodeEditor {
     /// Returns a scroll command to make the cursor visible.
     pub(crate) fn scroll_to_cursor(&self) -> Task<Message> {
         // Use wrapping calculator to find visual line
-        let wrapping_calc =
-            WrappingCalculator::new(self.wrap_enabled, self.wrap_column);
+        let wrapping_calc = WrappingCalculator::new(
+            self.wrap_enabled,
+            self.wrap_column,
+            self.font_size,
+            self.char_width,
+        );
         let visual_lines = wrapping_calc.calculate_visual_lines(
             &self.buffer,
             self.viewport_width,
@@ -208,26 +214,26 @@ impl CodeEditor {
         );
 
         let cursor_y = if let Some(visual_idx) = cursor_visual {
-            visual_idx as f32 * LINE_HEIGHT
+            visual_idx as f32 * self.line_height
         } else {
             // Fallback to logical line if visual not found
-            self.cursor.0 as f32 * LINE_HEIGHT
+            self.cursor.0 as f32 * self.line_height
         };
 
         let viewport_top = self.viewport_scroll;
         let viewport_bottom = self.viewport_scroll + self.viewport_height;
 
         // Add margins to avoid cursor being exactly at edge
-        let top_margin = LINE_HEIGHT * 2.0;
-        let bottom_margin = LINE_HEIGHT * 2.0;
+        let top_margin = self.line_height * 2.0;
+        let bottom_margin = self.line_height * 2.0;
 
         // Calculate new scroll position if cursor is outside visible area
         let new_scroll = if cursor_y < viewport_top + top_margin {
             // Cursor is above viewport - scroll up
             (cursor_y - top_margin).max(0.0)
-        } else if cursor_y + LINE_HEIGHT > viewport_bottom - bottom_margin {
+        } else if cursor_y + self.line_height > viewport_bottom - bottom_margin {
             // Cursor is below viewport - scroll down
-            cursor_y + LINE_HEIGHT + bottom_margin - self.viewport_height
+            cursor_y + self.line_height + bottom_margin - self.viewport_height
         } else {
             // Cursor is visible - no scroll needed
             return Task::none();
@@ -241,7 +247,7 @@ impl CodeEditor {
 
     /// Moves cursor up by one page (approximately viewport height).
     pub(crate) fn page_up(&mut self) {
-        let lines_per_page = (self.viewport_height / LINE_HEIGHT) as usize;
+        let lines_per_page = (self.viewport_height / self.line_height) as usize;
 
         let current_line = self.cursor.0;
         let new_line = current_line.saturating_sub(lines_per_page);
@@ -253,7 +259,7 @@ impl CodeEditor {
 
     /// Moves cursor down by one page (approximately viewport height).
     pub(crate) fn page_down(&mut self) {
-        let lines_per_page = (self.viewport_height / LINE_HEIGHT) as usize;
+        let lines_per_page = (self.viewport_height / self.line_height) as usize;
 
         let current_line = self.cursor.0;
         let max_line = self.buffer.line_count().saturating_sub(1);
