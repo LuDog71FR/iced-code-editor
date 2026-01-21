@@ -1,4 +1,4 @@
 /target
 AGENTS.md
 /docs/SANDBOX.md
-*.log
+.DS_Store

@@ -17,25 +17,13 @@ use iced::widget::{
 use iced::{Color, Element, Length, Subscription, Task, Theme, window};
 use iced_code_editor::Message as EditorMessage;
 use iced_code_editor::{CodeEditor, Language, theme};
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::PathBuf;
-
-mod fonts;
 
 /// Main entry point for the demo application.
 fn main() -> iced::Result {
-    let settings = iced::Settings {
-        // Uncomment to use JetBrains Mono font
-        // default_font: iced::Font::with_name("JetBrains Mono"),
-        fonts: fonts::load_all(),
-        ..Default::default()
-    };
-
     iced::application(DemoApp::new, DemoApp::update, DemoApp::view)
         .subscription(DemoApp::subscription)
         .theme(DemoApp::theme)
-        .settings(settings)
         .run()
 }
 
@@ -120,7 +108,6 @@ impl Template {
             Template::HelloWorld => {
                 r#"-- Hello World in Lua
 print("Hello, World!")
-print("Hello世界, World你好!")
 "#
             }
             Template::Fibonacci => {
@@ -190,8 +177,6 @@ struct DemoApp {
     panes: pane_grid::State<PaneType>,
     /// Log messages for output pane
     log_messages: Vec<String>,
-    /// Log file path for persistent logging
-    log_file: Option<PathBuf>,
     /// Search/replace enabled flag for left editor
     search_replace_enabled_left: bool,
     /// Search/replace enabled flag for right editor
@@ -279,10 +264,8 @@ greet("World")
 
         (
             Self {
-                editor_left: CodeEditor::new(default_content, "lua")
-                    .font(iced::Font::with_name("JetBrains Mono")),
-                editor_right: CodeEditor::new(default_content, "lua")
-                    .font(iced::Font::with_name("JetBrains Mono")),
+                editor_left: CodeEditor::new(default_content, "lua"),
+                editor_right: CodeEditor::new(default_content, "lua"),
                 current_file_left: None,
                 current_file_right: None,
                 error_message: None,
@@ -290,7 +273,6 @@ greet("World")
                 current_language: Language::English,
                 panes,
                 log_messages,
-                log_file: Some(PathBuf::from("demo-app.log")),
                 search_replace_enabled_left: true,
                 search_replace_enabled_right: true,
                 line_numbers_enabled_left: true,
@@ -304,14 +286,7 @@ greet("World")
 
     /// Adds a log message.
     fn log(&mut self, level: &str, message: &str) {
-        let line = format!("[{}] {}", level, message);
-        self.log_messages.push(line.clone());
-        if let Some(path) = &self.log_file
-            && let Ok(mut file) =
-                OpenOptions::new().create(true).append(true).open(path)
-        {
-            let _ = writeln!(file, "{}", line);
-        }
+        self.log_messages.push(format!("[{}] {}", level, message));
     }
 
     /// Handles messages and updates the application state.
