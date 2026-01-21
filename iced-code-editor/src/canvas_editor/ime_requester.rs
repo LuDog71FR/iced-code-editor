@@ -84,7 +84,7 @@ where
         &mut self,
         _tree: &mut tree::Tree,
         event: &Event,
-        _layout: iced::advanced::layout::Layout<'_>,
+        layout: iced::advanced::layout::Layout<'_>,
         _cursor: mouse::Cursor,
         _renderer: &iced::Renderer,
         _clipboard: &mut dyn iced::advanced::Clipboard,
@@ -106,8 +106,20 @@ where
         // ---------------------------------------------------------------------
         if let Event::Window(window::Event::RedrawRequested(_)) = event {
             if self.enabled {
+                // Get the absolute position of the widget in the window
+                // This is required because the OS IME API expects window-relative coordinates
+                // not widget-relative ones. Without this, the candidate window would
+                // appear at the top-left of the window instead of near the cursor.
+                let position = layout.bounds().position();
+                let cursor_rect = Rectangle {
+                    x: self.cursor.x + position.x,
+                    y: self.cursor.y + position.y,
+                    width: self.cursor.width,
+                    height: self.cursor.height,
+                };
+
                 let ime = input_method::InputMethod::Enabled {
-                    cursor: self.cursor,
+                    cursor: cursor_rect,
                     purpose: input_method::Purpose::Normal,
                     preedit: self
                         .preedit

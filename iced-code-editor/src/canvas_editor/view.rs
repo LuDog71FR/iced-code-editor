@@ -170,7 +170,12 @@ impl CodeEditor {
                 let cursor_x = self.gutter_width()
                     + 5.0
                     + super::measure_text_width(&prefix_text);
-                let cursor_y = cursor_visual as f32 * LINE_HEIGHT;
+                
+                // Calculate visual Y position relative to the viewport
+                // We subtract viewport_scroll because the content is scrolled up/down
+                // but the cursor position sent to IME must be relative to the visible area
+                let cursor_y = (cursor_visual as f32 * LINE_HEIGHT) - self.viewport_scroll;
+                
                 Rectangle::new(
                     iced::Point::new(cursor_x, cursor_y + 2.0),
                     Size::new(2.0, LINE_HEIGHT - 4.0),
