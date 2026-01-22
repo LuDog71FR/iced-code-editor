@@ -255,6 +255,16 @@ if editor.line_numbers_enabled() {
 
 When disabled, the gutter is completely removed (0px width), providing more horizontal space for code display.
 
+### Changing font
+
+The default font of the editor is `iced::Font::MONOSPACE`. It can be changed with one of the default `iced` font or by loading a specific font:
+
+```rust
+let font = iced::font::Family::SansSerif;
+self.editor_left.set_font(font);
+```
+
+
 ## Themes
 
 The editor natively supports all built-in Iced themes with automatic color adaptation.
