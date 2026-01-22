@@ -977,7 +977,10 @@ mod tests {
     fn test_measure_text_width_empty() {
         let text = "";
         let width = measure_text_width(text, FONT_SIZE, CHAR_WIDTH);
-        assert_eq!(width, 0.0, "Width should be 0 for empty string");
+        assert!(
+            (width - 0.0).abs() < f32::EPSILON,
+            "Width should be 0 for empty string"
+        );
     }
 
     #[test]
@@ -1049,12 +1052,12 @@ mod tests {
         let mut editor = CodeEditor::new("", "rs");
 
         // Initial state (defaults)
-        assert_eq!(editor.font_size(), 14.0);
-        assert_eq!(editor.line_height(), 20.0);
+        assert!((editor.font_size() - 14.0).abs() < f32::EPSILON);
+        assert!((editor.line_height() - 20.0).abs() < f32::EPSILON);
 
         // Test auto adjust = true
         editor.set_font_size(28.0, true);
-        assert_eq!(editor.font_size(), 28.0);
+        assert!((editor.font_size() - 28.0).abs() < f32::EPSILON);
         // Line height should double: 20.0 * (28.0/14.0) = 40.0
         assert_eq!(
             compare_floats(editor.line_height(), 40.0),
@@ -1066,7 +1069,7 @@ mod tests {
         editor.set_line_height(50.0);
         // Change font size but keep line height
         editor.set_font_size(14.0, false);
-        assert_eq!(editor.font_size(), 14.0);
+        assert!((editor.font_size() - 14.0).abs() < f32::EPSILON);
         // Line height should stay 50.0
         assert_eq!(
             compare_floats(editor.line_height(), 50.0),
@@ -1104,13 +1107,13 @@ mod tests {
         let mut editor = CodeEditor::new("", "rs");
 
         // Initial state
-        assert_eq!(editor.line_height(), LINE_HEIGHT);
+        assert!((editor.line_height() - LINE_HEIGHT).abs() < f32::EPSILON);
 
         // Set custom line height
         editor.set_line_height(35.0);
-        assert_eq!(editor.line_height(), 35.0);
+        assert!((editor.line_height() - 35.0).abs() < f32::EPSILON);
 
         // Font size should remain unchanged
-        assert_eq!(editor.font_size(), FONT_SIZE);
+        assert!((editor.font_size() - FONT_SIZE).abs() < f32::EPSILON);
     }
 }

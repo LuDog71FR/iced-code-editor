@@ -195,7 +195,7 @@ mod tests {
         });
 
         // Create instance
-        let requester = ImeRequester::new(true, cursor, preedit.clone());
+        let requester = ImeRequester::new(true, cursor, preedit);
 
         // Assertions
         assert!(requester.enabled, "Should be enabled");
@@ -205,7 +205,7 @@ mod tests {
         if let Some(p) = requester.preedit {
             assert_eq!(p.content, "test", "Preedit content should match");
         } else {
-            panic!("Preedit should be Some");
+            assert!(requester.preedit.is_some(), "Preedit should be Some");
         }
     }
 

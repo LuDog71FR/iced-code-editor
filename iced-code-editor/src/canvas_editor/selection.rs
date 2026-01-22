@@ -225,6 +225,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unwrap_used)]
     fn test_selection_complex_emoji() {
         // 👨‍👩‍👧‍👦 is a ZWJ sequence
         let complex_emoji = "👨‍👩‍👧‍👦";

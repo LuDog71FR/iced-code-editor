@@ -778,6 +778,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unwrap_used)]
     fn test_ime_preedit_and_commit_chinese() {
         let mut editor = CodeEditor::new("", "py");
         // Simulate IME opened
@@ -791,8 +792,14 @@ mod tests {
             .update(&Message::ImePreedit(content.clone(), selection.clone()));
 
         assert!(editor.ime_preedit.is_some());
-        assert_eq!(editor.ime_preedit.as_ref().unwrap().content, content);
-        assert_eq!(editor.ime_preedit.as_ref().unwrap().selection, selection);
+        assert_eq!(
+            editor.ime_preedit.as_ref().unwrap().content.clone(),
+            content
+        );
+        assert_eq!(
+            editor.ime_preedit.as_ref().unwrap().selection.clone(),
+            selection
+        );
 
         // Commit should insert the text and clear preedit
         let _ = editor.update(&Message::ImeCommit("安全与合规".to_string()));

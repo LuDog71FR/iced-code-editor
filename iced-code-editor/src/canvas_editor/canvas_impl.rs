@@ -1240,8 +1240,8 @@ mod tests {
         let (x, w) = calculate_segment_geometry(
             content, 0, 0, 0, 0.0, FONT_SIZE, CHAR_WIDTH,
         );
-        assert_eq!(x, 0.0);
-        assert_eq!(w, 0.0);
+        assert!((x - 0.0).abs() < f32::EPSILON);
+        assert!((w - 0.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1292,8 +1292,8 @@ mod tests {
             Ordering::Equal,
             "X position mismatch for out of bounds start"
         );
-        assert_eq!(
-            w, expected_w,
+        assert!(
+            (w - expected_w).abs() < f32::EPSILON,
             "Width should be 0 for out of bounds segment"
         );
     }
@@ -1360,7 +1360,10 @@ mod tests {
             Ordering::Equal,
             "X pos for inverted range"
         );
-        assert_eq!(w, expected_w, "Width for inverted range");
+        assert!(
+            (w - expected_w).abs() < f32::EPSILON,
+            "Width for inverted range"
+        );
     }
 
     #[test]
