@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+None ;-)
+
+## [0.3.3] - 2026-01-22
+
+### Fixed
+
+- fix: 中文 will panicked ([#9](https://github.com/LuDog71FR/iced-code-editor/issues/9))
+
 ### Added
+
+- feat: add support for Asian character input in the editor
 
 - feat: allow changing the font of the editor
   Default font: iced::Font::MONOSPACE
