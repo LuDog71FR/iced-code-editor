@@ -1,5 +1,5 @@
 use iced::advanced::input_method;
-use iced::advanced::widget::{tree, Widget};
+use iced::advanced::widget::{Widget, tree};
 use iced::advanced::{Renderer, Shell};
 use iced::{Event, Length, Rectangle, Size, Vector, mouse, window};
 
@@ -45,10 +45,10 @@ impl ImeRequester {
     }
 }
 
-// The ImeRequester widget implements a size of Length::Shrink for both dimensions 
-// but returns a zero-size layout. This creates an invisible widget that only exists 
-// to call shell.request_input_method. Consider documenting this design pattern more 
-// explicitly in the struct-level documentation, as it's a non-standard use of the 
+// The ImeRequester widget implements a size of Length::Shrink for both dimensions
+// but returns a zero-size layout. This creates an invisible widget that only exists
+// to call shell.request_input_method. Consider documenting this design pattern more
+// explicitly in the struct-level documentation, as it's a non-standard use of the
 // Widget trait where the widget serves as a bridge rather than a visual element.
 impl<Message> Widget<Message, iced::Theme, iced::Renderer> for ImeRequester
 where
@@ -180,7 +180,8 @@ mod tests {
     #[test]
     fn test_ime_requester_initialization() {
         // Setup test data
-        let cursor = Rectangle::new(Point::new(10.0, 10.0), Size::new(2.0, 20.0));
+        let cursor =
+            Rectangle::new(Point::new(10.0, 10.0), Size::new(2.0, 20.0));
         let preedit = Some(input_method::Preedit {
             content: "test".to_string(),
             selection: None,
@@ -193,7 +194,7 @@ mod tests {
         // Assertions
         assert!(requester.enabled, "Should be enabled");
         assert_eq!(requester.cursor, cursor, "Cursor rect should match");
-        
+
         // Verify preedit content matches
         if let Some(p) = requester.preedit {
             assert_eq!(p.content, "test", "Preedit content should match");
@@ -214,13 +215,18 @@ mod tests {
         let requester = ImeRequester::new(false, cursor, None);
 
         // Test size strategy - should be Shrink/Shrink
-        let size = <ImeRequester as Widget<(), iced::Theme, iced::Renderer>>::size(&requester);
+        let size =
+            <ImeRequester as Widget<(), iced::Theme, iced::Renderer>>::size(
+                &requester,
+            );
         assert_eq!(size.width, Length::Shrink, "Width should be Shrink");
         assert_eq!(size.height, Length::Shrink, "Height should be Shrink");
 
         // Test widget tag - should be stateless
         assert_eq!(
-            <ImeRequester as Widget<(), iced::Theme, iced::Renderer>>::tag(&requester),
+            <ImeRequester as Widget<(), iced::Theme, iced::Renderer>>::tag(
+                &requester
+            ),
             tree::Tag::stateless(),
             "Widget should be stateless"
         );

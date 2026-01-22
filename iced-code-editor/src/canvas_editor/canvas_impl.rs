@@ -50,16 +50,14 @@ fn calculate_segment_geometry(
         .skip(segment_start_col)
         .take(segment_len)
         .collect();
-    let segment_width = measure_text_width(&segment_text, font_size, char_width);
+    let segment_width =
+        measure_text_width(&segment_text, font_size, char_width);
 
     (base_offset + prefix_width, segment_width)
 }
 
 use super::wrapping::WrappingCalculator;
-use super::{
-    ArrowDirection, CodeEditor, Message,
-    measure_text_width,
-};
+use super::{ArrowDirection, CodeEditor, Message, measure_text_width};
 use iced::widget::canvas::Action;
 
 impl canvas::Program<Message> for CodeEditor {
@@ -75,8 +73,12 @@ impl canvas::Program<Message> for CodeEditor {
     ) -> Vec<Geometry> {
         let geometry = self.cache.draw(renderer, bounds.size(), |frame| {
             // Initialize wrapping calculator
-            let wrapping_calc =
-                WrappingCalculator::new(self.wrap_enabled, self.wrap_column, self.font_size, self.char_width);
+            let wrapping_calc = WrappingCalculator::new(
+                self.wrap_enabled,
+                self.wrap_column,
+                self.font_size,
+                self.char_width,
+            );
             let visual_lines = wrapping_calc.calculate_visual_lines(
                 &self.buffer,
                 bounds.width,
@@ -93,7 +95,8 @@ impl canvas::Program<Message> for CodeEditor {
             let first_visible_line =
                 (self.viewport_scroll / self.line_height).floor() as usize;
             let visible_lines_count =
-                (effective_viewport_height / self.line_height).ceil() as usize + 2;
+                (effective_viewport_height / self.line_height).ceil() as usize
+                    + 2;
             let last_visible_line = (first_visible_line + visible_lines_count)
                 .min(visual_lines.len());
 
@@ -135,7 +138,11 @@ impl canvas::Program<Message> for CodeEditor {
                         let line_num = visual_line.logical_line + 1;
                         let line_num_text = format!("{}", line_num);
                         // Calculate actual text width and center in gutter
-                        let text_width = measure_text_width(&line_num_text, self.font_size, self.char_width);
+                        let text_width = measure_text_width(
+                            &line_num_text,
+                            self.font_size,
+                            self.char_width,
+                        );
                         let x_pos = (self.gutter_width() - text_width) / 2.0;
                         frame.fill_text(canvas::Text {
                             content: line_num_text,
@@ -248,7 +255,11 @@ impl canvas::Program<Message> for CodeEditor {
                                 ..canvas::Text::default()
                             });
 
-                            x_offset += measure_text_width(segment_text, self.font_size, self.char_width);
+                            x_offset += measure_text_width(
+                                segment_text,
+                                self.font_size,
+                                self.char_width,
+                            );
                         }
 
                         char_pos = text_end;
@@ -326,7 +337,10 @@ impl canvas::Program<Message> for CodeEditor {
 
                             frame.fill_rectangle(
                                 Point::new(x_start, y + 2.0),
-                                Size::new(x_end - x_start, self.line_height - 4.0),
+                                Size::new(
+                                    x_end - x_start,
+                                    self.line_height - 4.0,
+                                ),
                                 highlight_color,
                             );
                         } else {
@@ -426,7 +440,10 @@ impl canvas::Program<Message> for CodeEditor {
 
                             frame.fill_rectangle(
                                 Point::new(x_start, y + 2.0),
-                                Size::new(x_end - x_start, self.line_height - 4.0),
+                                Size::new(
+                                    x_end - x_start,
+                                    self.line_height - 4.0,
+                                ),
                                 selection_color,
                             );
                         } else {
@@ -466,13 +483,13 @@ impl canvas::Program<Message> for CodeEditor {
                                 let x_end = x_start + sel_width;
 
                                 frame.fill_rectangle(
-                                Point::new(x_start, y + 2.0),
-                                Size::new(
-                                    x_end - x_start,
-                                    self.line_height - 4.0,
-                                ),
-                                selection_color,
-                            );
+                                    Point::new(x_start, y + 2.0),
+                                    Size::new(
+                                        x_end - x_start,
+                                        self.line_height - 4.0,
+                                    ),
+                                    selection_color,
+                                );
                             }
                         }
                     }
@@ -532,7 +549,10 @@ impl canvas::Program<Message> for CodeEditor {
 
                             frame.fill_rectangle(
                                 Point::new(x_start, y + 2.0),
-                                Size::new(x_end - x_start, self.line_height - 4.0),
+                                Size::new(
+                                    x_end - x_start,
+                                    self.line_height - 4.0,
+                                ),
                                 selection_color,
                             );
                         }
@@ -588,8 +608,11 @@ impl canvas::Program<Message> for CodeEditor {
                     let cursor_y = cursor_visual as f32 * self.line_height;
 
                     if let Some(preedit) = self.ime_preedit.as_ref() {
-                        let preedit_width =
-                            measure_text_width(&preedit.content, self.font_size, self.char_width);
+                        let preedit_width = measure_text_width(
+                            &preedit.content,
+                            self.font_size,
+                            self.char_width,
+                        );
 
                         // 1. Draw preedit background (light translucent)
                         // This indicates the text is not committed yet
@@ -605,21 +628,39 @@ impl canvas::Program<Message> for CodeEditor {
                         if let Some(range) = preedit.selection.as_ref()
                             && range.start != range.end
                         {
-                            let start = range.start.min(preedit.content.len());
-                            let end = range.end.min(preedit.content.len());
+                            // Validate indices before slicing to prevent panic
+                            if let Some((start, end)) =
+                                validate_selection_indices(
+                                    &preedit.content,
+                                    range.start,
+                                    range.end,
+                                )
+                            {
+                                let selected_prefix = &preedit.content[..start];
+                                let selected_text =
+                                    &preedit.content[start..end];
 
-                            let selected_prefix = &preedit.content[..start];
-                            let selected_text = &preedit.content[start..end];
+                                let selection_x = cursor_x
+                                    + measure_text_width(
+                                        selected_prefix,
+                                        self.font_size,
+                                        self.char_width,
+                                    );
+                                let selection_w = measure_text_width(
+                                    selected_text,
+                                    self.font_size,
+                                    self.char_width,
+                                );
 
-                            let selection_x =
-                                cursor_x + measure_text_width(selected_prefix, self.font_size, self.char_width);
-                            let selection_w = measure_text_width(selected_text, self.font_size, self.char_width);
-
-                            frame.fill_rectangle(
-                                Point::new(selection_x, cursor_y + 2.0),
-                                Size::new(selection_w, self.line_height - 4.0),
-                                Color { r: 0.3, g: 0.5, b: 0.8, a: 0.3 },
-                            );
+                                frame.fill_rectangle(
+                                    Point::new(selection_x, cursor_y + 2.0),
+                                    Size::new(
+                                        selection_w,
+                                        self.line_height - 4.0,
+                                    ),
+                                    Color { r: 0.3, g: 0.5, b: 0.8, a: 0.3 },
+                                );
+                            }
                         }
 
                         // 3. Draw preedit text itself
@@ -634,7 +675,10 @@ impl canvas::Program<Message> for CodeEditor {
 
                         // 4. Draw bottom underline (IME state indicator)
                         frame.fill_rectangle(
-                            Point::new(cursor_x, cursor_y + self.line_height - 3.0),
+                            Point::new(
+                                cursor_x,
+                                cursor_y + self.line_height - 3.0,
+                            ),
                             Size::new(preedit_width, 1.0),
                             self.style.text_color,
                         );
@@ -651,8 +695,12 @@ impl canvas::Program<Message> for CodeEditor {
                             {
                                 let caret_prefix =
                                     &preedit.content[..caret_end];
-                                let caret_x =
-                                    cursor_x + measure_text_width(caret_prefix, self.font_size, self.char_width);
+                                let caret_x = cursor_x
+                                    + measure_text_width(
+                                        caret_prefix,
+                                        self.font_size,
+                                        self.char_width,
+                                    );
 
                                 frame.fill_rectangle(
                                     Point::new(caret_x, cursor_y + 2.0),
@@ -1063,6 +1111,41 @@ impl canvas::Program<Message> for CodeEditor {
     }
 }
 
+/// Validates that the selection indices fall on valid UTF-8 character boundaries
+/// to prevent panics during string slicing.
+///
+/// # Arguments
+///
+/// * `content` - The string content to check against
+/// * `start` - The start byte index
+/// * `end` - The end byte index
+///
+/// # Returns
+///
+/// `Some((start, end))` if indices are valid, `None` otherwise.
+fn validate_selection_indices(
+    content: &str,
+    start: usize,
+    end: usize,
+) -> Option<(usize, usize)> {
+    let len = content.len();
+    // Clamp indices to content length
+    let start = start.min(len);
+    let end = end.min(len);
+
+    // Ensure start is not greater than end
+    if start > end {
+        return None;
+    }
+
+    // Verify that indices fall on valid UTF-8 character boundaries
+    if content.is_char_boundary(start) && content.is_char_boundary(end) {
+        Some((start, end))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1077,13 +1160,23 @@ mod tests {
         // width("Hello ") = 6 * CHAR_WIDTH
         // width("World") = 5 * CHAR_WIDTH
         let content = "Hello World";
-        let (x, w) = calculate_segment_geometry(content, 0, 6, 11, 0.0, FONT_SIZE, CHAR_WIDTH);
-        
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 6, 11, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
+
         let expected_x = CHAR_WIDTH * 6.0;
         let expected_w = CHAR_WIDTH * 5.0;
-        
-        assert_eq!(compare_floats(x, expected_x), Ordering::Equal, "X position mismatch for ASCII");
-        assert_eq!(compare_floats(w, expected_w), Ordering::Equal, "Width mismatch for ASCII");
+
+        assert_eq!(
+            compare_floats(x, expected_x),
+            Ordering::Equal,
+            "X position mismatch for ASCII"
+        );
+        assert_eq!(
+            compare_floats(w, expected_w),
+            Ordering::Equal,
+            "Width mismatch for ASCII"
+        );
     }
 
     #[test]
@@ -1094,13 +1187,23 @@ mod tests {
         // width("你好") = 2 * FONT_SIZE
         // width("世界") = 2 * FONT_SIZE
         let content = "你好世界";
-        let (x, w) = calculate_segment_geometry(content, 0, 2, 4, 10.0, FONT_SIZE, CHAR_WIDTH);
-        
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 2, 4, 10.0, FONT_SIZE, CHAR_WIDTH,
+        );
+
         let expected_x = 10.0 + FONT_SIZE * 2.0;
         let expected_w = FONT_SIZE * 2.0;
 
-        assert_eq!(compare_floats(x, expected_x), Ordering::Equal, "X position mismatch for CJK");
-        assert_eq!(compare_floats(w, expected_w), Ordering::Equal, "Width mismatch for CJK");
+        assert_eq!(
+            compare_floats(x, expected_x),
+            Ordering::Equal,
+            "X position mismatch for CJK"
+        );
+        assert_eq!(
+            compare_floats(w, expected_w),
+            Ordering::Equal,
+            "Width mismatch for CJK"
+        );
     }
 
     #[test]
@@ -1111,19 +1214,31 @@ mod tests {
         // width("Hi") = 2 * CHAR_WIDTH
         // width("你好") = 2 * FONT_SIZE
         let content = "Hi你好";
-        let (x, w) = calculate_segment_geometry(content, 0, 2, 4, 0.0, FONT_SIZE, CHAR_WIDTH);
-        
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 2, 4, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
+
         let expected_x = CHAR_WIDTH * 2.0;
         let expected_w = FONT_SIZE * 2.0;
 
-        assert_eq!(compare_floats(x, expected_x), Ordering::Equal, "X position mismatch for mixed content");
-        assert_eq!(compare_floats(w, expected_w), Ordering::Equal, "Width mismatch for mixed content");
+        assert_eq!(
+            compare_floats(x, expected_x),
+            Ordering::Equal,
+            "X position mismatch for mixed content"
+        );
+        assert_eq!(
+            compare_floats(w, expected_w),
+            Ordering::Equal,
+            "Width mismatch for mixed content"
+        );
     }
 
     #[test]
     fn test_calculate_segment_geometry_empty_range() {
         let content = "Hello";
-        let (x, w) = calculate_segment_geometry(content, 0, 0, 0, 0.0, FONT_SIZE, CHAR_WIDTH);
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 0, 0, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
         assert_eq!(x, 0.0);
         assert_eq!(w, 0.0);
     }
@@ -1137,13 +1252,23 @@ mod tests {
         // prefix width: 1 * CHAR_WIDTH
         // segment width: 2 * CHAR_WIDTH
         let content = "0123456789";
-        let (x, w) = calculate_segment_geometry(content, 2, 3, 5, 5.0, FONT_SIZE, CHAR_WIDTH);
-        
+        let (x, w) = calculate_segment_geometry(
+            content, 2, 3, 5, 5.0, FONT_SIZE, CHAR_WIDTH,
+        );
+
         let expected_x = 5.0 + CHAR_WIDTH * 1.0;
         let expected_w = CHAR_WIDTH * 2.0;
 
-        assert_eq!(compare_floats(x, expected_x), Ordering::Equal, "X position mismatch with visual offset");
-        assert_eq!(compare_floats(w, expected_w), Ordering::Equal, "Width mismatch with visual offset");
+        assert_eq!(
+            compare_floats(x, expected_x),
+            Ordering::Equal,
+            "X position mismatch with visual offset"
+        );
+        assert_eq!(
+            compare_floats(w, expected_w),
+            Ordering::Equal,
+            "Width mismatch with visual offset"
+        );
     }
 
     #[test]
@@ -1154,13 +1279,22 @@ mod tests {
         // Prefix should consume whole string ("Hello") and stop.
         // Segment should be empty.
         let content = "Hello";
-        let (x, w) = calculate_segment_geometry(content, 0, 10, 15, 0.0, FONT_SIZE, CHAR_WIDTH);
-        
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 10, 15, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
+
         let expected_x = CHAR_WIDTH * 5.0; // Width of "Hello"
         let expected_w = 0.0;
-        
-        assert_eq!(compare_floats(x, expected_x), Ordering::Equal, "X position mismatch for out of bounds start");
-        assert_eq!(w, expected_w, "Width should be 0 for out of bounds segment");
+
+        assert_eq!(
+            compare_floats(x, expected_x),
+            Ordering::Equal,
+            "X position mismatch for out of bounds start"
+        );
+        assert_eq!(
+            w, expected_w,
+            "Width should be 0 for out of bounds segment"
+        );
     }
 
     #[test]
@@ -1170,22 +1304,42 @@ mod tests {
         let content = "A👋\tB";
         // Measure "👋" (index 1 to 2)
         // Indices in chars: 'A' (0), '👋' (1), '\t' (2), 'B' (3)
-        
+
         // Segment covering Emoji
-        let (x, w) = calculate_segment_geometry(content, 0, 1, 2, 0.0, FONT_SIZE, CHAR_WIDTH);
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 1, 2, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
         let expected_x_emoji = CHAR_WIDTH; // 'A'
-        let expected_w_emoji = FONT_SIZE;  // '👋'
-        
-        assert_eq!(compare_floats(x, expected_x_emoji), Ordering::Equal, "X pos for emoji");
-        assert_eq!(compare_floats(w, expected_w_emoji), Ordering::Equal, "Width for emoji");
-        
+        let expected_w_emoji = FONT_SIZE; // '👋'
+
+        assert_eq!(
+            compare_floats(x, expected_x_emoji),
+            Ordering::Equal,
+            "X pos for emoji"
+        );
+        assert_eq!(
+            compare_floats(w, expected_w_emoji),
+            Ordering::Equal,
+            "Width for emoji"
+        );
+
         // Segment covering Tab
-        let (x_tab, w_tab) = calculate_segment_geometry(content, 0, 2, 3, 0.0, FONT_SIZE, CHAR_WIDTH);
+        let (x_tab, w_tab) = calculate_segment_geometry(
+            content, 0, 2, 3, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
         let expected_x_tab = CHAR_WIDTH + FONT_SIZE; // 'A' + '👋'
         let expected_w_tab = 0.0; // Tab width is 0 in this implementation
-        
-        assert_eq!(compare_floats(x_tab, expected_x_tab), Ordering::Equal, "X pos for tab");
-        assert_eq!(compare_floats(w_tab, expected_w_tab), Ordering::Equal, "Width for tab");
+
+        assert_eq!(
+            compare_floats(x_tab, expected_x_tab),
+            Ordering::Equal,
+            "X pos for tab"
+        );
+        assert_eq!(
+            compare_floats(w_tab, expected_w_tab),
+            Ordering::Equal,
+            "Width for tab"
+        );
     }
 
     #[test]
@@ -1193,15 +1347,44 @@ mod tests {
         // Start 5, End 3
         // Should result in empty segment at start 5
         let content = "0123456789";
-        let (x, w) = calculate_segment_geometry(content, 0, 5, 3, 0.0, FONT_SIZE, CHAR_WIDTH);
-        
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 5, 3, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
+
         let expected_x = CHAR_WIDTH * 5.0;
         let expected_w = 0.0;
-        
-        assert_eq!(compare_floats(x, expected_x), Ordering::Equal, "X pos for inverted range");
+
+        assert_eq!(
+            compare_floats(x, expected_x),
+            Ordering::Equal,
+            "X pos for inverted range"
+        );
         assert_eq!(w, expected_w, "Width for inverted range");
     }
+
+    #[test]
+    fn test_validate_selection_indices() {
+        // Test valid ASCII indices
+        let content = "Hello";
+        assert_eq!(validate_selection_indices(content, 0, 5), Some((0, 5)));
+        assert_eq!(validate_selection_indices(content, 1, 3), Some((1, 3)));
+
+        // Test valid multi-byte indices (Chinese "你好")
+        // "你" is 3 bytes (0-3), "好" is 3 bytes (3-6)
+        let content = "你好";
+        assert_eq!(validate_selection_indices(content, 0, 6), Some((0, 6)));
+        assert_eq!(validate_selection_indices(content, 0, 3), Some((0, 3)));
+        assert_eq!(validate_selection_indices(content, 3, 6), Some((3, 6)));
+
+        // Test invalid indices (splitting multi-byte char)
+        assert_eq!(validate_selection_indices(content, 1, 3), None); // Split first char
+        assert_eq!(validate_selection_indices(content, 0, 4), None); // Split second char
+
+        // Test out of bounds (should be clamped if on boundary, but here len is 6)
+        // If we pass start=0, end=100 -> clamped to 0, 6. 6 is boundary.
+        assert_eq!(validate_selection_indices(content, 0, 100), Some((0, 6)));
+
+        // Test inverted range
+        assert_eq!(validate_selection_indices(content, 3, 0), None);
+    }
 }
-
-
-

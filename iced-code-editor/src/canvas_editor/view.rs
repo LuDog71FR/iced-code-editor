@@ -1,19 +1,15 @@
 //! Iced UI view and rendering logic.
 
+use iced::Size;
 use iced::advanced::input_method;
 use iced::widget::canvas::Canvas;
 use iced::widget::{Row, Scrollable, Space, container, scrollable};
-use iced::{
-    Background, Border, Color, Element, Length, Rectangle, Shadow,
-};
-use iced::Size;
+use iced::{Background, Border, Color, Element, Length, Rectangle, Shadow};
 
+use super::ime_requester::ImeRequester;
 use super::search_dialog;
 use super::wrapping::WrappingCalculator;
 use super::{CodeEditor, GUTTER_WIDTH, Message};
-use super::ime_requester::ImeRequester;
-
-
 
 impl CodeEditor {
     /// Creates the view element with scrollable wrapper.
@@ -23,8 +19,12 @@ impl CodeEditor {
     pub fn view(&self) -> Element<'_, Message> {
         // Calculate total content height based on actual lines
         // When wrapping is enabled, use visual line count
-        let wrapping_calc =
-            WrappingCalculator::new(self.wrap_enabled, self.wrap_column, self.font_size, self.char_width);
+        let wrapping_calc = WrappingCalculator::new(
+            self.wrap_enabled,
+            self.wrap_column,
+            self.font_size,
+            self.char_width,
+        );
 
         // Use viewport width for calculating visual lines
         let visual_lines = wrapping_calc.calculate_visual_lines(
@@ -169,13 +169,18 @@ impl CodeEditor {
                     .collect();
                 let cursor_x = self.gutter_width()
                     + 5.0
-                    + super::measure_text_width(&prefix_text, self.font_size, self.char_width);
-                
+                    + super::measure_text_width(
+                        &prefix_text,
+                        self.font_size,
+                        self.char_width,
+                    );
+
                 // Calculate visual Y position relative to the viewport
                 // We subtract viewport_scroll because the content is scrolled up/down
                 // but the cursor position sent to IME must be relative to the visible area
-                let cursor_y = (cursor_visual as f32 * self.line_height) - self.viewport_scroll;
-                
+                let cursor_y = (cursor_visual as f32 * self.line_height)
+                    - self.viewport_scroll;
+
                 Rectangle::new(
                     iced::Point::new(cursor_x, cursor_y + 2.0),
                     Size::new(2.0, self.line_height - 4.0),

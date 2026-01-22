@@ -24,7 +24,9 @@ fn main() -> iced::Result {
     iced::application(DemoApp::new, DemoApp::update, DemoApp::view)
         .subscription(DemoApp::subscription)
         .theme(DemoApp::theme)
-        .font(include_bytes!("../../fonts/JetBrainsMono-Regular.ttf").as_slice())
+        .font(
+            include_bytes!("../../fonts/JetBrainsMono-Regular.ttf").as_slice(),
+        )
         .run()
 }
 
@@ -514,15 +516,17 @@ greet("World")
             }
             Message::FontSizeChanged(size) => {
                 self.current_font_size = size;
-                
+
                 if self.auto_adjust_line_height {
                     // Auto-adjust line height ratio is 20/14 ~ 1.428
                     let new_line_height = size * (20.0 / 14.0);
                     self.current_line_height = new_line_height;
                 }
-                
-                self.editor_left.set_font_size(size, self.auto_adjust_line_height);
-                self.editor_right.set_font_size(size, self.auto_adjust_line_height);
+
+                self.editor_left
+                    .set_font_size(size, self.auto_adjust_line_height);
+                self.editor_right
+                    .set_font_size(size, self.auto_adjust_line_height);
                 Task::none()
             }
             Message::LineHeightChanged(height) => {
@@ -868,7 +872,11 @@ greet("World")
                         .spacing(10)
                         .align_y(iced::Center),
                         row![
-                            text(format!("Size: {:.0}", self.current_font_size)).width(80),
+                            text(format!(
+                                "Size: {:.0}",
+                                self.current_font_size
+                            ))
+                            .width(80),
                             slider(
                                 10.0..=30.0,
                                 self.current_font_size,
@@ -882,7 +890,11 @@ greet("World")
                             .label("Auto-adjust Line Height")
                             .on_toggle(Message::ToggleAutoLineHeight),
                         row![
-                            text(format!("Height: {:.1}", self.current_line_height)).width(80),
+                            text(format!(
+                                "Height: {:.1}",
+                                self.current_line_height
+                            ))
+                            .width(80),
                             slider(
                                 10.0..=50.0,
                                 self.current_line_height,
@@ -896,7 +908,9 @@ greet("World")
                             text("Language:").width(80),
                             pick_list(
                                 LanguageOption::ALL,
-                                Some(LanguageOption::from(self.current_language)),
+                                Some(LanguageOption::from(
+                                    self.current_language
+                                )),
                                 Message::LanguageChanged
                             )
                         ]
@@ -918,7 +932,9 @@ greet("World")
                     .padding(20),
                 )
                 .style(move |_| container::Style {
-                    background: Some(iced::Background::Color(palette.background.weak.color)),
+                    background: Some(iced::Background::Color(
+                        palette.background.weak.color,
+                    )),
                     border: iced::Border {
                         color: palette.primary.base.color,
                         width: 1.0,
@@ -931,12 +947,15 @@ greet("World")
             stack![
                 content,
                 mouse_area(
-                    container(Space::new().width(Length::Fill).height(Length::Fill)).style(
-                        |_| container::Style {
-                            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.5).into()),
-                            ..Default::default()
-                        }
+                    container(
+                        Space::new().width(Length::Fill).height(Length::Fill)
                     )
+                    .style(|_| container::Style {
+                        background: Some(
+                            Color::from_rgba(0.0, 0.0, 0.0, 0.5).into()
+                        ),
+                        ..Default::default()
+                    })
                 )
                 .on_press(Message::ToggleSettings),
                 modal

@@ -6,9 +6,7 @@ use iced::{Point, Task};
 use unicode_width::UnicodeWidthChar;
 
 use super::wrapping::WrappingCalculator;
-use super::{
-    ArrowDirection, CodeEditor, Message,
-};
+use super::{ArrowDirection, CodeEditor, Message};
 
 impl CodeEditor {
     /// Moves the cursor based on arrow key direction.
@@ -133,8 +131,12 @@ impl CodeEditor {
         let visual_line_idx = (point.y / self.line_height) as usize;
 
         // Use wrapping calculator to find logical position
-        let wrapping_calc =
-            WrappingCalculator::new(self.wrap_enabled, self.wrap_column, self.font_size, self.char_width);
+        let wrapping_calc = WrappingCalculator::new(
+            self.wrap_enabled,
+            self.wrap_column,
+            self.font_size,
+            self.char_width,
+        );
         let visual_lines = wrapping_calc.calculate_visual_lines(
             &self.buffer,
             self.viewport_width,
@@ -231,7 +233,8 @@ impl CodeEditor {
         let new_scroll = if cursor_y < viewport_top + top_margin {
             // Cursor is above viewport - scroll up
             (cursor_y - top_margin).max(0.0)
-        } else if cursor_y + self.line_height > viewport_bottom - bottom_margin {
+        } else if cursor_y + self.line_height > viewport_bottom - bottom_margin
+        {
             // Cursor is below viewport - scroll down
             cursor_y + self.line_height + bottom_margin - self.viewport_height
         } else {
@@ -367,25 +370,33 @@ mod tests {
         //
         // Case 1: Click inside "你", at less than half its width.
         // Expect col 0
-        editor.handle_mouse_click(Point::new((half_width - 2.0) + padding, 10.0));
+        editor
+            .handle_mouse_click(Point::new((half_width - 2.0) + padding, 10.0));
 
         assert_eq!(editor.cursor, (0, 0));
 
         // Case 2: Click inside "你", at more than half its width.
         // Expect col 1
-        editor.handle_mouse_click(Point::new((half_width + 2.0) + padding, 10.0));
+        editor
+            .handle_mouse_click(Point::new((half_width + 2.0) + padding, 10.0));
         assert_eq!(editor.cursor, (0, 1));
 
         // Case 3: Click inside "好", at less than half its width.
         // "好" starts at font_size. Offset into "好" is < half_width.
         // Expect col 1 (start of "好")
-        editor.handle_mouse_click(Point::new((font_size + half_width - 2.0) + padding, 10.0));
+        editor.handle_mouse_click(Point::new(
+            (font_size + half_width - 2.0) + padding,
+            10.0,
+        ));
         assert_eq!(editor.cursor, (0, 1));
-        
+
         // Case 4: Click inside "好", at more than half its width.
         // "好" starts at font_size. Offset into "好" is > half_width.
         // Expect col 2 (end of "好")
-        editor.handle_mouse_click(Point::new((font_size + half_width + 2.0) + padding, 10.0));
+        editor.handle_mouse_click(Point::new(
+            (font_size + half_width + 2.0) + padding,
+            10.0,
+        ));
         assert_eq!(editor.cursor, (0, 2));
     }
 }
