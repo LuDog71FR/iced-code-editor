@@ -18,7 +18,7 @@ None ;-)
 ### Added
 
 - feat: add support for Asian character input in the editor
-
+- feat: Add support for CJK font
 - feat: allow changing the font of the editor
   Default font: iced::Font::MONOSPACE
 

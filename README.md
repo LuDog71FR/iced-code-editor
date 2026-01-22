@@ -264,6 +264,7 @@ let font = iced::font::Family::SansSerif;
 self.editor_left.set_font(font);
 ```
 
+> The editor support CJK font.
 
 ## Themes
 

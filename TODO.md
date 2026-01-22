@@ -5,6 +5,10 @@
 - Ghost cursor and line highlight appears when scrolling or resizing window #8
 - Text disappear when scrolling with mouse #6
 
+## Documentation
+
+- In DEV.md, explain how Asian characters & CJK fonts are supported.
+
 ## Features
 
 - feat: Handle focus without the needs to check if mouse is out of bounds #10
