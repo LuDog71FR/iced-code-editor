@@ -18,8 +18,13 @@ impl CodeEditor {
     /// Deletes the selected text.
     pub(crate) fn delete_selection(&mut self) {
         if let Some((start, end)) = self.get_selection_range() {
+            // Rationale: when selection bounds are equal (zero length), skip deletion
+            // to avoid creating a DeleteRangeCommand for an empty range that either
+            // performs no-op or pollutes history; just clear the selection and return
+            // while still allowing normal delete behavior elsewhere
             if start == end {
-                return; // No selection
+                self.clear_selection();
+                return;
             }
 
             let mut cmd =

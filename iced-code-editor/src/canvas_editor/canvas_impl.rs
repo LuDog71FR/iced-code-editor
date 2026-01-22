@@ -1,5 +1,6 @@
 //! Canvas rendering implementation using Iced's `canvas::Program`.
 
+use iced::advanced::input_method;
 use iced::mouse;
 use iced::widget::canvas::{self, Geometry};
 use iced::{Color, Event, Point, Rectangle, Size, Theme, keyboard};
@@ -15,10 +16,49 @@ fn is_cursor_in_bounds(cursor: &mouse::Cursor, bounds: Rectangle) -> bool {
     }
 }
 
+/// Computes geometry (x start and width) for a text segment used in rendering or highlighting.
+///
+/// Returns: (x_start, width)
+///
+/// Parameters:
+/// - `line_content`: full text content of the current line.
+/// - `visual_start_col`: start column index of the current visual line.
+/// - `segment_start_col`: start column index of the target segment (e.g. highlight).
+/// - `segment_end_col`: end column index of the target segment.
+/// - `base_offset`: base X offset (usually gutter_width + padding).
+///
+/// This function handles CJK character widths correctly to keep highlights accurate.
+fn calculate_segment_geometry(
+    line_content: &str,
+    visual_start_col: usize,
+    segment_start_col: usize,
+    segment_end_col: usize,
+    base_offset: f32,
+    full_char_width: f32,
+    char_width: f32,
+) -> (f32, f32) {
+    // Calculate prefix width relative to visual line start
+    let prefix_len = segment_start_col.saturating_sub(visual_start_col);
+    let prefix_text: String =
+        line_content.chars().skip(visual_start_col).take(prefix_len).collect();
+    let prefix_width =
+        measure_text_width(&prefix_text, full_char_width, char_width);
+
+    // Calculate segment width
+    let segment_len = segment_end_col.saturating_sub(segment_start_col);
+    let segment_text: String = line_content
+        .chars()
+        .skip(segment_start_col)
+        .take(segment_len)
+        .collect();
+    let segment_width =
+        measure_text_width(&segment_text, full_char_width, char_width);
+
+    (base_offset + prefix_width, segment_width)
+}
+
 use super::wrapping::WrappingCalculator;
-use super::{
-    ArrowDirection, CHAR_WIDTH, CodeEditor, FONT_SIZE, LINE_HEIGHT, Message,
-};
+use super::{ArrowDirection, CodeEditor, Message, measure_text_width};
 use iced::widget::canvas::Action;
 
 impl canvas::Program<Message> for CodeEditor {
@@ -34,8 +74,12 @@ impl canvas::Program<Message> for CodeEditor {
     ) -> Vec<Geometry> {
         let geometry = self.cache.draw(renderer, bounds.size(), |frame| {
             // Initialize wrapping calculator
-            let wrapping_calc =
-                WrappingCalculator::new(self.wrap_enabled, self.wrap_column);
+            let wrapping_calc = WrappingCalculator::new(
+                self.wrap_enabled,
+                self.wrap_column,
+                self.full_char_width,
+                self.char_width,
+            );
             let visual_lines = wrapping_calc.calculate_visual_lines(
                 &self.buffer,
                 bounds.width,
@@ -50,9 +94,10 @@ impl canvas::Program<Message> for CodeEditor {
                 bounds.height
             };
             let first_visible_line =
-                (self.viewport_scroll / LINE_HEIGHT).floor() as usize;
+                (self.viewport_scroll / self.line_height).floor() as usize;
             let visible_lines_count =
-                (effective_viewport_height / LINE_HEIGHT).ceil() as usize + 2;
+                (effective_viewport_height / self.line_height).ceil() as usize
+                    + 2;
             let last_visible_line = (first_visible_line + visible_lines_count)
                 .min(visual_lines.len());
 
@@ -83,7 +128,7 @@ impl canvas::Program<Message> for CodeEditor {
                 .skip(first_visible_line)
                 .take(last_visible_line - first_visible_line)
             {
-                let y = idx as f32 * LINE_HEIGHT;
+                let y = idx as f32 * self.line_height;
 
                 // Note: Gutter background is handled by a container in view.rs
                 // to ensure proper clipping when the pane is resized.
@@ -94,14 +139,17 @@ impl canvas::Program<Message> for CodeEditor {
                         let line_num = visual_line.logical_line + 1;
                         let line_num_text = format!("{}", line_num);
                         // Calculate actual text width and center in gutter
-                        let digit_count = line_num_text.len() as f32;
-                        let text_width = digit_count * CHAR_WIDTH;
+                        let text_width = measure_text_width(
+                            &line_num_text,
+                            self.full_char_width,
+                            self.char_width,
+                        );
                         let x_pos = (self.gutter_width() - text_width) / 2.0;
                         frame.fill_text(canvas::Text {
                             content: line_num_text,
                             position: Point::new(x_pos, y + 2.0),
                             color: self.style.line_number_color,
-                            size: FONT_SIZE.into(),
+                            size: self.font_size.into(),
                             font: self.font,
                             ..canvas::Text::default()
                         });
@@ -114,7 +162,7 @@ impl canvas::Program<Message> for CodeEditor {
                                 y + 2.0,
                             ),
                             color: self.style.line_number_color,
-                            size: FONT_SIZE.into(),
+                            size: self.font_size.into(),
                             font: self.font,
                             ..canvas::Text::default()
                         });
@@ -127,7 +175,7 @@ impl canvas::Program<Message> for CodeEditor {
                         Point::new(self.gutter_width(), y),
                         Size::new(
                             bounds.width - self.gutter_width(),
-                            LINE_HEIGHT,
+                            self.line_height,
                         ),
                         self.style.current_line_highlight,
                     );
@@ -203,13 +251,16 @@ impl canvas::Program<Message> for CodeEditor {
                                 content: segment_text.to_string(),
                                 position: Point::new(x_offset, y + 2.0),
                                 color,
-                                size: FONT_SIZE.into(),
+                                size: self.font_size.into(),
                                 font: self.font,
                                 ..canvas::Text::default()
                             });
 
-                            x_offset += segment_text.chars().count() as f32
-                                * CHAR_WIDTH;
+                            x_offset += measure_text_width(
+                                segment_text,
+                                self.full_char_width,
+                                self.char_width,
+                            );
                         }
 
                         char_pos = text_end;
@@ -223,7 +274,7 @@ impl canvas::Program<Message> for CodeEditor {
                             y + 2.0,
                         ),
                         color: self.style.text_color,
-                        size: FONT_SIZE.into(),
+                        size: self.font_size.into(),
                         font: self.font,
                         ..canvas::Text::default()
                     });
@@ -267,18 +318,30 @@ impl canvas::Program<Message> for CodeEditor {
                     {
                         if start_v == end_v {
                             // Match within same visual line
-                            let y = start_v as f32 * LINE_HEIGHT;
-                            let x_start = self.gutter_width()
-                                + 5.0
-                                + search_match.col as f32 * CHAR_WIDTH;
-                            let x_end = self.gutter_width()
-                                + 5.0
-                                + (search_match.col + query_len) as f32
-                                    * CHAR_WIDTH;
+                            let y = start_v as f32 * self.line_height;
+                            let vl = &visual_lines[start_v];
+                            let line_content =
+                                self.buffer.line(vl.logical_line);
+
+                            // Use calculate_segment_geometry to compute match position and width
+                            let (x_start, match_width) =
+                                calculate_segment_geometry(
+                                    line_content,
+                                    vl.start_col,
+                                    search_match.col,
+                                    search_match.col + query_len,
+                                    self.gutter_width() + 5.0,
+                                    self.full_char_width,
+                                    self.char_width,
+                                );
+                            let x_end = x_start + match_width;
 
                             frame.fill_rectangle(
                                 Point::new(x_start, y + 2.0),
-                                Size::new(x_end - x_start, LINE_HEIGHT - 4.0),
+                                Size::new(
+                                    x_end - x_start,
+                                    self.line_height - 4.0,
+                                ),
                                 highlight_color,
                             );
                         } else {
@@ -289,7 +352,7 @@ impl canvas::Program<Message> for CodeEditor {
                                 .skip(start_v)
                                 .take(end_v - start_v + 1)
                             {
-                                let y = v_idx as f32 * LINE_HEIGHT;
+                                let y = v_idx as f32 * self.line_height;
 
                                 let match_start_col = search_match.col;
                                 let match_end_col =
@@ -306,20 +369,26 @@ impl canvas::Program<Message> for CodeEditor {
                                     vl.end_col
                                 };
 
-                                let x_start = self.gutter_width()
-                                    + 5.0
-                                    + (sel_start_col - vl.start_col) as f32
-                                        * CHAR_WIDTH;
-                                let x_end = self.gutter_width()
-                                    + 5.0
-                                    + (sel_end_col - vl.start_col) as f32
-                                        * CHAR_WIDTH;
+                                let line_content =
+                                    self.buffer.line(vl.logical_line);
+
+                                let (x_start, sel_width) =
+                                    calculate_segment_geometry(
+                                        line_content,
+                                        vl.start_col,
+                                        sel_start_col,
+                                        sel_end_col,
+                                        self.gutter_width() + 5.0,
+                                        self.full_char_width,
+                                        self.char_width,
+                                    );
+                                let x_end = x_start + sel_width;
 
                                 frame.fill_rectangle(
                                     Point::new(x_start, y + 2.0),
                                     Size::new(
                                         x_end - x_start,
-                                        LINE_HEIGHT - 4.0,
+                                        self.line_height - 4.0,
                                     ),
                                     highlight_color,
                                 );
@@ -353,17 +422,29 @@ impl canvas::Program<Message> for CodeEditor {
                     {
                         if start_v == end_v {
                             // Selection within same visual line
-                            let y = start_v as f32 * LINE_HEIGHT;
-                            let x_start = self.gutter_width()
-                                + 5.0
-                                + start.1 as f32 * CHAR_WIDTH;
-                            let x_end = self.gutter_width()
-                                + 5.0
-                                + end.1 as f32 * CHAR_WIDTH;
+                            let y = start_v as f32 * self.line_height;
+                            let vl = &visual_lines[start_v];
+                            let line_content =
+                                self.buffer.line(vl.logical_line);
+
+                            let (x_start, sel_width) =
+                                calculate_segment_geometry(
+                                    line_content,
+                                    vl.start_col,
+                                    start.1,
+                                    end.1,
+                                    self.gutter_width() + 5.0,
+                                    self.full_char_width,
+                                    self.char_width,
+                                );
+                            let x_end = x_start + sel_width;
 
                             frame.fill_rectangle(
                                 Point::new(x_start, y + 2.0),
-                                Size::new(x_end - x_start, LINE_HEIGHT - 4.0),
+                                Size::new(
+                                    x_end - x_start,
+                                    self.line_height - 4.0,
+                                ),
                                 selection_color,
                             );
                         } else {
@@ -374,7 +455,7 @@ impl canvas::Program<Message> for CodeEditor {
                                 .skip(start_v)
                                 .take(end_v - start_v + 1)
                             {
-                                let y = v_idx as f32 * LINE_HEIGHT;
+                                let y = v_idx as f32 * self.line_height;
 
                                 let sel_start_col = if v_idx == start_v {
                                     start.1
@@ -387,20 +468,26 @@ impl canvas::Program<Message> for CodeEditor {
                                     vl.end_col
                                 };
 
-                                let x_start = self.gutter_width()
-                                    + 5.0
-                                    + (sel_start_col - vl.start_col) as f32
-                                        * CHAR_WIDTH;
-                                let x_end = self.gutter_width()
-                                    + 5.0
-                                    + (sel_end_col - vl.start_col) as f32
-                                        * CHAR_WIDTH;
+                                let line_content =
+                                    self.buffer.line(vl.logical_line);
+
+                                let (x_start, sel_width) =
+                                    calculate_segment_geometry(
+                                        line_content,
+                                        vl.start_col,
+                                        sel_start_col,
+                                        sel_end_col,
+                                        self.gutter_width() + 5.0,
+                                        self.full_char_width,
+                                        self.char_width,
+                                    );
+                                let x_end = x_start + sel_width;
 
                                 frame.fill_rectangle(
                                     Point::new(x_start, y + 2.0),
                                     Size::new(
                                         x_end - x_start,
-                                        LINE_HEIGHT - 4.0,
+                                        self.line_height - 4.0,
                                     ),
                                     selection_color,
                                 );
@@ -429,7 +516,7 @@ impl canvas::Program<Message> for CodeEditor {
                             .skip(start_v)
                             .take(end_v - start_v + 1)
                         {
-                            let y = v_idx as f32 * LINE_HEIGHT;
+                            let y = v_idx as f32 * self.line_height;
 
                             let sel_start_col = if vl.logical_line == start.0
                                 && v_idx == start_v
@@ -446,18 +533,27 @@ impl canvas::Program<Message> for CodeEditor {
                                     vl.end_col
                                 };
 
-                            let x_start = self.gutter_width()
-                                + 5.0
-                                + (sel_start_col - vl.start_col) as f32
-                                    * CHAR_WIDTH;
-                            let x_end = self.gutter_width()
-                                + 5.0
-                                + (sel_end_col - vl.start_col) as f32
-                                    * CHAR_WIDTH;
+                            let line_content =
+                                self.buffer.line(vl.logical_line);
+
+                            let (x_start, sel_width) =
+                                calculate_segment_geometry(
+                                    line_content,
+                                    vl.start_col,
+                                    sel_start_col,
+                                    sel_end_col,
+                                    self.gutter_width() + 5.0,
+                                    self.full_char_width,
+                                    self.char_width,
+                                );
+                            let x_end = x_start + sel_width;
 
                             frame.fill_rectangle(
                                 Point::new(x_start, y + 2.0),
-                                Size::new(x_end - x_start, LINE_HEIGHT - 4.0),
+                                Size::new(
+                                    x_end - x_start,
+                                    self.line_height - 4.0,
+                                ),
                                 selection_color,
                             );
                         }
@@ -465,9 +561,30 @@ impl canvas::Program<Message> for CodeEditor {
                 }
             }
 
-            // Draw cursor (only when editor has focus)
-            if self.show_cursor && self.cursor_visible && self.is_focused() {
-                // Find the visual line containing the cursor
+            // Cursor drawing logic (only when the editor has focus)
+            // -------------------------------------------------------------------------
+            // Core notes:
+            // 1. Choose the drawing path based on whether IME preedit is present.
+            // 2. Require both `is_focused()` (Iced focus) and `has_canvas_focus()` (internal focus)
+            //    so the cursor is drawn only in the active editor, avoiding multiple cursors.
+            // 3. Use `WrappingCalculator` to map logical (line, col) to visual (x, y)
+            //    for correct cursor positioning with line wrapping.
+            // -------------------------------------------------------------------------
+            if self.show_cursor
+                && self.cursor_visible
+                && self.is_focused()
+                && self.has_canvas_focus
+                && self.ime_preedit.is_some()
+            {
+                // [Branch A] IME preedit rendering mode
+                // ---------------------------------------------------------------------
+                // When the user is composing with an IME (e.g. pinyin before commit),
+                // draw a preedit region instead of the normal caret, including:
+                // - preedit background (highlighting the composing text)
+                // - preedit text content (preedit.content)
+                // - preedit selection (underline or selection background)
+                // - preedit caret
+                // ---------------------------------------------------------------------
                 if let Some(cursor_visual) =
                     WrappingCalculator::logical_to_visual(
                         &visual_lines,
@@ -476,14 +593,168 @@ impl canvas::Program<Message> for CodeEditor {
                     )
                 {
                     let vl = &visual_lines[cursor_visual];
-                    let cursor_x = self.gutter_width()
-                        + 5.0
-                        + (self.cursor.1 - vl.start_col) as f32 * CHAR_WIDTH;
-                    let cursor_y = cursor_visual as f32 * LINE_HEIGHT;
+                    let line_content = self.buffer.line(vl.logical_line);
 
+                    // Compute the preedit region start X
+                    // Use calculate_segment_geometry to ensure correct CJK width handling
+                    let (cursor_x, _) = calculate_segment_geometry(
+                        line_content,
+                        vl.start_col,
+                        self.cursor.1,
+                        self.cursor.1,
+                        self.gutter_width() + 5.0,
+                        self.full_char_width,
+                        self.char_width,
+                    );
+                    let cursor_y = cursor_visual as f32 * self.line_height;
+
+                    if let Some(preedit) = self.ime_preedit.as_ref() {
+                        let preedit_width = measure_text_width(
+                            &preedit.content,
+                            self.full_char_width,
+                            self.char_width,
+                        );
+
+                        // 1. Draw preedit background (light translucent)
+                        // This indicates the text is not committed yet
+                        frame.fill_rectangle(
+                            Point::new(cursor_x, cursor_y + 2.0),
+                            Size::new(preedit_width, self.line_height - 4.0),
+                            Color { r: 1.0, g: 1.0, b: 1.0, a: 0.08 },
+                        );
+
+                        // 2. Draw preedit selection (if any)
+                        // IME may mark a selection inside preedit text (e.g. segmentation)
+                        // The range uses UTF-8 byte indices, so slices must be safe
+                        if let Some(range) = preedit.selection.as_ref()
+                            && range.start != range.end
+                        {
+                            // Validate indices before slicing to prevent panic
+                            if let Some((start, end)) =
+                                validate_selection_indices(
+                                    &preedit.content,
+                                    range.start,
+                                    range.end,
+                                )
+                            {
+                                let selected_prefix = &preedit.content[..start];
+                                let selected_text =
+                                    &preedit.content[start..end];
+
+                                let selection_x = cursor_x
+                                    + measure_text_width(
+                                        selected_prefix,
+                                        self.full_char_width,
+                                        self.char_width,
+                                    );
+                                let selection_w = measure_text_width(
+                                    selected_text,
+                                    self.full_char_width,
+                                    self.char_width,
+                                );
+
+                                frame.fill_rectangle(
+                                    Point::new(selection_x, cursor_y + 2.0),
+                                    Size::new(
+                                        selection_w,
+                                        self.line_height - 4.0,
+                                    ),
+                                    Color { r: 0.3, g: 0.5, b: 0.8, a: 0.3 },
+                                );
+                            }
+                        }
+
+                        // 3. Draw preedit text itself
+                        frame.fill_text(canvas::Text {
+                            content: preedit.content.clone(),
+                            position: Point::new(cursor_x, cursor_y + 2.0),
+                            color: self.style.text_color,
+                            size: self.font_size.into(),
+                            font: self.font,
+                            ..canvas::Text::default()
+                        });
+
+                        // 4. Draw bottom underline (IME state indicator)
+                        frame.fill_rectangle(
+                            Point::new(
+                                cursor_x,
+                                cursor_y + self.line_height - 3.0,
+                            ),
+                            Size::new(preedit_width, 1.0),
+                            self.style.text_color,
+                        );
+
+                        // 5. Draw preedit caret
+                        // If IME provides a caret position (usually selection end), draw a thin bar
+                        if let Some(range) = preedit.selection.as_ref() {
+                            let caret_end =
+                                range.end.min(preedit.content.len());
+
+                            // Validate caret position to avoid panic on invalid UTF-8 boundary
+                            if caret_end <= preedit.content.len()
+                                && preedit.content.is_char_boundary(caret_end)
+                            {
+                                let caret_prefix =
+                                    &preedit.content[..caret_end];
+                                let caret_x = cursor_x
+                                    + measure_text_width(
+                                        caret_prefix,
+                                        self.full_char_width,
+                                        self.char_width,
+                                    );
+
+                                frame.fill_rectangle(
+                                    Point::new(caret_x, cursor_y + 2.0),
+                                    Size::new(2.0, self.line_height - 4.0),
+                                    self.style.text_color,
+                                );
+                            }
+                        }
+                    }
+                }
+            } else if self.show_cursor
+                && self.cursor_visible
+                && self.is_focused()
+                && self.has_canvas_focus
+            {
+                // [Branch B] Normal caret rendering mode
+                // ---------------------------------------------------------------------
+                // When there is no IME preedit, draw the standard editor caret.
+                // Key checks:
+                // - is_focused(): the widget has Iced focus
+                // - has_canvas_focus: internal focus state (mouse clicks, etc.)
+                // - draw only when both are true to avoid ghost cursors
+                // ---------------------------------------------------------------------
+
+                // Map logical cursor position (Line, Col) to visual line index
+                // to handle line wrapping changes
+                if let Some(cursor_visual) =
+                    WrappingCalculator::logical_to_visual(
+                        &visual_lines,
+                        self.cursor.0,
+                        self.cursor.1,
+                    )
+                {
+                    let vl = &visual_lines[cursor_visual];
+                    let line_content = self.buffer.line(vl.logical_line);
+
+                    // Compute exact caret X position
+                    // Account for gutter width, left padding, and rendered prefix width
+                    let (cursor_x, _) = calculate_segment_geometry(
+                        line_content,
+                        vl.start_col,
+                        self.cursor.1,
+                        self.cursor.1,
+                        self.gutter_width() + 5.0,
+                        self.full_char_width,
+                        self.char_width,
+                    );
+                    let cursor_y = cursor_visual as f32 * self.line_height;
+
+                    // Draw standard caret (2px vertical bar)
                     frame.fill_rectangle(
                         Point::new(cursor_x, cursor_y + 2.0),
-                        Size::new(2.0, LINE_HEIGHT - 4.0),
+                        Size::new(2.0, self.line_height - 4.0),
                         self.style.text_color,
                     );
                 }
@@ -521,6 +792,12 @@ impl canvas::Program<Message> for CodeEditor {
 
                 // Only process keyboard events if canvas has focus
                 if !self.has_canvas_focus {
+                    return None;
+                }
+
+                if self.ime_preedit.is_some()
+                    && !(modifiers.control() || modifiers.command())
+                {
                     return None;
                 }
 
@@ -785,7 +1062,330 @@ impl canvas::Program<Message> for CodeEditor {
                     None
                 }
             }
+            Event::InputMethod(event) => {
+                let focused_id = super::FOCUSED_EDITOR_ID
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                if focused_id != self.editor_id {
+                    return None;
+                }
+
+                if !is_cursor_in_bounds(&cursor, bounds) {
+                    return None;
+                }
+
+                if !self.has_canvas_focus {
+                    return None;
+                }
+
+                // IME event handling
+                // ---------------------------------------------------------------------
+                // Core mapping: convert Iced IME events into editor Messages
+                //
+                // Flow:
+                // 1. Opened: IME activated (e.g. switching input method). Clear old preedit state.
+                // 2. Preedit: User is composing (e.g. typing "nihao" before commit).
+                //    - content: current candidate text
+                //    - selection: selection range within the text, in bytes
+                // 3. Commit: User confirms a candidate and commits text into the buffer.
+                // 4. Closed: IME closed or lost focus.
+                //
+                // Safety checks:
+                // - handle only when `focused_id` matches this editor ID
+                // - handle only when `has_canvas_focus` is true
+                // This ensures IME events are not delivered to the wrong widget.
+                // ---------------------------------------------------------------------
+                let message = match event {
+                    input_method::Event::Opened => Message::ImeOpened,
+                    input_method::Event::Preedit(content, selection) => {
+                        Message::ImePreedit(content.clone(), selection.clone())
+                    }
+                    input_method::Event::Commit(content) => {
+                        Message::ImeCommit(content.clone())
+                    }
+                    input_method::Event::Closed => Message::ImeClosed,
+                };
+
+                Some(Action::publish(message).and_capture())
+            }
             _ => None,
         }
+    }
+}
+
+/// Validates that the selection indices fall on valid UTF-8 character boundaries
+/// to prevent panics during string slicing.
+///
+/// # Arguments
+///
+/// * `content` - The string content to check against
+/// * `start` - The start byte index
+/// * `end` - The end byte index
+///
+/// # Returns
+///
+/// `Some((start, end))` if indices are valid, `None` otherwise.
+fn validate_selection_indices(
+    content: &str,
+    start: usize,
+    end: usize,
+) -> Option<(usize, usize)> {
+    let len = content.len();
+    // Clamp indices to content length
+    let start = start.min(len);
+    let end = end.min(len);
+
+    // Ensure start is not greater than end
+    if start > end {
+        return None;
+    }
+
+    // Verify that indices fall on valid UTF-8 character boundaries
+    if content.is_char_boundary(start) && content.is_char_boundary(end) {
+        Some((start, end))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::canvas_editor::{CHAR_WIDTH, FONT_SIZE, compare_floats};
+    use std::cmp::Ordering;
+
+    #[test]
+    fn test_calculate_segment_geometry_ascii() {
+        // "Hello World"
+        // "Hello " (6 chars) -> prefix
+        // "World" (5 chars) -> segment
+        // width("Hello ") = 6 * CHAR_WIDTH
+        // width("World") = 5 * CHAR_WIDTH
+        let content = "Hello World";
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 6, 11, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
+
+        let expected_x = CHAR_WIDTH * 6.0;
+        let expected_w = CHAR_WIDTH * 5.0;
+
+        assert_eq!(
+            compare_floats(x, expected_x),
+            Ordering::Equal,
+            "X position mismatch for ASCII"
+        );
+        assert_eq!(
+            compare_floats(w, expected_w),
+            Ordering::Equal,
+            "Width mismatch for ASCII"
+        );
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_cjk() {
+        // "你好世界"
+        // "你好" (2 chars) -> prefix
+        // "世界" (2 chars) -> segment
+        // width("你好") = 2 * FONT_SIZE
+        // width("世界") = 2 * FONT_SIZE
+        let content = "你好世界";
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 2, 4, 10.0, FONT_SIZE, CHAR_WIDTH,
+        );
+
+        let expected_x = 10.0 + FONT_SIZE * 2.0;
+        let expected_w = FONT_SIZE * 2.0;
+
+        assert_eq!(
+            compare_floats(x, expected_x),
+            Ordering::Equal,
+            "X position mismatch for CJK"
+        );
+        assert_eq!(
+            compare_floats(w, expected_w),
+            Ordering::Equal,
+            "Width mismatch for CJK"
+        );
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_mixed() {
+        // "Hi你好"
+        // "Hi" (2 chars) -> prefix
+        // "你好" (2 chars) -> segment
+        // width("Hi") = 2 * CHAR_WIDTH
+        // width("你好") = 2 * FONT_SIZE
+        let content = "Hi你好";
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 2, 4, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
+
+        let expected_x = CHAR_WIDTH * 2.0;
+        let expected_w = FONT_SIZE * 2.0;
+
+        assert_eq!(
+            compare_floats(x, expected_x),
+            Ordering::Equal,
+            "X position mismatch for mixed content"
+        );
+        assert_eq!(
+            compare_floats(w, expected_w),
+            Ordering::Equal,
+            "Width mismatch for mixed content"
+        );
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_empty_range() {
+        let content = "Hello";
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 0, 0, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
+        assert_eq!(x, 0.0);
+        assert_eq!(w, 0.0);
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_with_visual_offset() {
+        // content: "0123456789"
+        // visual_start_col: 2 (starts at '2')
+        // segment: "34" (indices 3 to 5)
+        // prefix: from visual start (2) to segment start (3) -> "2" (length 1)
+        // prefix width: 1 * CHAR_WIDTH
+        // segment width: 2 * CHAR_WIDTH
+        let content = "0123456789";
+        let (x, w) = calculate_segment_geometry(
+            content, 2, 3, 5, 5.0, FONT_SIZE, CHAR_WIDTH,
+        );
+
+        let expected_x = 5.0 + CHAR_WIDTH * 1.0;
+        let expected_w = CHAR_WIDTH * 2.0;
+
+        assert_eq!(
+            compare_floats(x, expected_x),
+            Ordering::Equal,
+            "X position mismatch with visual offset"
+        );
+        assert_eq!(
+            compare_floats(w, expected_w),
+            Ordering::Equal,
+            "Width mismatch with visual offset"
+        );
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_out_of_bounds() {
+        // Content length is 5 ("Hello")
+        // Request start at 10, end at 15
+        // visual_start 0
+        // Prefix should consume whole string ("Hello") and stop.
+        // Segment should be empty.
+        let content = "Hello";
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 10, 15, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
+
+        let expected_x = CHAR_WIDTH * 5.0; // Width of "Hello"
+        let expected_w = 0.0;
+
+        assert_eq!(
+            compare_floats(x, expected_x),
+            Ordering::Equal,
+            "X position mismatch for out of bounds start"
+        );
+        assert_eq!(
+            w, expected_w,
+            "Width should be 0 for out of bounds segment"
+        );
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_special_chars() {
+        // Emoji "👋" (width > 1 => FONT_SIZE)
+        // Tab "\t" (width None => 0.0)
+        let content = "A👋\tB";
+        // Measure "👋" (index 1 to 2)
+        // Indices in chars: 'A' (0), '👋' (1), '\t' (2), 'B' (3)
+
+        // Segment covering Emoji
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 1, 2, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
+        let expected_x_emoji = CHAR_WIDTH; // 'A'
+        let expected_w_emoji = FONT_SIZE; // '👋'
+
+        assert_eq!(
+            compare_floats(x, expected_x_emoji),
+            Ordering::Equal,
+            "X pos for emoji"
+        );
+        assert_eq!(
+            compare_floats(w, expected_w_emoji),
+            Ordering::Equal,
+            "Width for emoji"
+        );
+
+        // Segment covering Tab
+        let (x_tab, w_tab) = calculate_segment_geometry(
+            content, 0, 2, 3, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
+        let expected_x_tab = CHAR_WIDTH + FONT_SIZE; // 'A' + '👋'
+        let expected_w_tab = 0.0; // Tab width is 0 in this implementation
+
+        assert_eq!(
+            compare_floats(x_tab, expected_x_tab),
+            Ordering::Equal,
+            "X pos for tab"
+        );
+        assert_eq!(
+            compare_floats(w_tab, expected_w_tab),
+            Ordering::Equal,
+            "Width for tab"
+        );
+    }
+
+    #[test]
+    fn test_calculate_segment_geometry_inverted_range() {
+        // Start 5, End 3
+        // Should result in empty segment at start 5
+        let content = "0123456789";
+        let (x, w) = calculate_segment_geometry(
+            content, 0, 5, 3, 0.0, FONT_SIZE, CHAR_WIDTH,
+        );
+
+        let expected_x = CHAR_WIDTH * 5.0;
+        let expected_w = 0.0;
+
+        assert_eq!(
+            compare_floats(x, expected_x),
+            Ordering::Equal,
+            "X pos for inverted range"
+        );
+        assert_eq!(w, expected_w, "Width for inverted range");
+    }
+
+    #[test]
+    fn test_validate_selection_indices() {
+        // Test valid ASCII indices
+        let content = "Hello";
+        assert_eq!(validate_selection_indices(content, 0, 5), Some((0, 5)));
+        assert_eq!(validate_selection_indices(content, 1, 3), Some((1, 3)));
+
+        // Test valid multi-byte indices (Chinese "你好")
+        // "你" is 3 bytes (0-3), "好" is 3 bytes (3-6)
+        let content = "你好";
+        assert_eq!(validate_selection_indices(content, 0, 6), Some((0, 6)));
+        assert_eq!(validate_selection_indices(content, 0, 3), Some((0, 3)));
+        assert_eq!(validate_selection_indices(content, 3, 6), Some((3, 6)));
+
+        // Test invalid indices (splitting multi-byte char)
+        assert_eq!(validate_selection_indices(content, 1, 3), None); // Split first char
+        assert_eq!(validate_selection_indices(content, 0, 4), None); // Split second char
+
+        // Test out of bounds (should be clamped if on boundary, but here len is 6)
+        // If we pass start=0, end=100 -> clamped to 0, 6. 6 is boundary.
+        assert_eq!(validate_selection_indices(content, 0, 100), Some((0, 6)));
+
+        // Test inverted range
+        assert_eq!(validate_selection_indices(content, 3, 0), None);
     }
 }

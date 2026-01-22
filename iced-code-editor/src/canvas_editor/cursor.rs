@@ -5,7 +5,7 @@ use iced::widget::scrollable;
 use iced::{Point, Task};
 
 use super::wrapping::WrappingCalculator;
-use super::{ArrowDirection, CHAR_WIDTH, CodeEditor, LINE_HEIGHT, Message};
+use super::{ArrowDirection, CodeEditor, Message};
 
 impl CodeEditor {
     /// Moves the cursor based on arrow key direction.
@@ -18,6 +18,8 @@ impl CodeEditor {
                 let wrapping_calc = WrappingCalculator::new(
                     self.wrap_enabled,
                     self.wrap_column,
+                    self.full_char_width,
+                    self.char_width,
                 );
                 let visual_lines = wrapping_calc.calculate_visual_lines(
                     &self.buffer,
@@ -109,19 +111,31 @@ impl CodeEditor {
         self.cache.clear();
     }
 
-    /// Handles mouse click to position cursor.
-    pub(crate) fn handle_mouse_click(&mut self, point: Point) {
+    /// Computes the cursor logical position (line, col) from a screen point.
+    ///
+    /// This method considers:
+    /// 1. Whether the click is inside the gutter area.
+    /// 2. Visual line mapping after wrapping.
+    /// 3. CJK character widths (wide characters use FONT_SIZE, narrow use CHAR_WIDTH).
+    fn calculate_cursor_from_point(
+        &self,
+        point: Point,
+    ) -> Option<(usize, usize)> {
         // Account for gutter width
         if point.x < self.gutter_width() {
-            return; // Clicked in gutter
+            return None; // Clicked in gutter
         }
 
         // Calculate visual line number - point.y is already in canvas coordinates
-        let visual_line_idx = (point.y / LINE_HEIGHT) as usize;
+        let visual_line_idx = (point.y / self.line_height) as usize;
 
         // Use wrapping calculator to find logical position
-        let wrapping_calc =
-            WrappingCalculator::new(self.wrap_enabled, self.wrap_column);
+        let wrapping_calc = WrappingCalculator::new(
+            self.wrap_enabled,
+            self.wrap_column,
+            self.full_char_width,
+            self.char_width,
+        );
         let visual_lines = wrapping_calc.calculate_visual_lines(
             &self.buffer,
             self.viewport_width,
@@ -132,27 +146,62 @@ impl CodeEditor {
             // Clicked beyond last line - move to end of document
             let last_line = self.buffer.line_count().saturating_sub(1);
             let last_col = self.buffer.line_len(last_line);
-            self.cursor = (last_line, last_col);
-            self.cache.clear();
-            return;
+            return Some((last_line, last_col));
         }
 
         let visual_line = &visual_lines[visual_line_idx];
 
         // Calculate column within the segment
         let x_in_text = point.x - self.gutter_width() - 5.0;
-        let col_offset = (x_in_text / CHAR_WIDTH).max(0.0) as usize;
-        let col = (visual_line.start_col + col_offset).min(visual_line.end_col);
 
-        self.cursor = (visual_line.logical_line, col);
-        self.cache.clear();
+        // Use correct width calculation for CJK support
+        let line_content = self.buffer.line(visual_line.logical_line);
+        let segment_text: String = line_content
+            .chars()
+            .skip(visual_line.start_col)
+            .take(visual_line.end_col - visual_line.start_col)
+            .collect();
+
+        let mut current_width = 0.0;
+        let mut col_offset = 0;
+
+        for c in segment_text.chars() {
+            let char_width = super::measure_char_width(
+                c,
+                self.full_char_width,
+                self.char_width,
+            );
+
+            if current_width + char_width / 2.0 > x_in_text {
+                break;
+            }
+            current_width += char_width;
+            col_offset += 1;
+        }
+
+        let col = visual_line.start_col + col_offset;
+        Some((visual_line.logical_line, col))
+    }
+
+    /// Handles mouse clicks to position the cursor.
+    ///
+    /// Reuses `calculate_cursor_from_point` to compute the position and updates the cache.
+    pub(crate) fn handle_mouse_click(&mut self, point: Point) {
+        if let Some(cursor) = self.calculate_cursor_from_point(point) {
+            self.cursor = cursor;
+            self.cache.clear();
+        }
     }
 
     /// Returns a scroll command to make the cursor visible.
     pub(crate) fn scroll_to_cursor(&self) -> Task<Message> {
         // Use wrapping calculator to find visual line
-        let wrapping_calc =
-            WrappingCalculator::new(self.wrap_enabled, self.wrap_column);
+        let wrapping_calc = WrappingCalculator::new(
+            self.wrap_enabled,
+            self.wrap_column,
+            self.full_char_width,
+            self.char_width,
+        );
         let visual_lines = wrapping_calc.calculate_visual_lines(
             &self.buffer,
             self.viewport_width,
@@ -166,26 +215,27 @@ impl CodeEditor {
         );
 
         let cursor_y = if let Some(visual_idx) = cursor_visual {
-            visual_idx as f32 * LINE_HEIGHT
+            visual_idx as f32 * self.line_height
         } else {
             // Fallback to logical line if visual not found
-            self.cursor.0 as f32 * LINE_HEIGHT
+            self.cursor.0 as f32 * self.line_height
         };
 
         let viewport_top = self.viewport_scroll;
         let viewport_bottom = self.viewport_scroll + self.viewport_height;
 
         // Add margins to avoid cursor being exactly at edge
-        let top_margin = LINE_HEIGHT * 2.0;
-        let bottom_margin = LINE_HEIGHT * 2.0;
+        let top_margin = self.line_height * 2.0;
+        let bottom_margin = self.line_height * 2.0;
 
         // Calculate new scroll position if cursor is outside visible area
         let new_scroll = if cursor_y < viewport_top + top_margin {
             // Cursor is above viewport - scroll up
             (cursor_y - top_margin).max(0.0)
-        } else if cursor_y + LINE_HEIGHT > viewport_bottom - bottom_margin {
+        } else if cursor_y + self.line_height > viewport_bottom - bottom_margin
+        {
             // Cursor is below viewport - scroll down
-            cursor_y + LINE_HEIGHT + bottom_margin - self.viewport_height
+            cursor_y + self.line_height + bottom_margin - self.viewport_height
         } else {
             // Cursor is visible - no scroll needed
             return Task::none();
@@ -199,7 +249,7 @@ impl CodeEditor {
 
     /// Moves cursor up by one page (approximately viewport height).
     pub(crate) fn page_up(&mut self) {
-        let lines_per_page = (self.viewport_height / LINE_HEIGHT) as usize;
+        let lines_per_page = (self.viewport_height / self.line_height) as usize;
 
         let current_line = self.cursor.0;
         let new_line = current_line.saturating_sub(lines_per_page);
@@ -211,7 +261,7 @@ impl CodeEditor {
 
     /// Moves cursor down by one page (approximately viewport height).
     pub(crate) fn page_down(&mut self) {
-        let lines_per_page = (self.viewport_height / LINE_HEIGHT) as usize;
+        let lines_per_page = (self.viewport_height / self.line_height) as usize;
 
         let current_line = self.cursor.0;
         let max_line = self.buffer.line_count().saturating_sub(1);
@@ -223,40 +273,13 @@ impl CodeEditor {
     }
 
     /// Handles mouse drag for text selection.
+    ///
+    /// Reuses `calculate_cursor_from_point` to compute the position and update selection end.
     pub(crate) fn handle_mouse_drag(&mut self, point: Point) {
-        // Account for gutter width
-        if point.x < self.gutter_width() {
-            return;
-        }
-
-        // Calculate visual line - point.y is already in canvas coordinates
-        let visual_line_idx = (point.y / LINE_HEIGHT) as usize;
-
-        let wrapping_calc =
-            WrappingCalculator::new(self.wrap_enabled, self.wrap_column);
-        let visual_lines = wrapping_calc.calculate_visual_lines(
-            &self.buffer,
-            800.0,
-            self.gutter_width(),
-        );
-
-        if visual_line_idx >= visual_lines.len() {
-            let last_line = self.buffer.line_count().saturating_sub(1);
-            let last_col = self.buffer.line_len(last_line);
-            self.cursor = (last_line, last_col);
+        if let Some(cursor) = self.calculate_cursor_from_point(point) {
+            self.cursor = cursor;
             self.selection_end = Some(self.cursor);
-            return;
         }
-
-        let visual_line = &visual_lines[visual_line_idx];
-
-        let x_in_text = point.x - self.gutter_width() - 5.0;
-        let col_offset = (x_in_text / CHAR_WIDTH).max(0.0) as usize;
-        let col = (visual_line.start_col + col_offset).min(visual_line.end_col);
-
-        // Update cursor and selection end
-        self.cursor = (visual_line.logical_line, col);
-        self.selection_end = Some(self.cursor);
     }
 }
 
@@ -329,5 +352,50 @@ mod tests {
         editor.cursor = (0, 0);
         editor.page_up();
         assert_eq!(editor.cursor.0, 0);
+    }
+
+    #[test]
+    fn test_cursor_click_cjk() {
+        use iced::Point;
+        let mut editor = CodeEditor::new("你好", "txt");
+        editor.set_line_numbers_enabled(false);
+
+        let full_char_width = editor.full_char_width();
+        let half_width = full_char_width / 2.0;
+        let padding = 5.0;
+
+        // Assume each CJK character is `full_char_width` wide.
+        // "你" is 0..full_char_width. "好" is full_char_width..2*full_char_width.
+        //
+        // Case 1: Click inside "你", at less than half its width.
+        // Expect col 0
+        editor
+            .handle_mouse_click(Point::new((half_width - 2.0) + padding, 10.0));
+
+        assert_eq!(editor.cursor, (0, 0));
+
+        // Case 2: Click inside "你", at more than half its width.
+        // Expect col 1
+        editor
+            .handle_mouse_click(Point::new((half_width + 2.0) + padding, 10.0));
+        assert_eq!(editor.cursor, (0, 1));
+
+        // Case 3: Click inside "好", at less than half its width.
+        // "好" starts at full_char_width. Offset into "好" is < half_width.
+        // Expect col 1 (start of "好")
+        editor.handle_mouse_click(Point::new(
+            (full_char_width + half_width - 2.0) + padding,
+            10.0,
+        ));
+        assert_eq!(editor.cursor, (0, 1));
+
+        // Case 4: Click inside "好", at more than half its width.
+        // "好" starts at full_char_width. Offset into "好" is > half_width.
+        // Expect col 2 (end of "好")
+        editor.handle_mouse_click(Point::new(
+            (full_char_width + half_width + 2.0) + padding,
+            10.0,
+        ));
+        assert_eq!(editor.cursor, (0, 2));
     }
 }

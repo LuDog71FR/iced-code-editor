@@ -7,7 +7,7 @@ use super::command::{
     Command, CompositeCommand, DeleteCharCommand, DeleteForwardCommand,
     InsertCharCommand, InsertNewlineCommand, ReplaceTextCommand,
 };
-use super::{CURSOR_BLINK_INTERVAL, CodeEditor, Message};
+use super::{CURSOR_BLINK_INTERVAL, CodeEditor, ImePreedit, Message};
 
 impl CodeEditor {
     /// Updates the editor state based on messages and returns scroll commands.
@@ -556,6 +556,78 @@ impl CodeEditor {
             Message::CanvasFocusLost => {
                 self.has_canvas_focus = false;
                 self.show_cursor = false;
+                self.ime_preedit = None;
+                self.cache.clear();
+                Task::none()
+            }
+            Message::ImeOpened => {
+                // IME opened event
+                // -------------------------------------------------------------
+                // Triggered when the user activates the input method.
+                // Action: clear current preedit content (ime_preedit) to accept new input.
+                // This avoids carrying over the previous composition state.
+                // -------------------------------------------------------------
+                self.ime_preedit = None;
+                self.cache.clear();
+                Task::none()
+            }
+            Message::ImePreedit(content, selection) => {
+                // IME preedit event
+                // -------------------------------------------------------------
+                // Triggered while the user is composing text but not committed yet.
+                // Params:
+                // - content: current preedit text (e.g. "ni h").
+                // - selection: caret/selection inside the preedit text.
+                //
+                // Note: Iced provides selection as a byte index range, not character indices.
+                // When rendering or slicing, use UTF-8 byte offsets to avoid panics.
+                // -------------------------------------------------------------
+                if content.is_empty() {
+                    self.ime_preedit = None;
+                } else {
+                    self.ime_preedit = Some(ImePreedit {
+                        content: content.clone(),
+                        selection: selection.clone(),
+                    });
+                }
+
+                self.cache.clear();
+                Task::none()
+            }
+            Message::ImeCommit(text) => {
+                // IME commit event
+                // -------------------------------------------------------------
+                // Triggered when the user confirms a candidate and commits text.
+                // Actions:
+                // 1. Clear preedit state (ime_preedit = None).
+                // 2. If text is not empty, insert it at the current cursor position.
+                // 3. Begin a "Typing" undo group so consecutive IME commits undo together.
+                // -------------------------------------------------------------
+                self.ime_preedit = None;
+
+                if text.is_empty() {
+                    self.cache.clear();
+                    return Task::none();
+                }
+
+                if !self.is_grouping {
+                    self.history.begin_group("Typing");
+                    self.is_grouping = true;
+                }
+
+                self.paste_text(text);
+                self.reset_cursor_blink();
+                self.refresh_search_matches_if_needed();
+                self.cache.clear();
+                self.scroll_to_cursor()
+            }
+            Message::ImeClosed => {
+                // IME closed event
+                // -------------------------------------------------------------
+                // Triggered when the input method is closed or loses focus.
+                // Action: clear preedit state to return to normal input mode.
+                // -------------------------------------------------------------
+                self.ime_preedit = None;
                 self.cache.clear();
                 Task::none()
             }
@@ -703,6 +775,30 @@ mod tests {
         // Should do nothing if there's no selection
         assert_eq!(editor.buffer.line(0), "hello world");
         assert_eq!(editor.cursor, (0, 5));
+    }
+
+    #[test]
+    fn test_ime_preedit_and_commit_chinese() {
+        let mut editor = CodeEditor::new("", "py");
+        // Simulate IME opened
+        let _ = editor.update(&Message::ImeOpened);
+        assert!(editor.ime_preedit.is_none());
+
+        // Preedit with Chinese content and a selection range
+        let content = "安全与合规".to_string();
+        let selection = Some(0..3); // range aligned to UTF-8 character boundary
+        let _ = editor
+            .update(&Message::ImePreedit(content.clone(), selection.clone()));
+
+        assert!(editor.ime_preedit.is_some());
+        assert_eq!(editor.ime_preedit.as_ref().unwrap().content, content);
+        assert_eq!(editor.ime_preedit.as_ref().unwrap().selection, selection);
+
+        // Commit should insert the text and clear preedit
+        let _ = editor.update(&Message::ImeCommit("安全与合规".to_string()));
+        assert!(editor.ime_preedit.is_none());
+        assert_eq!(editor.buffer.line(0), "安全与合规");
+        assert_eq!(editor.cursor, (0, "安全与合规".chars().count()));
     }
 
     #[test]

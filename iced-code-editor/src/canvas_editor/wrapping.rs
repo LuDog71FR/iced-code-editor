@@ -5,8 +5,9 @@
 //! (dynamic) and fixed column wrapping.
 
 use crate::text_buffer::TextBuffer;
+use std::cmp::Ordering;
 
-use super::CHAR_WIDTH;
+use super::compare_floats;
 
 /// Represents a visual line segment in the editor.
 ///
@@ -62,6 +63,10 @@ pub struct WrappingCalculator {
     wrap_enabled: bool,
     /// Fixed wrap column (None = wrap at viewport width)
     wrap_column: Option<usize>,
+    /// Full chat with for wide characters
+    full_char_width: f32,
+    /// Character width for narrow characters
+    char_width: f32,
 }
 
 impl WrappingCalculator {
@@ -71,6 +76,8 @@ impl WrappingCalculator {
     ///
     /// * `wrap_enabled` - Whether line wrapping is enabled
     /// * `wrap_column` - Fixed wrap column, or None for viewport-based wrapping
+    /// * `full_char_width` - Full chat with in pixels
+    /// * `char_width` - Character width in pixels
     ///
     /// # Example
     ///
@@ -78,13 +85,18 @@ impl WrappingCalculator {
     /// use iced_code_editor::canvas_editor::wrapping::WrappingCalculator;
     ///
     /// // Wrap at viewport width
-    /// let calc = WrappingCalculator::new(true, None);
+    /// let calc = WrappingCalculator::new(true, None, 14.0, 8.4);
     ///
     /// // Wrap at 80 characters
-    /// let calc = WrappingCalculator::new(true, Some(80));
+    /// let calc = WrappingCalculator::new(true, Some(80), 14.0, 8.4);
     /// ```
-    pub fn new(wrap_enabled: bool, wrap_column: Option<usize>) -> Self {
-        Self { wrap_enabled, wrap_column }
+    pub fn new(
+        wrap_enabled: bool,
+        wrap_column: Option<usize>,
+        full_char_width: f32,
+        char_width: f32,
+    ) -> Self {
+        Self { wrap_enabled, wrap_column, full_char_width, char_width }
     }
 
     /// Calculates all visual lines from the text buffer.
@@ -113,40 +125,68 @@ impl WrappingCalculator {
                 .collect();
         }
 
-        // Calculate wrap width in characters
-        let wrap_width =
-            self.calculate_wrap_width(viewport_width, gutter_width);
+        // Calculate wrap width in pixels
+        // If wrap_column is set, width is columns * character width.
+        // Otherwise, use viewport width minus gutter width.
+        let wrap_width_pixels = if let Some(cols) = self.wrap_column {
+            cols as f32 * self.char_width
+        } else {
+            (viewport_width - gutter_width).max(self.char_width)
+        };
 
         let mut visual_lines = Vec::new();
 
         for logical_line in 0..text_buffer.line_count() {
-            let line_len = text_buffer.line_len(logical_line);
+            let line_content = text_buffer.line(logical_line);
 
-            if line_len <= wrap_width {
-                // Line fits in one segment
-                visual_lines.push(VisualLine::new(
-                    logical_line,
-                    0,
-                    0,
-                    line_len,
-                ));
-            } else {
-                // Split line into segments
-                let mut start_col = 0;
-                let mut segment_index = 0;
+            if line_content.is_empty() {
+                visual_lines.push(VisualLine::new(logical_line, 0, 0, 0));
+                continue;
+            }
 
-                while start_col < line_len {
-                    let end_col = (start_col + wrap_width).min(line_len);
+            let mut segment_index = 0;
+            let mut current_width = 0.0;
+            let mut current_segment_start_col = 0;
+
+            for (i, c) in line_content.chars().enumerate() {
+                // Compute pixel width for the current character
+                let char_width = super::measure_char_width(
+                    c,
+                    self.full_char_width,
+                    self.char_width,
+                );
+
+                // If adding the current character exceeds wrap width, wrap at the previous char.
+                // Ensure at least one character per segment even if a single char exceeds wrap_width.
+                // Use epsilon to handle floating-point error.
+                if compare_floats(current_width + char_width, wrap_width_pixels)
+                    == Ordering::Greater
+                    && i > current_segment_start_col
+                {
+                    // Create a new visual segment
                     visual_lines.push(VisualLine::new(
                         logical_line,
                         segment_index,
-                        start_col,
-                        end_col,
+                        current_segment_start_col,
+                        i, // end_col is exclusive (current char belongs to next line)
                     ));
-                    start_col = end_col;
+
                     segment_index += 1;
+                    current_segment_start_col = i;
+                    current_width = 0.0;
                 }
+
+                current_width += char_width;
             }
+
+            // Push remaining segment
+            // Add the last segment of the logical line
+            visual_lines.push(VisualLine::new(
+                logical_line,
+                segment_index,
+                current_segment_start_col,
+                line_content.chars().count(),
+            ));
         }
 
         visual_lines
@@ -190,42 +230,17 @@ impl WrappingCalculator {
                 })
             })
     }
-
-    /// Calculates the wrap width in characters.
-    ///
-    /// # Arguments
-    ///
-    /// * `viewport_width` - Width of the viewport in pixels
-    /// * `gutter_width` - Width of the gutter in pixels
-    ///
-    /// # Returns
-    ///
-    /// Maximum number of characters per line
-    fn calculate_wrap_width(
-        &self,
-        viewport_width: f32,
-        gutter_width: f32,
-    ) -> usize {
-        match self.wrap_column {
-            Some(col) => col,
-            None => {
-                // Calculate based on viewport width
-                let available_width = viewport_width - gutter_width - 10.0; // Margins
-                let chars = (available_width / CHAR_WIDTH) as usize;
-                chars.max(20) // Minimum 20 characters
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::canvas_editor::{CHAR_WIDTH, FONT_SIZE};
 
     #[test]
     fn test_no_wrap_when_disabled() {
         let buffer = TextBuffer::new("line 1\nline 2\nline 3");
-        let calc = WrappingCalculator::new(false, None);
+        let calc = WrappingCalculator::new(false, None, FONT_SIZE, CHAR_WIDTH);
         let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
 
         assert_eq!(visual_lines.len(), 3);
@@ -238,7 +253,8 @@ mod tests {
     fn test_wrap_at_fixed_column() {
         let buffer =
             TextBuffer::new("this is a very long line that should be wrapped");
-        let calc = WrappingCalculator::new(true, Some(10));
+        let calc =
+            WrappingCalculator::new(true, Some(10), FONT_SIZE, CHAR_WIDTH);
         let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
 
         // Line is 47 chars, should wrap into 5 segments (10+10+10+10+7)
@@ -255,7 +271,8 @@ mod tests {
     fn test_logical_to_visual_mapping() {
         let buffer =
             TextBuffer::new("short\nthis is a very long line that wraps\nend");
-        let calc = WrappingCalculator::new(true, Some(15));
+        let calc =
+            WrappingCalculator::new(true, Some(15), FONT_SIZE, CHAR_WIDTH);
         let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
 
         // First line (short) - no wrap
@@ -286,7 +303,8 @@ mod tests {
     #[test]
     fn test_wrap_empty_lines() {
         let buffer = TextBuffer::new("line1\n\nline3");
-        let calc = WrappingCalculator::new(true, Some(10));
+        let calc =
+            WrappingCalculator::new(true, Some(10), FONT_SIZE, CHAR_WIDTH);
         let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
 
         assert_eq!(visual_lines.len(), 3);
@@ -298,7 +316,8 @@ mod tests {
     fn test_wrap_very_long_line() {
         let long_text = "a".repeat(100);
         let buffer = TextBuffer::new(&long_text);
-        let calc = WrappingCalculator::new(true, Some(20));
+        let calc =
+            WrappingCalculator::new(true, Some(20), FONT_SIZE, CHAR_WIDTH);
         let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
 
         // 100 chars / 20 per line = 5 lines
@@ -313,5 +332,35 @@ mod tests {
 
         assert!(vl1.is_first_segment());
         assert!(!vl2.is_first_segment());
+    }
+
+    #[test]
+    fn test_wrap_cjk() {
+        // CJK characters are wide (FONT_SIZE = 14.0)
+        // Latin characters are narrow (CHAR_WIDTH = 8.4)
+        // Wrap width = 10 columns * 8.4 = 84.0 pixels
+
+        // 6 CJK characters = 6 * 14.0 = 84.0 pixels. Matches exactly.
+        let text = "你好世界你好"; // 6 chars
+        let buffer = TextBuffer::new(text);
+        let calc =
+            WrappingCalculator::new(true, Some(10), FONT_SIZE, CHAR_WIDTH); // 84.0 px
+        let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
+
+        assert_eq!(visual_lines.len(), 1);
+        assert_eq!(visual_lines[0].len(), 6);
+
+        // 7 CJK characters = 7 * 14.0 = 98.0 pixels.
+        // Wrap width is 84.0 pixels.
+        // First 6 chars = 6 * 14.0 = 84.0 pixels. They fit exactly (84.0 <= 84.0).
+        // 7th char adds 14.0, total 98.0 > 84.0. Triggers wrap before 7th char.
+        let text = "你好世界你好世"; // 7 chars
+        let buffer = TextBuffer::new(text);
+        let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
+
+        assert_eq!(visual_lines.len(), 2);
+        assert_eq!(visual_lines[0].len(), 6); // First 6 fit
+        assert_eq!(visual_lines[1].len(), 1); // 7th wraps
+        assert_eq!(visual_lines[1].start_col, 6); // Starts at 7th char (index 6)
     }
 }

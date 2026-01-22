@@ -1,12 +1,15 @@
 //! Iced UI view and rendering logic.
 
+use iced::Size;
+use iced::advanced::input_method;
 use iced::widget::canvas::Canvas;
 use iced::widget::{Row, Scrollable, Space, container, scrollable};
-use iced::{Background, Border, Color, Element, Length, Shadow};
+use iced::{Background, Border, Color, Element, Length, Rectangle, Shadow};
 
+use super::ime_requester::ImeRequester;
 use super::search_dialog;
 use super::wrapping::WrappingCalculator;
-use super::{CodeEditor, GUTTER_WIDTH, LINE_HEIGHT, Message};
+use super::{CodeEditor, GUTTER_WIDTH, Message};
 
 impl CodeEditor {
     /// Creates the view element with scrollable wrapper.
@@ -16,8 +19,12 @@ impl CodeEditor {
     pub fn view(&self) -> Element<'_, Message> {
         // Calculate total content height based on actual lines
         // When wrapping is enabled, use visual line count
-        let wrapping_calc =
-            WrappingCalculator::new(self.wrap_enabled, self.wrap_column);
+        let wrapping_calc = WrappingCalculator::new(
+            self.wrap_enabled,
+            self.wrap_column,
+            self.full_char_width,
+            self.char_width,
+        );
 
         // Use viewport width for calculating visual lines
         let visual_lines = wrapping_calc.calculate_visual_lines(
@@ -27,7 +34,7 @@ impl CodeEditor {
         );
 
         let total_visual_lines = visual_lines.len();
-        let content_height = total_visual_lines as f32 * LINE_HEIGHT;
+        let content_height = total_visual_lines as f32 * self.line_height;
 
         // Use max of content height and viewport height to ensure the canvas
         // always covers the visible area (prevents visual artifacts when
@@ -144,6 +151,58 @@ impl CodeEditor {
                 // Scrollable layer (top) - transparent, overlays the backgrounds
                 scrollable,
             );
+
+        let ime_enabled = self.is_focused() && self.has_canvas_focus;
+        let cursor_rect = if ime_enabled {
+            if let Some(cursor_visual) = WrappingCalculator::logical_to_visual(
+                &visual_lines,
+                self.cursor.0,
+                self.cursor.1,
+            ) {
+                let vl = &visual_lines[cursor_visual];
+                let line_content = self.buffer.line(vl.logical_line);
+                let prefix_len = self.cursor.1.saturating_sub(vl.start_col);
+                let prefix_text: String = line_content
+                    .chars()
+                    .skip(vl.start_col)
+                    .take(prefix_len)
+                    .collect();
+                let cursor_x = self.gutter_width()
+                    + 5.0
+                    + super::measure_text_width(
+                        &prefix_text,
+                        self.full_char_width,
+                        self.char_width,
+                    );
+
+                // Calculate visual Y position relative to the viewport
+                // We subtract viewport_scroll because the content is scrolled up/down
+                // but the cursor position sent to IME must be relative to the visible area
+                let cursor_y = (cursor_visual as f32 * self.line_height)
+                    - self.viewport_scroll;
+
+                Rectangle::new(
+                    iced::Point::new(cursor_x, cursor_y + 2.0),
+                    Size::new(2.0, self.line_height - 4.0),
+                )
+            } else {
+                Rectangle::new(iced::Point::new(0.0, 0.0), Size::new(0.0, 0.0))
+            }
+        } else {
+            Rectangle::new(iced::Point::new(0.0, 0.0), Size::new(0.0, 0.0))
+        };
+
+        let preedit =
+            self.ime_preedit.as_ref().map(|p| input_method::Preedit {
+                content: p.content.clone(),
+                selection: p.selection.clone(),
+                text_size: None,
+            });
+
+        // Invisible IME request layer: sends IME state and caret on each redraw
+        // Note: Canvas Program cannot access Shell directly, so this widget bridges it
+        let ime_layer = ImeRequester::new(ime_enabled, cursor_rect, preedit);
+        editor_stack = editor_stack.push(iced::Element::new(ime_layer));
 
         // Add search dialog overlay if open
         if self.search_state.is_open {
