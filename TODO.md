@@ -2,11 +2,12 @@
 
 ## Bugs
 
-fix: text disappear when scrolling with mouse
-fix: ghost cursor and line highlight appears when scrolling or resizing window
-fix: keyboard events are interpreted when editor has no more the focus
+- Ghost cursor and line highlight appears when scrolling or resizing window #8
+- Text disappear when scrolling with mouse #6
 
 ## Features
+
+- feat: Handle focus without the needs to check if mouse is out of bounds #10
 
 1. **Multiple cursors**
 
