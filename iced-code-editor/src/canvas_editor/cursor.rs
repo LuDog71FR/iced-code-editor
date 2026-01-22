@@ -166,7 +166,11 @@ impl CodeEditor {
         let mut col_offset = 0;
 
         for c in segment_text.chars() {
-            let char_width = super::measure_char_width(c, self.full_char_width, self.char_width);
+            let char_width = super::measure_char_width(
+                c,
+                self.full_char_width,
+                self.char_width,
+            );
 
             if current_width + char_width / 2.0 > x_in_text {
                 break;

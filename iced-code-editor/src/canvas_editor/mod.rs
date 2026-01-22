@@ -3,9 +3,11 @@
 //! This module provides a custom Canvas widget that handles all text rendering
 //! and input directly, bypassing Iced's higher-level widgets for optimal speed.
 
+use iced::advanced::text::{
+    Alignment, Paragraph, Renderer as TextRenderer, Text,
+};
 use iced::widget::operation::{RelativeOffset, snap_to};
 use iced::widget::{Id, canvas};
-use iced::advanced::text::{Paragraph, Text, Renderer as TextRenderer, Alignment};
 use std::cmp::Ordering as CmpOrdering;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,7 +48,11 @@ pub(crate) const CURSOR_BLINK_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(530);
 
 /// Measures the width of a single character.
-pub(crate) fn measure_char_width(c: char, full_char_width: f32, char_width: f32) -> f32 {
+pub(crate) fn measure_char_width(
+    c: char,
+    full_char_width: f32,
+    char_width: f32,
+) -> f32 {
     match c.width() {
         Some(w) if w > 1 => full_char_width,
         Some(_) => char_width,
@@ -351,7 +357,7 @@ impl CodeEditor {
         if self.char_width.is_infinite() {
             self.char_width = self.font_size / 2.0; // Rough estimate for monospace
         }
-        
+
         if self.full_char_width.is_infinite() {
             self.full_char_width = self.font_size;
         }
@@ -374,7 +380,7 @@ impl CodeEditor {
             bounds: iced::Size::new(f32::INFINITY, f32::INFINITY),
             align_x: Alignment::Left,
             align_y: iced::alignment::Vertical::Top,
-            shaping: iced::advanced::text::Shaping::Advanced,           
+            shaping: iced::advanced::text::Shaping::Advanced,
             wrapping: iced::advanced::text::Wrapping::default(),
         };
         let p = <iced::Renderer as TextRenderer>::Paragraph::with_text(text);
@@ -1076,21 +1082,18 @@ mod tests {
     #[test]
     fn test_measure_single_char_width() {
         let editor = CodeEditor::new("", "rs");
-        
+
         // Measure 'a'
         let width_a = editor.measure_single_char_width("a");
         assert!(width_a > 0.0, "Width of 'a' should be positive");
-        
-        // Measure 'W' (usually wider than 'a' in proportional fonts, but this is monospace)
-        // In monospace, they should be roughly equal or equal.
-        // But iced::Font::MONOSPACE might not be strictly monospace in all environments? 
-        // It should be.
-        let width_w = editor.measure_single_char_width("W");
-        
+
         // Measure Chinese char
         let width_cjk = editor.measure_single_char_width("汉");
-        assert!(width_cjk > width_a, "Width of '汉' should be greater than 'a'");
-        
+        assert!(
+            width_cjk > width_a,
+            "Width of '汉' should be greater than 'a'"
+        );
+
         // Check that width_cjk is roughly double of width_a (common in terminal fonts)
         // but we just check it is significantly larger
         assert!(width_cjk >= width_a * 1.5);

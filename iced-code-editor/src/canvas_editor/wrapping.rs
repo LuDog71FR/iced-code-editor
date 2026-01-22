@@ -150,7 +150,11 @@ impl WrappingCalculator {
 
             for (i, c) in line_content.chars().enumerate() {
                 // Compute pixel width for the current character
-                let char_width = super::measure_char_width(c, self.full_char_width, self.char_width);
+                let char_width = super::measure_char_width(
+                    c,
+                    self.full_char_width,
+                    self.char_width,
+                );
 
                 // If adding the current character exceeds wrap width, wrap at the previous char.
                 // Ensure at least one character per segment even if a single char exceeds wrap_width.
@@ -346,7 +350,10 @@ mod tests {
         assert_eq!(visual_lines.len(), 1);
         assert_eq!(visual_lines[0].len(), 6);
 
-        // 7 CJK characters = 7 * 14.0 = 98.0 pixels. Should wrap.
+        // 7 CJK characters = 7 * 14.0 = 98.0 pixels.
+        // Wrap width is 84.0 pixels.
+        // First 6 chars = 6 * 14.0 = 84.0 pixels. They fit exactly (84.0 <= 84.0).
+        // 7th char adds 14.0, total 98.0 > 84.0. Triggers wrap before 7th char.
         let text = "你好世界你好世"; // 7 chars
         let buffer = TextBuffer::new(text);
         let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
@@ -354,5 +361,6 @@ mod tests {
         assert_eq!(visual_lines.len(), 2);
         assert_eq!(visual_lines[0].len(), 6); // First 6 fit
         assert_eq!(visual_lines[1].len(), 1); // 7th wraps
+        assert_eq!(visual_lines[1].start_col, 6); // Starts at 7th char (index 6)
     }
 }

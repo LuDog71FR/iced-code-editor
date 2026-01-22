@@ -41,7 +41,8 @@ fn calculate_segment_geometry(
     let prefix_len = segment_start_col.saturating_sub(visual_start_col);
     let prefix_text: String =
         line_content.chars().skip(visual_start_col).take(prefix_len).collect();
-    let prefix_width = measure_text_width(&prefix_text, full_char_width, char_width);
+    let prefix_width =
+        measure_text_width(&prefix_text, full_char_width, char_width);
 
     // Calculate segment width
     let segment_len = segment_end_col.saturating_sub(segment_start_col);
