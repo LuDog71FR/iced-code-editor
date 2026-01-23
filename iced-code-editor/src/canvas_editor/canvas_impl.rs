@@ -18,14 +18,19 @@ fn is_cursor_in_bounds(cursor: &mouse::Cursor, bounds: Rectangle) -> bool {
 
 /// Computes geometry (x start and width) for a text segment used in rendering or highlighting.
 ///
-/// Returns: (x_start, width)
+/// # Arguments
 ///
-/// Parameters:
-/// - `line_content`: full text content of the current line.
-/// - `visual_start_col`: start column index of the current visual line.
-/// - `segment_start_col`: start column index of the target segment (e.g. highlight).
-/// - `segment_end_col`: end column index of the target segment.
-/// - `base_offset`: base X offset (usually gutter_width + padding).
+/// * `line_content`: full text content of the current line.
+/// * `visual_start_col`: start column index of the current visual line.
+/// * `segment_start_col`: start column index of the target segment (e.g. highlight).
+/// * `segment_end_col`: end column index of the target segment.
+/// * `base_offset`: base X offset (usually gutter_width + padding).
+///
+/// # Returns
+///
+/// x_start, width
+///
+/// # Remark
 ///
 /// This function handles CJK character widths correctly to keep highlights accurate.
 fn calculate_segment_geometry(
@@ -64,6 +69,20 @@ use iced::widget::canvas::Action;
 impl canvas::Program<Message> for CodeEditor {
     type State = ();
 
+    /// Renders the code editor's visual elements on the canvas, including text layout, syntax highlighting,
+    /// cursor positioning, and other graphical aspects.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The current state of the canvas
+    /// * `renderer` - The renderer used for drawing
+    /// * `theme` - The theme for styling
+    /// * `bounds` - The rectangle bounds of the canvas
+    /// * `cursor` - The mouse cursor position
+    ///
+    /// # Returns
+    ///
+    /// A vector of `Geometry` objects representing the drawn elements
     fn draw(
         &self,
         _state: &Self::State,
@@ -764,6 +783,18 @@ impl canvas::Program<Message> for CodeEditor {
         vec![geometry]
     }
 
+    /// Handles Canvas trait events, specifically keyboard input events and focus management for the code editor widget.
+    ///
+    /// # Arguments
+    ///
+    /// * `_state` - The mutable state of the canvas (unused in this implementation)
+    /// * `event` - The input event to handle, such as keyboard presses
+    /// * `bounds` - The rectangle bounds of the canvas widget
+    /// * `cursor` - The current mouse cursor position and status
+    ///
+    /// # Returns
+    ///
+    /// An optional `Action<Message>` to perform, such as sending a message or redrawing the canvas
     fn update(
         &self,
         _state: &mut Self::State,

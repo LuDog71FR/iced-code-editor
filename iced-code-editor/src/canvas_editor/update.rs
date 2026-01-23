@@ -14,11 +14,10 @@ impl CodeEditor {
     ///
     /// # Arguments
     ///
-    /// * `message` - The message to process
+    /// * `message` - The message to process for updating the editor state
     ///
     /// # Returns
-    ///
-    /// A Task that may contain scroll commands to keep cursor visible
+    /// A `Task<Message>` for any asynchronous operations, such as scrolling to keep the cursor visible after state updates
     pub fn update(&mut self, message: &Message) -> Task<Message> {
         match message {
             Message::CharacterInput(ch) => {

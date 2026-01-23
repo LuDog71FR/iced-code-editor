@@ -48,6 +48,16 @@ pub(crate) const CURSOR_BLINK_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(530);
 
 /// Measures the width of a single character.
+///
+/// # Arguments
+///
+/// * `c` - The character to measure
+/// * `full_char_width` - The width of a full-width character
+/// * `char_width` - The width of the character
+///
+/// # Returns
+///
+/// The calculated width of the character as a `f32`
 pub(crate) fn measure_char_width(
     c: char,
     full_char_width: f32,
@@ -65,6 +75,16 @@ pub(crate) fn measure_char_width(
 /// - Wide characters (e.g. Chinese) use FONT_SIZE.
 /// - Narrow characters (e.g. Latin) use CHAR_WIDTH.
 /// - Control characters have width 0.
+///
+/// # Arguments
+///
+/// * `text` - The text string to measure
+/// * `full_char_width` - The width of a full-width character
+/// * `char_width` - The width of a regular character
+///
+/// # Returns
+/// 
+/// The total calculated width of the text as a `f32`
 pub(crate) fn measure_text_width(
     text: &str,
     full_char_width: f32,
@@ -80,10 +100,16 @@ pub(crate) const EPSILON: f32 = 0.001;
 
 /// Compares two floating point numbers with a small epsilon tolerance.
 ///
-/// Returns:
-/// - `Ordering::Equal` if `abs(a - b) < EPSILON`
-/// - `Ordering::Greater` if `a > b` (and not equal)
-/// - `Ordering::Less` if `a < b` (and not equal)
+/// # Arguments
+///
+/// * `a` - first float number
+/// * `b` - second float number
+///
+/// # Returns
+///
+/// * `Ordering::Equal` if `abs(a - b) < EPSILON`
+/// * `Ordering::Greater` if `a > b` (and not equal)
+/// * `Ordering::Less` if `a < b` (and not equal)
 pub(crate) fn compare_floats(a: f32, b: f32) -> CmpOrdering {
     if (a - b).abs() < EPSILON {
         CmpOrdering::Equal
