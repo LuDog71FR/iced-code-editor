@@ -1,7 +1,6 @@
 //! Internationalization support for the code editor.
 //!
 //! This module provides translation support for UI text in the search dialog.
-//! Currently supports English, French, and Spanish.
 //!
 //! # Using rust-i18n
 //!
