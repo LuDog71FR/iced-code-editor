@@ -273,7 +273,7 @@ pub fn find_matches(
             std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
 
         if num_threads > 1 {
-            let chunk_size = (line_count + num_threads - 1) / num_threads;
+            let chunk_size = line_count.div_ceil(num_threads);
 
             return thread::scope(|s| {
                 let mut handles = Vec::with_capacity(num_threads);
@@ -302,11 +302,9 @@ pub fn find_matches(
                 for handle in handles {
                     if let Ok(mut chunk_matches) = handle.join() {
                         matches.append(&mut chunk_matches);
-                        if let Some(l) = limit {
-                            if matches.len() >= l {
-                                matches.truncate(l);
-                                break;
-                            }
+                        if let Some(l) = limit && matches.len() >= l {
+                            matches.truncate(l);
+                            break;
                         }
                     }
                 }
@@ -370,10 +368,8 @@ fn find_matches_in_range(
 
     for line_idx in start_line..end_line {
         // Stop if we have enough matches
-        if let Some(l) = limit {
-            if matches.len() >= l {
-                break;
-            }
+        if let Some(l) = limit && matches.len() >= l {
+            break;
         }
 
         let line = buffer.line(line_idx);
