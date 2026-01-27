@@ -141,25 +141,26 @@ impl canvas::Program<Message> for CodeEditor {
                 _ => syntax_set.find_syntax_by_extension(self.syntax.as_str()),
             }.or(Some(syntax_set.find_syntax_plain_text()));
 
-            let (start_idx, end_idx) = if self.cache_window_end_line
-                > self.cache_window_start_line
-            {
-                let s = self
-                    .cache_window_start_line
-                    .min(visual_lines.len());
-                let e =
-                    self.cache_window_end_line.min(visual_lines.len());
-                (s, e)
-            } else {
-                (first_visible_line, last_visible_line)
-            };
+            // Choose the render range:
+            // - If a cache window is defined, render that larger window
+            //   to avoid frequent cache clears as the user scrolls.
+            // - Otherwise, render only the current visible range.
+            let (start_idx, end_idx) =
+                if self.cache_window_end_line > self.cache_window_start_line {
+                    let s =
+                        self.cache_window_start_line.min(visual_lines.len());
+                    let e =
+                        self.cache_window_end_line.min(visual_lines.len());
+                    (s, e)
+                } else {
+                    (first_visible_line, last_visible_line)
+                };
 
-            // Draw only visible lines (virtual scrolling optimization)
             for (idx, visual_line) in visual_lines
                 .iter()
                 .enumerate()
-                .skip(first_visible_line)
-                .take(last_visible_line - first_visible_line)
+                .skip(start_idx)
+                .take(end_idx.saturating_sub(start_idx))
             {
                 let y = idx as f32 * self.line_height;
 

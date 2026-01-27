@@ -192,6 +192,15 @@ pub struct CodeEditor {
     pub(crate) line_height: f32,
     /// Character width in pixels
     pub(crate) char_width: f32,
+    /// Cached render window: the first visual line index included in the cache.
+    /// We keep a larger window than the currently visible range to avoid clearing
+    /// the canvas cache on every small scroll. Only when scrolling crosses the
+    /// window boundary do we re-window and clear the cache.
+    pub(crate) last_first_visible_line: usize,
+    /// Cached render window start line (inclusive)
+    pub(crate) cache_window_start_line: usize,
+    /// Cached render window end line (exclusive)
+    pub(crate) cache_window_end_line: usize,
 }
 
 /// Messages emitted by the code editor
@@ -341,6 +350,12 @@ impl CodeEditor {
             full_char_width: CHAR_WIDTH * 2.0,
             line_height: LINE_HEIGHT,
             char_width: CHAR_WIDTH,
+            // Initialize render window tracking for virtual scrolling:
+            // these indices define the cached visual line window. The window is
+            // expanded beyond the visible range to amortize redraws and keep scrolling smooth.
+            last_first_visible_line: 0,
+            cache_window_start_line: 0,
+            cache_window_end_line: 0,
         };
 
         // Perform initial character dimension calculation
