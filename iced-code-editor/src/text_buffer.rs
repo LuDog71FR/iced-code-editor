@@ -151,6 +151,32 @@ impl TextBuffer {
         }
     }
 
+    /// Replaces a range of characters in a line with new text.
+    ///
+    /// # Arguments
+    ///
+    /// * `line` - Line index
+    /// * `col_start` - Column position to start replacing
+    /// * `length` - Number of characters to replace
+    /// * `new_text` - The text to insert
+    pub fn replace_range(
+        &mut self,
+        line: usize,
+        col_start: usize,
+        length: usize,
+        new_text: &str,
+    ) {
+        if line >= self.lines.len() {
+            return;
+        }
+
+        let line_str = &mut self.lines[line];
+        let start_byte = Self::char_to_byte_index(line_str, col_start);
+        let end_byte = Self::char_to_byte_index(line_str, col_start + length);
+
+        line_str.replace_range(start_byte..end_byte, new_text);
+    }
+
     /// Converts a character index to a byte index in a string.
     ///
     /// # Arguments
@@ -244,5 +270,21 @@ mod tests {
     fn test_to_string() {
         let buffer = TextBuffer::new("line1\nline2\nline3");
         assert_eq!(buffer.to_string(), "line1\nline2\nline3");
+    }
+
+    #[test]
+    fn test_replace_range() {
+        let mut buffer = TextBuffer::new("hello world");
+        // Replace "world" with "rust"
+        buffer.replace_range(0, 6, 5, "rust");
+        assert_eq!(buffer.line(0), "hello rust");
+
+        // Replace "hello" with "hi"
+        buffer.replace_range(0, 0, 5, "hi");
+        assert_eq!(buffer.line(0), "hi rust");
+
+        // Insert at end
+        buffer.replace_range(0, 7, 0, "!");
+        assert_eq!(buffer.line(0), "hi rust!");
     }
 }
