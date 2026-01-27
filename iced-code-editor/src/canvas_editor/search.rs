@@ -277,7 +277,8 @@ pub fn find_matches(
             matches.push(SearchMatch { line: line_idx, col });
 
             // Move past this match to find next occurrence
-            start_pos = absolute_pos + 1;
+            // Use search_query.len() to avoid overlapping matches and ensure we land on UTF-8 character boundary
+            start_pos = absolute_pos + search_query.len();
         }
     }
 
