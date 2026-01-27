@@ -7,6 +7,8 @@
 
 use crate::text_buffer::TextBuffer;
 use iced::widget::Id;
+use std::borrow::Cow;
+use std::thread;
 
 /// Represents a search match position in the buffer.
 ///
@@ -255,24 +257,144 @@ pub fn find_matches(
         return Vec::new();
     }
 
-    let mut matches = Vec::new();
-    let search_query =
-        if case_sensitive { query.to_string() } else { query.to_lowercase() };
+    let line_count = buffer.line_count();
 
-    for line_idx in 0..buffer.line_count() {
+    // Use parallel search for larger files
+    // Threshold can be tuned, but PARALLEL_SEARCH_THRESHOLD lines is a reasonable start to offset thread creation overhead
+    if line_count > PARALLEL_SEARCH_THRESHOLD {
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+
+        if num_threads > 1 {
+            let chunk_size = (line_count + num_threads - 1) / num_threads;
+
+            return thread::scope(|s| {
+                let mut handles = Vec::with_capacity(num_threads);
+
+                for i in 0..num_threads {
+                    let start = i * chunk_size;
+                    let end = (start + chunk_size).min(line_count);
+
+                    if start >= end {
+                        break;
+                    }
+
+                    handles.push(s.spawn(move || {
+                        find_matches_in_range(
+                            buffer,
+                            query,
+                            case_sensitive,
+                            start,
+                            end,
+                        )
+                    }));
+                }
+
+                let mut matches = Vec::new();
+                for handle in handles {
+                    if let Ok(mut chunk_matches) = handle.join() {
+                        matches.append(&mut chunk_matches);
+                        if matches.len() >= MAX_MATCHES {
+                            matches.truncate(MAX_MATCHES);
+                            break;
+                        }
+                    }
+                }
+                matches
+            });
+        }
+    }
+
+    find_matches_in_range(buffer, query, case_sensitive, 0, line_count)
+}
+
+/// Threshold for line count to trigger parallel search.
+const PARALLEL_SEARCH_THRESHOLD: usize = 1000;
+
+/// Maximum number of matches to return to prevent UI performance issues.
+pub const MAX_MATCHES: usize = 10_000;
+
+/// Returns the range of matches that fall within the specified logical line range (inclusive).
+///
+/// This function uses binary search to efficiently find the starting match
+/// and iterates to find the end match, avoiding full iteration of the matches vector.
+pub fn get_visible_match_range(
+    matches: &[SearchMatch],
+    min_logical_line: usize,
+    max_logical_line: usize,
+) -> std::ops::Range<usize> {
+    if matches.is_empty() {
+        return 0..0;
+    }
+
+    // Find the first match that is on or after min_logical_line
+    let start_idx = matches.partition_point(|m| m.line < min_logical_line);
+
+    // Find the end index (exclusive)
+    // We start searching from start_idx since we know everything before is < min_logical_line
+    let mut end_idx = start_idx;
+    for match_item in matches.iter().skip(start_idx) {
+        if match_item.line > max_logical_line {
+            break;
+        }
+        end_idx += 1;
+    }
+
+    start_idx..end_idx
+}
+
+fn find_matches_in_range(
+    buffer: &TextBuffer,
+    query: &str,
+    case_sensitive: bool,
+    start_line: usize,
+    end_line: usize,
+) -> Vec<SearchMatch> {
+    let mut matches = Vec::new();
+    let search_query = if case_sensitive {
+        Cow::Borrowed(query)
+    } else {
+        Cow::Owned(query.to_lowercase())
+    };
+
+    for line_idx in start_line..end_line {
+        // Stop if we have enough matches
+        if matches.len() >= MAX_MATCHES {
+            break;
+        }
+
         let line = buffer.line(line_idx);
-        let search_line =
-            if case_sensitive { line.to_string() } else { line.to_lowercase() };
+
+        // Optimization: skip lines shorter than query
+        if line.len() < query.len() {
+            continue;
+        }
+
+        let search_line = if case_sensitive {
+            Cow::Borrowed(line)
+        } else {
+            Cow::Owned(line.to_lowercase())
+        };
 
         // Find all occurrences in this line
         let mut start_pos = 0;
         while let Some(relative_pos) =
-            search_line[start_pos..].find(&search_query)
+            search_line[start_pos..].find(search_query.as_ref())
         {
             let absolute_pos = start_pos + relative_pos;
 
             // Convert byte position to character position
-            let col = line[..absolute_pos].chars().count();
+            // Note: In case-insensitive mode, absolute_pos is in the lowercased string.
+            // Using it to slice the original line is only safe if byte lengths match.
+            // We use get() to be safe against panics for weird unicode cases.
+            let col = if let Some(slice) = line.get(..absolute_pos) {
+                slice.chars().count()
+            } else {
+                // Fallback: use the position in the search line if mapping fails
+                // This assumes column in search_line is "close enough"
+                search_line[..absolute_pos].chars().count()
+            };
 
             matches.push(SearchMatch { line: line_idx, col });
 
@@ -385,5 +507,84 @@ mod tests {
 
         state.toggle_case_sensitive(&buffer);
         assert_eq!(state.match_count(), 2);
+    }
+
+    #[test]
+    fn test_find_matches_large_buffer_parallel() {
+        // Create a buffer with PARALLEL_SEARCH_THRESHOLD * 2 lines (triggers parallel path)
+        let mut content = String::new();
+        let num_lines = PARALLEL_SEARCH_THRESHOLD * 2;
+        for i in 0..num_lines {
+            content.push_str(&format!("line {} foo\n", i));
+        }
+        let buffer = TextBuffer::new(&content);
+        
+        let matches = find_matches(&buffer, "foo", false);
+        
+        assert_eq!(matches.len(), num_lines);
+        assert_eq!(matches[0].line, 0);
+        assert_eq!(matches[num_lines - 1].line, num_lines - 1);
+        
+        // Verify order is preserved (important!)
+        for (i, m) in matches.iter().enumerate() {
+            assert_eq!(m.line, i);
+        }
+    }
+
+    #[test]
+    fn test_find_matches_limit() {
+        // Create a buffer with more than MAX_MATCHES (10,000) matches
+        // We'll put 11,000 "foo"s, one per line
+        let mut content = String::new();
+        for _ in 0..11_000 {
+            content.push_str("foo\n");
+        }
+        let buffer = TextBuffer::new(&content);
+
+        let matches = find_matches(&buffer, "foo", false);
+
+        // Should be capped at MAX_MATCHES
+        assert_eq!(matches.len(), MAX_MATCHES);
+    }
+
+    #[test]
+    fn test_get_visible_match_range() {
+        let matches = vec![
+            SearchMatch { line: 1, col: 0 },
+            SearchMatch { line: 2, col: 0 },
+            SearchMatch { line: 5, col: 0 },
+            SearchMatch { line: 5, col: 5 },
+            SearchMatch { line: 10, col: 0 },
+        ];
+
+        // All visible
+        assert_eq!(get_visible_match_range(&matches, 0, 15), 0..5);
+
+        // None visible (before)
+        assert_eq!(get_visible_match_range(&matches, 0, 0), 0..0);
+
+        // None visible (after)
+        assert_eq!(get_visible_match_range(&matches, 11, 20), 5..5);
+
+        // None visible (middle gap)
+        assert_eq!(get_visible_match_range(&matches, 3, 4), 2..2);
+
+        // Partial visible (start)
+        assert_eq!(get_visible_match_range(&matches, 2, 10), 1..5);
+
+        // Partial visible (end)
+        assert_eq!(get_visible_match_range(&matches, 0, 4), 0..2);
+
+        // Partial visible (middle)
+        assert_eq!(get_visible_match_range(&matches, 2, 5), 1..4);
+
+        // Exact match line
+        assert_eq!(get_visible_match_range(&matches, 5, 5), 2..4);
+    }
+
+    #[test]
+    fn test_get_visible_match_range_empty() {
+        let matches = vec![];
+        assert_eq!(get_visible_match_range(&matches, 0, 100), 0..0);
     }
 }

@@ -305,103 +305,83 @@ impl canvas::Program<Message> for CodeEditor {
             {
                 let query_len = self.search_state.query.chars().count();
 
-                for (match_idx, search_match) in
-                    self.search_state.matches.iter().enumerate()
-                {
-                    // Determine if this is the current match
-                    let is_current = self.search_state.current_match_index
-                        == Some(match_idx);
+                // Optimization: Only draw matches that are within the visible area
+                // Find the range of visible logical lines based on visible visual lines
+                let start_visual_idx = first_visible_line;
+                // last_visible_line is exclusive bound, so subtract 1 for last index
+                let end_visual_idx = last_visible_line
+                    .saturating_sub(1)
+                    .min(visual_lines.len().saturating_sub(1));
 
-                    let highlight_color = if is_current {
-                        // Orange for current match
-                        Color { r: 1.0, g: 0.6, b: 0.0, a: 0.4 }
-                    } else {
-                        // Yellow for other matches
-                        Color { r: 1.0, g: 1.0, b: 0.0, a: 0.3 }
-                    };
+                if let (Some(start_vl), Some(end_vl)) = (
+                    visual_lines.get(start_visual_idx),
+                    visual_lines.get(end_visual_idx),
+                ) {
+                    let min_logical_line = start_vl.logical_line;
+                    let max_logical_line = end_vl.logical_line;
 
-                    // Convert logical position to visual line
-                    let start_visual = WrappingCalculator::logical_to_visual(
-                        &visual_lines,
-                        search_match.line,
-                        search_match.col,
-                    );
-                    let end_visual = WrappingCalculator::logical_to_visual(
-                        &visual_lines,
-                        search_match.line,
-                        search_match.col + query_len,
+                    // Optimization: Use get_visible_match_range to find matches in view
+                    // This uses binary search + early termination for O(log N) performance
+                    let match_range = super::search::get_visible_match_range(
+                        &self.search_state.matches,
+                        min_logical_line,
+                        max_logical_line,
                     );
 
-                    if let (Some(start_v), Some(end_v)) =
-                        (start_visual, end_visual)
+                    for (match_idx, search_match) in self
+                        .search_state
+                        .matches
+                        .iter()
+                        .enumerate()
+                        .skip(match_range.start)
+                        .take(match_range.len())
                     {
-                        if start_v == end_v {
-                            // Match within same visual line
-                            let y = start_v as f32 * self.line_height;
-                            let vl = &visual_lines[start_v];
-                            let line_content =
-                                self.buffer.line(vl.logical_line);
+                        // Determine if this is the current match
+                        let is_current = self.search_state.current_match_index
+                            == Some(match_idx);
 
-                            // Use calculate_segment_geometry to compute match position and width
-                            let (x_start, match_width) =
-                                calculate_segment_geometry(
-                                    line_content,
-                                    vl.start_col,
-                                    search_match.col,
-                                    search_match.col + query_len,
-                                    self.gutter_width() + 5.0,
-                                    self.full_char_width,
-                                    self.char_width,
-                                );
-                            let x_end = x_start + match_width;
-
-                            frame.fill_rectangle(
-                                Point::new(x_start, y + 2.0),
-                                Size::new(
-                                    x_end - x_start,
-                                    self.line_height - 4.0,
-                                ),
-                                highlight_color,
-                            );
+                        let highlight_color = if is_current {
+                            // Orange for current match
+                            Color { r: 1.0, g: 0.6, b: 0.0, a: 0.4 }
                         } else {
-                            // Match spans multiple visual lines
-                            for (v_idx, vl) in visual_lines
-                                .iter()
-                                .enumerate()
-                                .skip(start_v)
-                                .take(end_v - start_v + 1)
-                            {
-                                let y = v_idx as f32 * self.line_height;
+                            // Yellow for other matches
+                            Color { r: 1.0, g: 1.0, b: 0.0, a: 0.3 }
+                        };
 
-                                let match_start_col = search_match.col;
-                                let match_end_col =
-                                    search_match.col + query_len;
+                        // Convert logical position to visual line
+                        let start_visual = WrappingCalculator::logical_to_visual(
+                            &visual_lines,
+                            search_match.line,
+                            search_match.col,
+                        );
+                        let end_visual = WrappingCalculator::logical_to_visual(
+                            &visual_lines,
+                            search_match.line,
+                            search_match.col + query_len,
+                        );
 
-                                let sel_start_col = if v_idx == start_v {
-                                    match_start_col
-                                } else {
-                                    vl.start_col
-                                };
-                                let sel_end_col = if v_idx == end_v {
-                                    match_end_col
-                                } else {
-                                    vl.end_col
-                                };
-
+                        if let (Some(start_v), Some(end_v)) =
+                            (start_visual, end_visual)
+                        {
+                            if start_v == end_v {
+                                // Match within same visual line
+                                let y = start_v as f32 * self.line_height;
+                                let vl = &visual_lines[start_v];
                                 let line_content =
                                     self.buffer.line(vl.logical_line);
 
-                                let (x_start, sel_width) =
+                                // Use calculate_segment_geometry to compute match position and width
+                                let (x_start, match_width) =
                                     calculate_segment_geometry(
                                         line_content,
                                         vl.start_col,
-                                        sel_start_col,
-                                        sel_end_col,
+                                        search_match.col,
+                                        search_match.col + query_len,
                                         self.gutter_width() + 5.0,
                                         self.full_char_width,
                                         self.char_width,
                                     );
-                                let x_end = x_start + sel_width;
+                                let x_end = x_start + match_width;
 
                                 frame.fill_rectangle(
                                     Point::new(x_start, y + 2.0),
@@ -411,6 +391,55 @@ impl canvas::Program<Message> for CodeEditor {
                                     ),
                                     highlight_color,
                                 );
+                            } else {
+                                // Match spans multiple visual lines
+                                for (v_idx, vl) in visual_lines
+                                    .iter()
+                                    .enumerate()
+                                    .skip(start_v)
+                                    .take(end_v - start_v + 1)
+                                {
+                                    let y = v_idx as f32 * self.line_height;
+
+                                    let match_start_col = search_match.col;
+                                    let match_end_col =
+                                        search_match.col + query_len;
+
+                                    let sel_start_col = if v_idx == start_v {
+                                        match_start_col
+                                    } else {
+                                        vl.start_col
+                                    };
+                                    let sel_end_col = if v_idx == end_v {
+                                        match_end_col
+                                    } else {
+                                        vl.end_col
+                                    };
+
+                                    let line_content =
+                                        self.buffer.line(vl.logical_line);
+
+                                    let (x_start, sel_width) =
+                                        calculate_segment_geometry(
+                                            line_content,
+                                            vl.start_col,
+                                            sel_start_col,
+                                            sel_end_col,
+                                            self.gutter_width() + 5.0,
+                                            self.full_char_width,
+                                            self.char_width,
+                                        );
+                                    let x_end = x_start + sel_width;
+
+                                    frame.fill_rectangle(
+                                        Point::new(x_start, y + 2.0),
+                                        Size::new(
+                                            x_end - x_start,
+                                            self.line_height - 4.0,
+                                        ),
+                                        highlight_color,
+                                    );
+                                }
                             }
                         }
                     }
