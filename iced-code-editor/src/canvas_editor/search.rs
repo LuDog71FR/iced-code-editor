@@ -302,7 +302,9 @@ pub fn find_matches(
                 for handle in handles {
                     if let Ok(mut chunk_matches) = handle.join() {
                         matches.append(&mut chunk_matches);
-                        if let Some(l) = limit && matches.len() >= l {
+                        if let Some(l) = limit
+                            && matches.len() >= l
+                        {
                             matches.truncate(l);
                             break;
                         }
@@ -368,7 +370,9 @@ fn find_matches_in_range(
 
     for line_idx in start_line..end_line {
         // Stop if we have enough matches
-        if let Some(l) = limit && matches.len() >= l {
+        if let Some(l) = limit
+            && matches.len() >= l
+        {
             break;
         }
 
