@@ -596,29 +596,25 @@ impl Command for ReplaceTextCommand {
         buffer: &mut TextBuffer,
         cursor: &mut (usize, usize),
     ) {
-        // Delete the old text
-        for _ in 0..self.old_text.chars().count() {
-            buffer.delete_forward(self.position.0, self.position.1);
-        }
-
-        // Insert the new text
-        for (i, ch) in self.new_text.chars().enumerate() {
-            buffer.insert_char(self.position.0, self.position.1 + i, ch);
-        }
+        // Optimized replacement using replace_range
+        buffer.replace_range(
+            self.position.0,
+            self.position.1,
+            self.old_text.chars().count(),
+            &self.new_text,
+        );
 
         *cursor = self.cursor_after;
     }
 
     fn undo(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) {
-        // Delete the new text
-        for _ in 0..self.new_text.chars().count() {
-            buffer.delete_forward(self.position.0, self.position.1);
-        }
-
-        // Restore the old text
-        for (i, ch) in self.old_text.chars().enumerate() {
-            buffer.insert_char(self.position.0, self.position.1 + i, ch);
-        }
+        // Restore old text using replace_range
+        buffer.replace_range(
+            self.position.0,
+            self.position.1,
+            self.new_text.chars().count(),
+            &self.old_text,
+        );
 
         *cursor = self.cursor_before;
     }

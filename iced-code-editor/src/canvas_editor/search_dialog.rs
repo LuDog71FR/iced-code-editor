@@ -10,7 +10,7 @@ use iced::{Element, Length};
 use iced_font_awesome::fa_icon_solid;
 
 use super::Message;
-use super::search::SearchState;
+use super::search::{MAX_MATCHES, SearchState};
 use crate::i18n::Translations;
 
 /// Creates the search/replace dialog UI element.
@@ -46,10 +46,18 @@ pub fn view<'a>(
         text("")
     } else if search_state.match_count() == 0 {
         text("0").size(11)
-    } else if let Some(idx) = search_state.current_match_index {
-        text(format!("{}/{}", idx + 1, search_state.match_count())).size(11)
     } else {
-        text(format!("{}", search_state.match_count())).size(11)
+        let count_display = if search_state.match_count() >= MAX_MATCHES {
+            format!("{}+", MAX_MATCHES)
+        } else {
+            format!("{}", search_state.match_count())
+        };
+
+        if let Some(idx) = search_state.current_match_index {
+            text(format!("{}/{}", idx + 1, count_display)).size(11)
+        } else {
+            text(count_display).size(11)
+        }
     };
 
     // Navigation buttons - compact with Font Awesome icons and tooltips
