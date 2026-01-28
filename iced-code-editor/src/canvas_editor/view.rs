@@ -8,17 +8,16 @@ use iced::{Background, Border, Color, Element, Length, Rectangle, Shadow};
 
 use super::ime_requester::ImeRequester;
 use super::search_dialog;
-use super::wrapping::WrappingCalculator;
+use super::wrapping::{self, WrappingCalculator};
 use super::{CodeEditor, GUTTER_WIDTH, Message};
 
 impl CodeEditor {
-    /// Creates the view element with scrollable wrapper.
+    /// Calculates visual lines and canvas height for the editor.
     ///
-    /// The backgrounds (editor and gutter) are handled by container styles
-    /// to ensure proper clipping when the pane is resized.
-    pub fn view(&self) -> Element<'_, Message> {
-        // Calculate total content height based on actual lines
-        // When wrapping is enabled, use visual line count
+    /// Returns a tuple of (visual_lines, canvas_height) where:
+    /// - visual_lines: The visual line mapping with wrapping applied
+    /// - canvas_height: The total height needed for the canvas
+    fn calculate_canvas_height(&self) -> (Vec<wrapping::VisualLine>, f32) {
         let wrapping_calc = WrappingCalculator::new(
             self.wrap_enabled,
             self.wrap_column,
@@ -26,7 +25,6 @@ impl CodeEditor {
             self.char_width,
         );
 
-        // Use viewport width for calculating visual lines
         let visual_lines = wrapping_calc.calculate_visual_lines(
             &self.buffer,
             self.viewport_width,
@@ -41,74 +39,100 @@ impl CodeEditor {
         // content is shorter than viewport after reset/file change)
         let canvas_height = content_height.max(self.viewport_height);
 
-        // Create canvas with height that covers at least the viewport
+        (visual_lines, canvas_height)
+    }
+
+    /// Creates the scrollable style function with custom colors.
+    ///
+    /// Returns a style function that configures the scrollbar appearance.
+    fn create_scrollable_style(
+        &self,
+    ) -> impl Fn(&iced::Theme, scrollable::Status) -> scrollable::Style {
+        let scrollbar_bg = self.style.scrollbar_background;
+        let scroller_color = self.style.scroller_color;
+
+        move |_theme, _status| scrollable::Style {
+            container: container::Style {
+                background: Some(Background::Color(Color::TRANSPARENT)),
+                ..container::Style::default()
+            },
+            vertical_rail: scrollable::Rail {
+                background: Some(scrollbar_bg.into()),
+                border: Border {
+                    radius: 4.0.into(),
+                    width: 0.0,
+                    color: Color::TRANSPARENT,
+                },
+                scroller: scrollable::Scroller {
+                    background: scroller_color.into(),
+                    border: Border {
+                        radius: 4.0.into(),
+                        width: 0.0,
+                        color: Color::TRANSPARENT,
+                    },
+                },
+            },
+            horizontal_rail: scrollable::Rail {
+                background: Some(scrollbar_bg.into()),
+                border: Border {
+                    radius: 4.0.into(),
+                    width: 0.0,
+                    color: Color::TRANSPARENT,
+                },
+                scroller: scrollable::Scroller {
+                    background: scroller_color.into(),
+                    border: Border {
+                        radius: 4.0.into(),
+                        width: 0.0,
+                        color: Color::TRANSPARENT,
+                    },
+                },
+            },
+            gap: None,
+            auto_scroll: scrollable::AutoScroll {
+                background: Color::TRANSPARENT.into(),
+                border: Border::default(),
+                shadow: Shadow::default(),
+                icon: Color::TRANSPARENT,
+            },
+        }
+    }
+
+    /// Creates the canvas widget wrapped in a scrollable container.
+    ///
+    /// # Arguments
+    ///
+    /// * `canvas_height` - The total height of the canvas
+    ///
+    /// # Returns
+    ///
+    /// A configured scrollable widget containing the canvas
+    fn create_canvas_with_scrollable(
+        &self,
+        canvas_height: f32,
+    ) -> Scrollable<'_, Message> {
         let canvas = Canvas::new(self)
             .width(Length::Fill)
             .height(Length::Fixed(canvas_height));
 
-        // Capture style colors for closures
-        let scrollbar_bg = self.style.scrollbar_background;
-        let scroller_color = self.style.scroller_color;
-        let background_color = self.style.background;
-        let gutter_background = self.style.gutter_background;
-
-        // Wrap in scrollable for automatic scrollbar display with custom style
-        // Use Length::Fill to respect parent container constraints and enable proper clipping
-        // Background is TRANSPARENT here because it's handled by the Stack layer below
-        let scrollable = Scrollable::new(canvas)
+        Scrollable::new(canvas)
             .id(self.scrollable_id.clone())
             .width(Length::Fill)
             .height(Length::Fill)
             .on_scroll(Message::Scrolled)
-            .style(move |_theme, _status| scrollable::Style {
-                container: container::Style {
-                    background: Some(Background::Color(Color::TRANSPARENT)),
-                    ..container::Style::default()
-                },
-                vertical_rail: scrollable::Rail {
-                    background: Some(scrollbar_bg.into()),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                    scroller: scrollable::Scroller {
-                        background: scroller_color.into(),
-                        border: Border {
-                            radius: 4.0.into(),
-                            width: 0.0,
-                            color: Color::TRANSPARENT,
-                        },
-                    },
-                },
-                horizontal_rail: scrollable::Rail {
-                    background: Some(scrollbar_bg.into()),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                    scroller: scrollable::Scroller {
-                        background: scroller_color.into(),
-                        border: Border {
-                            radius: 4.0.into(),
-                            width: 0.0,
-                            color: Color::TRANSPARENT,
-                        },
-                    },
-                },
-                gap: None,
-                auto_scroll: scrollable::AutoScroll {
-                    background: Color::TRANSPARENT.into(),
-                    border: Border::default(),
-                    shadow: Shadow::default(),
-                    icon: Color::TRANSPARENT,
-                },
-            });
+            .style(self.create_scrollable_style())
+    }
 
-        // Gutter background container (fixed width, clipped by parent)
-        // Only create if line numbers are enabled
-        let gutter_container = if self.line_numbers_enabled {
+    /// Creates the gutter background container if line numbers are enabled.
+    ///
+    /// # Returns
+    ///
+    /// Some(container) if line numbers are enabled, None otherwise
+    fn create_gutter_container(
+        &self,
+    ) -> Option<container::Container<'_, Message>> {
+        if self.line_numbers_enabled {
+            let gutter_background = self.style.gutter_background;
             Some(
                 container(
                     Space::new().width(Length::Fill).height(Length::Fill),
@@ -122,75 +146,112 @@ impl CodeEditor {
             )
         } else {
             None
-        };
+        }
+    }
 
-        // Code background container (fills remaining width)
-        let code_background_container =
-            container(Space::new().width(Length::Fill).height(Length::Fill))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .style(move |_| container::Style {
-                    background: Some(Background::Color(background_color)),
-                    ..container::Style::default()
-                });
+    /// Creates the code area background container.
+    ///
+    /// # Returns
+    ///
+    /// The code background container widget
+    fn create_code_background_container(
+        &self,
+    ) -> container::Container<'_, Message> {
+        let background_color = self.style.background;
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(background_color)),
+                ..container::Style::default()
+            })
+    }
 
-        // Main layout: use a Stack to layer the backgrounds behind the scrollable
-        // The scrollable has a transparent background so the colors show through
-        let background_row = if let Some(gutter) = gutter_container {
+    /// Creates the background layer combining gutter and code backgrounds.
+    ///
+    /// # Returns
+    ///
+    /// A row containing the background elements
+    fn create_background_layer(&self) -> Row<'_, Message> {
+        let gutter_container = self.create_gutter_container();
+        let code_background_container = self.create_code_background_container();
+
+        if let Some(gutter) = gutter_container {
             Row::new().push(gutter).push(code_background_container)
         } else {
             Row::new().push(code_background_container)
-        };
+        }
+    }
 
-        let mut editor_stack = iced::widget::Stack::new()
-            .push(
-                // Background layer (bottom): gutter + code backgrounds
-                background_row,
-            )
-            .push(
-                // Scrollable layer (top) - transparent, overlays the backgrounds
-                scrollable,
-            );
-
+    /// Calculates the IME cursor rectangle for the current cursor position.
+    ///
+    /// # Arguments
+    ///
+    /// * `visual_lines` - The visual line mapping
+    ///
+    /// # Returns
+    ///
+    /// A rectangle representing the cursor position for IME
+    fn calculate_ime_cursor_rect(
+        &self,
+        visual_lines: &[wrapping::VisualLine],
+    ) -> Rectangle {
         let ime_enabled = self.is_focused() && self.has_canvas_focus;
-        let cursor_rect = if ime_enabled {
-            if let Some(cursor_visual) = WrappingCalculator::logical_to_visual(
-                &visual_lines,
-                self.cursor.0,
-                self.cursor.1,
-            ) {
-                let vl = &visual_lines[cursor_visual];
-                let line_content = self.buffer.line(vl.logical_line);
-                let prefix_len = self.cursor.1.saturating_sub(vl.start_col);
-                let prefix_text: String = line_content
-                    .chars()
-                    .skip(vl.start_col)
-                    .take(prefix_len)
-                    .collect();
-                let cursor_x = self.gutter_width()
-                    + 5.0
-                    + super::measure_text_width(
-                        &prefix_text,
-                        self.full_char_width,
-                        self.char_width,
-                    );
 
-                // Calculate visual Y position relative to the viewport
-                // We subtract viewport_scroll because the content is scrolled up/down
-                // but the cursor position sent to IME must be relative to the visible area
-                let cursor_y = (cursor_visual as f32 * self.line_height)
-                    - self.viewport_scroll;
+        if !ime_enabled {
+            return Rectangle::new(
+                iced::Point::new(0.0, 0.0),
+                Size::new(0.0, 0.0),
+            );
+        }
 
-                Rectangle::new(
-                    iced::Point::new(cursor_x, cursor_y + 2.0),
-                    Size::new(2.0, self.line_height - 4.0),
-                )
-            } else {
-                Rectangle::new(iced::Point::new(0.0, 0.0), Size::new(0.0, 0.0))
-            }
+        if let Some(cursor_visual) = WrappingCalculator::logical_to_visual(
+            visual_lines,
+            self.cursor.0,
+            self.cursor.1,
+        ) {
+            let vl = &visual_lines[cursor_visual];
+            let line_content = self.buffer.line(vl.logical_line);
+            let prefix_len = self.cursor.1.saturating_sub(vl.start_col);
+            let prefix_text: String = line_content
+                .chars()
+                .skip(vl.start_col)
+                .take(prefix_len)
+                .collect();
+            let cursor_x = self.gutter_width()
+                + 5.0
+                + super::measure_text_width(
+                    &prefix_text,
+                    self.full_char_width,
+                    self.char_width,
+                );
+
+            // Calculate visual Y position relative to the viewport
+            // We subtract viewport_scroll because the content is scrolled up/down
+            // but the cursor position sent to IME must be relative to the visible area
+            let cursor_y = (cursor_visual as f32 * self.line_height)
+                - self.viewport_scroll;
+
+            Rectangle::new(
+                iced::Point::new(cursor_x, cursor_y + 2.0),
+                Size::new(2.0, self.line_height - 4.0),
+            )
         } else {
             Rectangle::new(iced::Point::new(0.0, 0.0), Size::new(0.0, 0.0))
-        };
+        }
+    }
+
+    /// Creates the IME (Input Method Editor) layer widget.
+    ///
+    /// # Arguments
+    ///
+    /// * `cursor_rect` - The rectangle representing the cursor position
+    ///
+    /// # Returns
+    ///
+    /// An element containing the IME requester widget
+    fn create_ime_layer(&self, cursor_rect: Rectangle) -> Element<'_, Message> {
+        let ime_enabled = self.is_focused() && self.has_canvas_focus;
 
         let preedit =
             self.ime_preedit.as_ref().map(|p| input_method::Preedit {
@@ -199,10 +260,32 @@ impl CodeEditor {
                 text_size: None,
             });
 
-        // Invisible IME request layer: sends IME state and caret on each redraw
-        // Note: Canvas Program cannot access Shell directly, so this widget bridges it
         let ime_layer = ImeRequester::new(ime_enabled, cursor_rect, preedit);
-        editor_stack = editor_stack.push(iced::Element::new(ime_layer));
+        iced::Element::new(ime_layer)
+    }
+
+    /// Creates the view element with scrollable wrapper.
+    ///
+    /// The backgrounds (editor and gutter) are handled by container styles
+    /// to ensure proper clipping when the pane is resized.
+    pub fn view(&self) -> Element<'_, Message> {
+        // Calculate canvas height and visual lines
+        let (visual_lines, canvas_height) = self.calculate_canvas_height();
+
+        // Create scrollable containing the canvas
+        let scrollable = self.create_canvas_with_scrollable(canvas_height);
+
+        // Create background layer with gutter and code backgrounds
+        let background_row = self.create_background_layer();
+
+        // Build editor stack: backgrounds + scrollable
+        let mut editor_stack =
+            iced::widget::Stack::new().push(background_row).push(scrollable);
+
+        // Add IME layer for input method support
+        let cursor_rect = self.calculate_ime_cursor_rect(&visual_lines);
+        let ime_layer = self.create_ime_layer(cursor_rect);
+        editor_stack = editor_stack.push(ime_layer);
 
         // Add search dialog overlay if open
         if self.search_state.is_open {
@@ -210,13 +293,12 @@ impl CodeEditor {
                 search_dialog::view(&self.search_state, &self.translations);
 
             // Position the dialog in top-right corner with 20px margin
-            // Use a Row with Fill space to push the dialog to the right
             let positioned_dialog = container(
                 Row::new()
-                    .push(Space::new().width(Length::Fill)) // Push to right
+                    .push(Space::new().width(Length::Fill))
                     .push(search_dialog),
             )
-            .padding(20) // 20px margin from edges
+            .padding(20)
             .width(Length::Fill)
             .height(Length::Shrink);
 
