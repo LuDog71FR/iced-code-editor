@@ -8,7 +8,17 @@ publish = false
 iced.workspace = true
 iced-code-editor = { path = "../iced-code-editor" }
 iced_aw = "0.13.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.17"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+rfd = "0.17"
+
+[[bin]]
+name = "demo-editor"
+path = "src/main.rs"
 
 [lints]
 workspace = true

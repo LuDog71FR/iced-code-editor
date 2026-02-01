@@ -14,7 +14,8 @@ categories = ["gui"]
 
 [dependencies]
 iced.workspace = true
-syntect = "5.3"
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+web-time = "1"
 iced_font_awesome = "0.4"
 iced_aw = "0.13"
 rust-i18n = "3"

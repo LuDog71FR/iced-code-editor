@@ -131,12 +131,23 @@ greet("World")
             "[INFO] Two editors initialized side by side".to_string(),
         ];
 
-        let current_font = FontOption::MONOSPACE;
+        let current_font = if cfg!(target_arch = "wasm32") {
+            FontOption::JETBRAINS_MONO
+        } else {
+            FontOption::MONOSPACE
+        };
+
+        let mut editor_left = CodeEditor::new(default_content, "lua");
+        let mut editor_right = CodeEditor::new(default_content, "lua");
+
+        let font = current_font.font();
+        editor_left.set_font(font);
+        editor_right.set_font(font);
 
         (
             Self {
-                editor_left: CodeEditor::new(default_content, "lua"),
-                editor_right: CodeEditor::new(default_content, "lua"),
+                editor_left,
+                editor_right,
                 current_file_left: None,
                 current_file_right: None,
                 error_message: None,

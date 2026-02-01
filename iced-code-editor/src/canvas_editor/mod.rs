@@ -11,6 +11,7 @@ use iced::widget::{Id, canvas};
 use std::cmp::Ordering as CmpOrdering;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 use unicode_width::UnicodeWidthChar;
 
@@ -18,6 +19,9 @@ use crate::i18n::Translations;
 use crate::text_buffer::TextBuffer;
 use crate::theme::Style;
 pub use history::CommandHistory;
+
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 /// Global counter for generating unique editor IDs (starts at 1)
 static EDITOR_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
