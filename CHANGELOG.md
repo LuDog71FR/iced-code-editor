@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-None ;-)
+- feat: Handle focus without the needs to check if mouse is out of bounds #10
 
 ## [0.3.4] - 2026-01-28
 

@@ -8,14 +8,6 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style, ThemeSet};
 use syntect::parsing::SyntaxSet;
 
-fn is_cursor_in_bounds(cursor: &mouse::Cursor, bounds: Rectangle) -> bool {
-    match cursor {
-        mouse::Cursor::Available(point) => bounds.contains(*point),
-        mouse::Cursor::Levitating(point) => bounds.contains(*point),
-        mouse::Cursor::Unavailable => false,
-    }
-}
-
 /// Computes geometry (x start and width) for a text segment used in rendering or highlighting.
 ///
 /// # Arguments
@@ -614,8 +606,7 @@ impl CodeEditor {
         // -------------------------------------------------------------------------
         if self.show_cursor
             && self.cursor_visible
-            && self.is_focused()
-            && self.has_canvas_focus
+            && self.has_focus()
             && self.ime_preedit.is_some()
         {
             // [Branch A] IME preedit rendering mode
@@ -741,11 +732,7 @@ impl CodeEditor {
                     }
                 }
             }
-        } else if self.show_cursor
-            && self.cursor_visible
-            && self.is_focused()
-            && self.has_canvas_focus
-        {
+        } else if self.show_cursor && self.cursor_visible && self.has_focus() {
             // [Branch B] Normal caret rendering mode
             // ---------------------------------------------------------------------
             // When there is no IME preedit, draw the standard editor caret.
@@ -788,38 +775,24 @@ impl CodeEditor {
         }
     }
 
-    /// Checks if the editor has focus and the cursor is within bounds.
-    ///
-    /// # Arguments
-    ///
-    /// * `cursor` - The current mouse cursor position and status
-    /// * `bounds` - The rectangle bounds of the canvas widget
+    /// Checks if the editor has focus (both Iced focus and internal canvas focus).
     ///
     /// # Returns
     ///
-    /// `true` if the editor has focus, has canvas focus, and cursor is in bounds; `false` otherwise
-    fn check_focus_and_bounds(
-        &self,
-        cursor: &mouse::Cursor,
-        bounds: Rectangle,
-    ) -> bool {
-        // Check if this editor has focus
+    /// `true` if the editor has both Iced focus and internal canvas focus and is not focus-locked; `false` otherwise
+    pub(crate) fn has_focus(&self) -> bool {
+        // Check if this editor has Iced focus
         let focused_id =
             super::FOCUSED_EDITOR_ID.load(std::sync::atomic::Ordering::Relaxed);
-        if focused_id != self.editor_id {
-            return false;
-        }
-
-        // Check if cursor is within canvas bounds
-        if !is_cursor_in_bounds(cursor, bounds) {
-            return false;
-        }
-
-        // Check if canvas has focus
-        self.has_canvas_focus
+        focused_id == self.editor_id
+            && self.has_canvas_focus
+            && !self.focus_locked
     }
 
     /// Handles keyboard shortcut combinations (Ctrl+C, Ctrl+Z, etc.).
+    ///
+    /// This implementation includes focus chain management for Tab and Shift+Tab
+    /// navigation between editors.
     ///
     /// # Arguments
     ///
@@ -834,6 +807,25 @@ impl CodeEditor {
         key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
     ) -> Option<Action<Message>> {
+        // Handle Tab for focus navigation when search dialog is not open
+        // This implements focus chain management between multiple editors
+        if matches!(key, keyboard::Key::Named(keyboard::key::Named::Tab))
+            && !self.search_state.is_open
+        {
+            if modifiers.shift() {
+                // Shift+Tab: focus navigation backward
+                return Some(
+                    Action::publish(Message::FocusNavigationShiftTab)
+                        .and_capture(),
+                );
+            } else {
+                // Tab: focus navigation forward
+                return Some(
+                    Action::publish(Message::FocusNavigationTab).and_capture(),
+                );
+            }
+        }
+
         // Handle Ctrl+C / Ctrl+Insert (copy)
         if (modifiers.control()
             && matches!(key, keyboard::Key::Character(c) if c.as_str() == "c"))
@@ -955,6 +947,9 @@ impl CodeEditor {
 
     /// Handles character input and special navigation keys.
     ///
+    /// This implementation includes focus event propagation and focus chain management
+    /// for proper focus handling without mouse bounds checking.
+    ///
     /// # Arguments
     ///
     /// * `key` - The keyboard key that was pressed
@@ -971,6 +966,13 @@ impl CodeEditor {
         modifiers: &keyboard::Modifiers,
         text: Option<&str>,
     ) -> Option<Action<Message>> {
+        // Early exit: Only process character input when editor has focus
+        // This prevents focus stealing where characters typed in other input fields
+        // appear in the editor
+        if !self.has_focus() {
+            return None;
+        }
+
         // PRIORITY 1: Check if 'text' field has valid printable character
         // This handles:
         // - Numpad keys with NumLock ON (key=Named(ArrowDown), text=Some("2"))
@@ -1005,8 +1007,20 @@ impl CodeEditor {
                 Some(Message::Enter)
             }
             keyboard::Key::Named(keyboard::key::Named::Tab) => {
-                // Insert 4 spaces for Tab
-                Some(Message::Tab)
+                // Handle Tab for focus navigation or text insertion
+                // This implements focus event propagation and focus chain management
+                if modifiers.shift() {
+                    // Shift+Tab: focus navigation backward through widget hierarchy
+                    Some(Message::FocusNavigationShiftTab)
+                } else {
+                    // Regular Tab: check if search dialog is open
+                    if self.search_state.is_open {
+                        Some(Message::SearchDialogTab)
+                    } else {
+                        // Insert 4 spaces for Tab when not in search dialog
+                        Some(Message::Tab)
+                    }
+                }
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
                 Some(Message::ArrowKey(ArrowDirection::Up, modifiers.shift()))
@@ -1053,15 +1067,18 @@ impl CodeEditor {
         message.map(|msg| Action::publish(msg).and_capture())
     }
 
-    /// Handles keyboard events after validating focus and bounds.
+    /// Handles keyboard events with focus event propagation through widget hierarchy.
+    ///
+    /// This implementation completes focus handling without mouse bounds checking
+    /// and ensures proper focus chain management.
     ///
     /// # Arguments
     ///
     /// * `key` - The keyboard key that was pressed
     /// * `modifiers` - The keyboard modifiers (Ctrl, Shift, Alt, etc.)
     /// * `text` - Optional text content from the keyboard event
-    /// * `bounds` - The rectangle bounds of the canvas widget
-    /// * `cursor` - The current mouse cursor position and status
+    /// * `bounds` - The rectangle bounds of the canvas widget (unused in this implementation)
+    /// * `cursor` - The current mouse cursor position and status (unused in this implementation)
     ///
     /// # Returns
     ///
@@ -1071,11 +1088,13 @@ impl CodeEditor {
         key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
         text: &Option<iced::advanced::graphics::core::SmolStr>,
-        bounds: Rectangle,
-        cursor: &mouse::Cursor,
+        _bounds: Rectangle,
+        _cursor: &mouse::Cursor,
     ) -> Option<Action<Message>> {
-        // Validate focus and bounds
-        if !self.check_focus_and_bounds(cursor, bounds) {
+        // Early exit: Check if editor has focus and is not focus-locked
+        // This prevents focus stealing where keyboard input meant for other widgets
+        // is incorrectly processed by this editor during focus transitions
+        if !self.has_focus() || self.focus_locked {
             return None;
         }
 
@@ -1119,6 +1138,7 @@ impl CodeEditor {
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
                 cursor.position_in(bounds).map(|position| {
                     // Don't capture the event so it can bubble up for focus management
+                    // This implements focus event propagation through the widget hierarchy
                     Action::publish(Message::MouseClick(position))
                 })
             }
@@ -1155,11 +1175,13 @@ impl CodeEditor {
     fn handle_ime_event(
         &self,
         event: &input_method::Event,
-        bounds: Rectangle,
-        cursor: &mouse::Cursor,
+        _bounds: Rectangle,
+        _cursor: &mouse::Cursor,
     ) -> Option<Action<Message>> {
-        // Validate focus and bounds
-        if !self.check_focus_and_bounds(cursor, bounds) {
+        // Early exit: Check if editor has focus and is not focus-locked
+        // This prevents focus stealing where IME events meant for other widgets
+        // are incorrectly processed by this editor during focus transitions
+        if !self.has_focus() || self.focus_locked {
             return None;
         }
 

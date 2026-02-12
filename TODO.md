@@ -6,11 +6,9 @@
 
 ## Documentation
 
-- In DEV.md, explain how Asian characters & CJK fonts are supported.
+None
 
 ## Features
-
-- feat: Handle focus without the needs to check if mouse is out of bounds #10
 
 1. **Multiple cursors**
 

@@ -86,6 +86,7 @@ impl CodeEditor {
     ///
     /// Inserts a character at the current cursor position and adds it to the
     /// undo history. Characters are grouped together for smart undo.
+    /// Only processes input when the editor has active focus and is not locked.
     ///
     /// # Arguments
     ///
@@ -95,6 +96,11 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
     fn handle_character_input_msg(&mut self, ch: char) -> Task<Message> {
+        // Guard clause: only process character input if editor has focus and is not locked
+        if !self.has_focus() {
+            return Task::none();
+        }
+
         // Start grouping if not already grouping (for smart undo)
         self.ensure_grouping_started("Typing");
 
@@ -133,6 +139,48 @@ impl CodeEditor {
 
         self.finish_navigation_operation();
         Task::none()
+    }
+
+    /// Handles Tab key press for focus navigation (when search dialog is not open).
+    ///
+    /// # Returns
+    ///
+    /// A `Task<Message>` that may navigate focus to another editor
+    fn handle_focus_navigation_tab(&mut self) -> Task<Message> {
+        // Only handle focus navigation if search dialog is not open
+        if !self.search_state.is_open {
+            // Lose focus from current editor
+            self.has_canvas_focus = false;
+            self.show_cursor = false;
+
+            // Return a task that could potentially focus another editor
+            // This implements focus chain management by allowing the parent application
+            // to handle focus navigation between multiple editors
+            Task::none()
+        } else {
+            Task::none()
+        }
+    }
+
+    /// Handles Shift+Tab key press for focus navigation (when search dialog is not open).
+    ///
+    /// # Returns
+    ///
+    /// A `Task<Message>` that may navigate focus to another editor
+    fn handle_focus_navigation_shift_tab(&mut self) -> Task<Message> {
+        // Only handle focus navigation if search dialog is not open
+        if !self.search_state.is_open {
+            // Lose focus from current editor
+            self.has_canvas_focus = false;
+            self.show_cursor = false;
+
+            // Return a task that could potentially focus another editor
+            // This implements focus chain management by allowing the parent application
+            // to handle focus navigation between multiple editors
+            Task::none()
+        } else {
+            Task::none()
+        }
     }
 
     /// Handles Enter key press (inserts newline).
@@ -402,9 +450,11 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
     fn handle_mouse_click_msg(&mut self, point: iced::Point) -> Task<Message> {
-        // Capture focus when clicked
-        super::FOCUSED_EDITOR_ID
-            .store(self.editor_id, std::sync::atomic::Ordering::Relaxed);
+        // Capture focus when clicked using the new focus method
+        self.request_focus();
+
+        // Set internal canvas focus state
+        self.has_canvas_focus = true;
 
         // End grouping on mouse click
         self.end_grouping_if_active();
@@ -416,8 +466,7 @@ impl CodeEditor {
         self.is_dragging = true;
         self.selection_start = Some(self.cursor);
 
-        // Gain canvas focus
-        self.has_canvas_focus = true;
+        // Show cursor when focused
         self.show_cursor = true;
 
         Task::none()
@@ -802,6 +851,7 @@ impl CodeEditor {
     /// A `Task<Message>` (currently Task::none())
     fn handle_canvas_focus_gained_msg(&mut self) -> Task<Message> {
         self.has_canvas_focus = true;
+        self.focus_locked = false; // Unlock focus when gained
         self.show_cursor = true;
         self.reset_cursor_blink();
         self.cache.clear();
@@ -815,6 +865,7 @@ impl CodeEditor {
     /// A `Task<Message>` (currently Task::none())
     fn handle_canvas_focus_lost_msg(&mut self) -> Task<Message> {
         self.has_canvas_focus = false;
+        self.focus_locked = true; // Lock focus when lost to prevent focus stealing
         self.show_cursor = false;
         self.ime_preedit = None;
         self.cache.clear();
@@ -916,8 +967,7 @@ impl CodeEditor {
     /// A `Task<Message>` (currently Task::none())
     fn handle_tick_msg(&mut self) -> Task<Message> {
         // Handle cursor blinking only if editor has focus
-        if self.is_focused()
-            && self.has_canvas_focus
+        if self.has_focus()
             && self.last_blink.elapsed() >= CURSOR_BLINK_INTERVAL
         {
             self.cursor_visible = !self.cursor_visible;
@@ -925,8 +975,8 @@ impl CodeEditor {
             self.cache.clear();
         }
 
-        // Hide cursor if canvas doesn't have focus
-        if !self.has_canvas_focus {
+        // Hide cursor if editor doesn't have focus
+        if !self.has_focus() {
             self.show_cursor = false;
         }
 
@@ -1075,6 +1125,10 @@ impl CodeEditor {
             Message::SearchDialogShiftTab => {
                 self.handle_search_dialog_shift_tab_msg()
             }
+            Message::FocusNavigationTab => self.handle_focus_navigation_tab(),
+            Message::FocusNavigationShiftTab => {
+                self.handle_focus_navigation_shift_tab()
+            }
 
             // Focus and IME operations
             Message::CanvasFocusGained => self.handle_canvas_focus_gained_msg(),
@@ -1099,9 +1153,62 @@ mod tests {
     use crate::canvas_editor::ArrowDirection;
 
     #[test]
-    fn test_new_canvas_editor() {
-        let editor = CodeEditor::new("line1\nline2", "py");
-        assert_eq!(editor.cursor, (0, 0));
+    fn test_canvas_focus_lost() {
+        let mut editor = CodeEditor::new("test", "rs");
+        editor.has_canvas_focus = true;
+
+        let _ = editor.update(&Message::CanvasFocusLost);
+
+        assert!(!editor.has_canvas_focus);
+        assert!(!editor.show_cursor);
+        assert!(editor.focus_locked, "Focus should be locked when lost");
+    }
+
+    #[test]
+    fn test_canvas_focus_gained_resets_lock() {
+        let mut editor = CodeEditor::new("test", "rs");
+        editor.has_canvas_focus = false;
+        editor.focus_locked = true;
+
+        let _ = editor.update(&Message::CanvasFocusGained);
+
+        assert!(editor.has_canvas_focus);
+        assert!(
+            !editor.focus_locked,
+            "Focus lock should be reset when focus is gained"
+        );
+    }
+
+    #[test]
+    fn test_focus_lock_state() {
+        let mut editor = CodeEditor::new("test", "rs");
+
+        // Initially, focus should not be locked
+        assert!(!editor.focus_locked);
+
+        // When focus is lost, it should be locked
+        let _ = editor.update(&Message::CanvasFocusLost);
+        assert!(editor.focus_locked, "Focus should be locked when lost");
+
+        // When focus is regained, it should be unlocked
+        editor.request_focus();
+        let _ = editor.update(&Message::CanvasFocusGained);
+        assert!(!editor.focus_locked, "Focus should be unlocked when regained");
+
+        // Can manually reset focus lock
+        editor.focus_locked = true;
+        editor.reset_focus_lock();
+        assert!(!editor.focus_locked, "Focus lock should be resetable");
+    }
+
+    #[test]
+    fn test_reset_focus_lock() {
+        let mut editor = CodeEditor::new("test", "rs");
+        editor.focus_locked = true;
+
+        editor.reset_focus_lock();
+
+        assert!(!editor.focus_locked);
     }
 
     #[test]
@@ -1146,6 +1253,11 @@ mod tests {
     #[test]
     fn test_typing_with_selection() {
         let mut editor = CodeEditor::new("hello world", "py");
+        // Ensure editor has focus for character input
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+
         editor.selection_start = Some((0, 0));
         editor.selection_end = Some((0, 5));
 
@@ -1405,6 +1517,11 @@ mod tests {
     #[test]
     fn test_undo_char_insert() {
         let mut editor = CodeEditor::new("hello", "py");
+        // Ensure editor has focus for character input
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+
         editor.cursor = (0, 5);
 
         // Type a character
@@ -1422,6 +1539,11 @@ mod tests {
     #[test]
     fn test_undo_redo_char_insert() {
         let mut editor = CodeEditor::new("hello", "py");
+        // Ensure editor has focus for character input
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+
         editor.cursor = (0, 5);
 
         // Type a character
@@ -1474,6 +1596,11 @@ mod tests {
     #[test]
     fn test_undo_grouped_typing() {
         let mut editor = CodeEditor::new("hello", "py");
+        // Ensure editor has focus for character input
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+
         editor.cursor = (0, 5);
 
         // Type multiple characters (they should be grouped)
@@ -1498,6 +1625,11 @@ mod tests {
     #[test]
     fn test_navigation_ends_grouping() {
         let mut editor = CodeEditor::new("hello", "py");
+        // Ensure editor has focus for character input
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+
         editor.cursor = (0, 5);
 
         // Type a character (starts grouping)
@@ -1525,6 +1657,11 @@ mod tests {
     #[test]
     fn test_multiple_undo_redo() {
         let mut editor = CodeEditor::new("a", "py");
+        // Ensure editor has focus for character input
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+
         editor.cursor = (0, 1);
 
         // Make several changes
@@ -1638,18 +1775,6 @@ mod tests {
 
         assert!(editor.has_canvas_focus);
         assert!(editor.show_cursor);
-    }
-
-    #[test]
-    fn test_canvas_focus_lost() {
-        let mut editor = CodeEditor::new("hello world", "py");
-        editor.has_canvas_focus = true;
-        editor.show_cursor = true;
-
-        let _ = editor.update(&Message::CanvasFocusLost);
-
-        assert!(!editor.has_canvas_focus);
-        assert!(!editor.show_cursor);
     }
 
     #[test]

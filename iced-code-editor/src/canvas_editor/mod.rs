@@ -189,6 +189,8 @@ pub struct CodeEditor {
     pub(crate) line_numbers_enabled: bool,
     /// Whether the canvas has user input focus (for keyboard events)
     pub(crate) has_canvas_focus: bool,
+    /// Whether input processing is locked to prevent focus stealing
+    pub(crate) focus_locked: bool,
     /// Whether to show the cursor (for rendering)
     pub(crate) show_cursor: bool,
     /// The font used for rendering text
@@ -285,6 +287,10 @@ pub enum Message {
     SearchDialogTab,
     /// Shift+Tab pressed in search dialog (cycle backward)
     SearchDialogShiftTab,
+    /// Tab pressed for focus navigation (when search dialog is not open)
+    FocusNavigationTab,
+    /// Shift+Tab pressed for focus navigation (when search dialog is not open)
+    FocusNavigationShiftTab,
     /// Canvas gained focus (mouse click)
     CanvasFocusGained,
     /// Canvas lost focus (external widget interaction)
@@ -354,6 +360,7 @@ impl CodeEditor {
             search_replace_enabled: true,
             line_numbers_enabled: true,
             has_canvas_focus: false,
+            focus_locked: false,
             show_cursor: false,
             font: iced::Font::MONOSPACE,
             ime_preedit: None,
@@ -918,6 +925,25 @@ impl CodeEditor {
         self.has_canvas_focus = false;
         self.show_cursor = false;
         self.ime_preedit = None;
+    }
+
+    /// Resets the focus lock state.
+    ///
+    /// This method can be called to manually unlock focus processing
+    /// after a focus transition has completed. This is useful when
+    /// you want to allow the editor to process input again after
+    /// programmatic focus changes.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.reset_focus_lock();
+    /// ```
+    pub fn reset_focus_lock(&mut self) {
+        self.focus_locked = false;
     }
 }
 
