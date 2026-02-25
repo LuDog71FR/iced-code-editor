@@ -4,6 +4,8 @@ use iced::advanced::input_method;
 use iced::mouse;
 use iced::widget::canvas::{self, Geometry};
 use iced::{Color, Event, Point, Rectangle, Size, Theme, keyboard};
+use std::rc::Rc;
+use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style, ThemeSet};
 use syntect::parsing::SyntaxSet;
@@ -34,22 +36,29 @@ fn calculate_segment_geometry(
     full_char_width: f32,
     char_width: f32,
 ) -> (f32, f32) {
-    // Calculate prefix width relative to visual line start
-    let prefix_len = segment_start_col.saturating_sub(visual_start_col);
-    let prefix_text: String =
-        line_content.chars().skip(visual_start_col).take(prefix_len).collect();
-    let prefix_width =
-        measure_text_width(&prefix_text, full_char_width, char_width);
+    // Clamp the segment to the current visual line so callers can safely pass
+    // logical selection/match columns without worrying about wrapping boundaries.
+    let segment_start_col = segment_start_col.max(visual_start_col);
+    let segment_end_col = segment_end_col.max(segment_start_col);
 
-    // Calculate segment width
-    let segment_len = segment_end_col.saturating_sub(segment_start_col);
-    let segment_text: String = line_content
-        .chars()
-        .skip(segment_start_col)
-        .take(segment_len)
-        .collect();
-    let segment_width =
-        measure_text_width(&segment_text, full_char_width, char_width);
+    let mut prefix_width = 0.0;
+    let mut segment_width = 0.0;
+
+    // Compute widths directly from the source string to avoid allocating
+    // intermediate `String` slices for prefix/segment.
+    for (i, c) in line_content.chars().enumerate() {
+        if i >= segment_end_col {
+            break;
+        }
+
+        let w = super::measure_char_width(c, full_char_width, char_width);
+
+        if i >= visual_start_col && i < segment_start_col {
+            prefix_width += w;
+        } else if i >= segment_start_col {
+            segment_width += w;
+        }
+    }
 
     (base_offset + prefix_width, segment_width)
 }
@@ -57,6 +66,9 @@ fn calculate_segment_geometry(
 use super::wrapping::{VisualLine, WrappingCalculator};
 use super::{ArrowDirection, CodeEditor, Message, measure_text_width};
 use iced::widget::canvas::Action;
+
+static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
 
 /// Context for canvas rendering operations.
 ///
@@ -177,7 +189,7 @@ impl CodeEditor {
         y: f32,
         syntax_ref: Option<&syntect::parsing::SyntaxReference>,
         syntax_set: &SyntaxSet,
-        syntax_theme: &syntect::highlighting::Theme,
+        syntax_theme: Option<&syntect::highlighting::Theme>,
     ) {
         let full_line_content = self.buffer.line(visual_line.logical_line);
 
@@ -192,7 +204,7 @@ impl CodeEditor {
             .map_or(full_line_content.len(), |(idx, _)| idx);
         let line_segment = &full_line_content[start_byte..end_byte];
 
-        if let Some(syntax) = syntax_ref {
+        if let (Some(syntax), Some(syntax_theme)) = (syntax_ref, syntax_theme) {
             let mut highlighter = HighlightLines::new(syntax, syntax_theme);
 
             // Highlight the full line to get correct token colors
@@ -284,8 +296,8 @@ impl CodeEditor {
         &self,
         frame: &mut canvas::Frame,
         ctx: &RenderContext,
-        first_visible_line: usize,
-        last_visible_line: usize,
+        start_visual_idx: usize,
+        end_visual_idx: usize,
     ) {
         if !self.search_state.is_open || self.search_state.query.is_empty() {
             return;
@@ -293,17 +305,16 @@ impl CodeEditor {
 
         let query_len = self.search_state.query.chars().count();
 
-        // Optimization: Only draw matches that are within the visible area
-        // Find the range of visible logical lines based on visible visual lines
-        let start_visual_idx = first_visible_line;
-        // last_visible_line is exclusive bound, so subtract 1 for last index
-        let end_visual_idx = last_visible_line
+        let start_visual_idx = start_visual_idx.min(ctx.visual_lines.len());
+        let end_visual_idx = end_visual_idx.min(ctx.visual_lines.len());
+
+        let end_visual_inclusive = end_visual_idx
             .saturating_sub(1)
             .min(ctx.visual_lines.len().saturating_sub(1));
 
         if let (Some(start_vl), Some(end_vl)) = (
             ctx.visual_lines.get(start_visual_idx),
-            ctx.visual_lines.get(end_visual_idx),
+            ctx.visual_lines.get(end_visual_inclusive),
         ) {
             let min_logical_line = start_vl.logical_line;
             let max_logical_line = end_vl.logical_line;
@@ -1242,64 +1253,26 @@ impl canvas::Program<Message> for CodeEditor {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let geometry = self.cache.draw(renderer, bounds.size(), |frame| {
-            // Initialize wrapping calculator
-            let wrapping_calc = WrappingCalculator::new(
-                self.wrap_enabled,
-                self.wrap_column,
-                self.full_char_width,
-                self.char_width,
-            );
-            let visual_lines = wrapping_calc.calculate_visual_lines(
-                &self.buffer,
-                bounds.width,
-                self.gutter_width(),
-            );
+        let visual_lines: Rc<Vec<VisualLine>> =
+            self.visual_lines_cached(bounds.width);
 
-            // Calculate visible line range based on viewport for optimized rendering
-            // Use bounds.height as fallback when viewport_height is not yet initialized
-            let effective_viewport_height = if self.viewport_height > 0.0 {
-                self.viewport_height
-            } else {
-                bounds.height
-            };
-            let first_visible_line =
-                (self.viewport_scroll / self.line_height).floor() as usize;
-            let visible_lines_count =
-                (effective_viewport_height / self.line_height).ceil() as usize
-                    + 2;
-            let last_visible_line = (first_visible_line + visible_lines_count)
-                .min(visual_lines.len());
+        // Prefer the tracked viewport height when available, but fall back to
+        // the current bounds during initial layout when viewport metrics have
+        // not been populated yet.
+        let effective_viewport_height = if self.viewport_height > 0.0 {
+            self.viewport_height
+        } else {
+            bounds.height
+        };
+        let first_visible_line =
+            (self.viewport_scroll / self.line_height).floor() as usize;
+        let visible_lines_count =
+            (effective_viewport_height / self.line_height).ceil() as usize + 2;
+        let last_visible_line =
+            (first_visible_line + visible_lines_count).min(visual_lines.len());
 
-            // Load syntax highlighting
-            let syntax_set = SyntaxSet::load_defaults_newlines();
-            let theme_set = ThemeSet::load_defaults();
-            let syntax_theme = &theme_set.themes["base16-ocean.dark"];
-
-            // Note: Extension-based lookup below falls back to plain text via
-            // `.or(Some(syntax_set.find_syntax_plain_text()))`. If `self.syntax`
-            // is a language name that doesn't match a known file extension or an
-            // unsupported extension, `syntect` returns `None` and the fallback
-            // causes many inputs to be highlighted as plain text.
-            let syntax_ref = match self.syntax.as_str() {
-                "python" => syntax_set.find_syntax_by_extension("py"),
-                "rust" => syntax_set.find_syntax_by_extension("rs"),
-                "javascript" => syntax_set.find_syntax_by_extension("js"),
-                "htm" => syntax_set.find_syntax_by_extension("html"),
-                "svg" => syntax_set.find_syntax_by_extension("xml"),
-                "markdown" => syntax_set.find_syntax_by_extension("md"),
-                "text" => Some(syntax_set.find_syntax_plain_text()),
-                _ => syntax_set.find_syntax_by_extension(self.syntax.as_str()),
-            }
-            .or(Some(syntax_set.find_syntax_plain_text()));
-
-            // Choose the render range:
-            // - If a cache window is defined, render that larger window
-            //   to avoid frequent cache clears as the user scrolls.
-            // - Otherwise, render only the current visible range.
-            let (start_idx, end_idx) = if self.cache_window_end_line
-                > self.cache_window_start_line
-            {
+        let (start_idx, end_idx) =
+            if self.cache_window_end_line > self.cache_window_start_line {
                 let s = self.cache_window_start_line.min(visual_lines.len());
                 let e = self.cache_window_end_line.min(visual_lines.len());
                 (s, e)
@@ -1307,64 +1280,107 @@ impl canvas::Program<Message> for CodeEditor {
                 (first_visible_line, last_visible_line)
             };
 
-            // Create rendering context to pass to helper methods
-            let ctx = RenderContext {
-                visual_lines: &visual_lines,
-                bounds_width: bounds.width,
-                gutter_width: self.gutter_width(),
-                line_height: self.line_height,
-                font_size: self.font_size,
-                full_char_width: self.full_char_width,
-                char_width: self.char_width,
-                font: self.font,
-            };
+        // Split rendering into two cached layers:
+        // - content: expensive, mostly static text/gutter rendering
+        // - overlay: frequently changing highlights/cursor/IME
+        //
+        // This keeps selection dragging and cursor blinking smooth by avoiding
+        // invalidation of the text layer on every overlay update.
+        let visual_lines_for_content = visual_lines.clone();
+        let content_geometry =
+            self.content_cache.draw(renderer, bounds.size(), |frame| {
+                // syntect initialization is relatively expensive; keep it global.
+                let syntax_set =
+                    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
+                let theme_set = THEME_SET.get_or_init(ThemeSet::load_defaults);
+                let syntax_theme = theme_set
+                    .themes
+                    .get("base16-ocean.dark")
+                    .or_else(|| theme_set.themes.values().next());
 
-            // Render all visible lines
-            for (idx, visual_line) in visual_lines
-                .iter()
-                .enumerate()
-                .skip(start_idx)
-                .take(end_idx.saturating_sub(start_idx))
-            {
-                let y = idx as f32 * self.line_height;
+                // Normalize common language aliases/extensions used by consumers.
+                let syntax_ref = match self.syntax.as_str() {
+                    "python" => syntax_set.find_syntax_by_extension("py"),
+                    "rust" => syntax_set.find_syntax_by_extension("rs"),
+                    "javascript" => syntax_set.find_syntax_by_extension("js"),
+                    "htm" => syntax_set.find_syntax_by_extension("html"),
+                    "svg" => syntax_set.find_syntax_by_extension("xml"),
+                    "markdown" => syntax_set.find_syntax_by_extension("md"),
+                    "text" => Some(syntax_set.find_syntax_plain_text()),
+                    _ => syntax_set
+                        .find_syntax_by_extension(self.syntax.as_str()),
+                }
+                .or(Some(syntax_set.find_syntax_plain_text()));
 
-                // Note: Gutter background is handled by a container in view.rs
-                // to ensure proper clipping when the pane is resized.
+                let ctx = RenderContext {
+                    visual_lines: visual_lines_for_content.as_ref(),
+                    bounds_width: bounds.width,
+                    gutter_width: self.gutter_width(),
+                    line_height: self.line_height,
+                    font_size: self.font_size,
+                    full_char_width: self.full_char_width,
+                    char_width: self.char_width,
+                    font: self.font,
+                };
 
-                // Draw line numbers and wrap indicators
-                self.draw_line_numbers(frame, &ctx, visual_line, y);
+                for (idx, visual_line) in visual_lines_for_content
+                    .iter()
+                    .enumerate()
+                    .skip(start_idx)
+                    .take(end_idx.saturating_sub(start_idx))
+                {
+                    let y = idx as f32 * self.line_height;
 
-                // Highlight current line
-                self.draw_current_line_highlight(frame, &ctx, visual_line, y);
+                    self.draw_line_numbers(frame, &ctx, visual_line, y);
+                    self.draw_text_with_syntax_highlighting(
+                        frame,
+                        &ctx,
+                        visual_line,
+                        y,
+                        syntax_ref,
+                        syntax_set,
+                        syntax_theme,
+                    );
+                }
+            });
 
-                // Draw text content with syntax highlighting
-                self.draw_text_with_syntax_highlighting(
-                    frame,
-                    &ctx,
-                    visual_line,
-                    y,
-                    syntax_ref,
-                    &syntax_set,
-                    syntax_theme,
-                );
-            }
+        let visual_lines_for_overlay = visual_lines;
+        let overlay_geometry =
+            self.overlay_cache.draw(renderer, bounds.size(), |frame| {
+                // The overlay layer shares the same visual lines, but draws only
+                // elements that change without modifying the buffer content.
+                let ctx = RenderContext {
+                    visual_lines: visual_lines_for_overlay.as_ref(),
+                    bounds_width: bounds.width,
+                    gutter_width: self.gutter_width(),
+                    line_height: self.line_height,
+                    font_size: self.font_size,
+                    full_char_width: self.full_char_width,
+                    char_width: self.char_width,
+                    font: self.font,
+                };
 
-            // Draw search match highlights
-            self.draw_search_highlights(
-                frame,
-                &ctx,
-                first_visible_line,
-                last_visible_line,
-            );
+                for (idx, visual_line) in visual_lines_for_overlay
+                    .iter()
+                    .enumerate()
+                    .skip(start_idx)
+                    .take(end_idx.saturating_sub(start_idx))
+                {
+                    let y = idx as f32 * self.line_height;
+                    self.draw_current_line_highlight(
+                        frame,
+                        &ctx,
+                        visual_line,
+                        y,
+                    );
+                }
 
-            // Draw selection highlight
-            self.draw_selection_highlight(frame, &ctx);
+                self.draw_search_highlights(frame, &ctx, start_idx, end_idx);
+                self.draw_selection_highlight(frame, &ctx);
+                self.draw_cursor(frame, &ctx);
+            });
 
-            // Draw cursor (normal caret or IME preedit)
-            self.draw_cursor(frame, &ctx);
-        });
-
-        vec![geometry]
+        vec![content_geometry, overlay_geometry]
     }
 
     /// Handles Canvas trait events, specifically keyboard input events and focus management for the code editor widget.

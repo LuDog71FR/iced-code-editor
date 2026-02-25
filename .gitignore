@@ -5,3 +5,4 @@ AGENTS.md
 .DS_Store
 ocx.*
 opencode.*
+demo-app/dist

@@ -7,7 +7,9 @@ impl CodeEditor {
     pub(crate) fn clear_selection(&mut self) {
         self.selection_start = None;
         self.selection_end = None;
-        self.cache.clear();
+        // Selection affects only overlay visuals (highlight rectangles), so avoid
+        // invalidating the expensive content cache.
+        self.overlay_cache.clear();
     }
 
     /// Returns the selected text range in normalized order (start before end).

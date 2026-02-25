@@ -91,7 +91,8 @@ pub struct CodeEditor {
     syntax: String,                  // Language for highlighting
     selection_start: Option<...>,   // Selection anchors
     history: CommandHistory,         // Undo/redo system
-    cache: canvas::Cache,            // Rendering optimization
+    content_cache: canvas::Cache,    // Content rendering optimization
+    overlay_cache: canvas::Cache,    // Overlay rendering optimization
     // ... other fields
 }
 ```
@@ -287,7 +288,8 @@ impl canvas::Program<Message> for CodeEditor {
 **Cache optimization:**
 
 ```rust
-self.cache.clear();  // Invalidate on changes
+self.content_cache.clear();
+self.overlay_cache.clear();
 // Canvas automatically caches unchanged frames
 ```
 
@@ -372,7 +374,7 @@ Message::Tick => {
     if self.is_focused() && self.last_blink.elapsed() >= CURSOR_BLINK_INTERVAL {
         self.cursor_visible = !self.cursor_visible;
         self.last_blink = std::time::Instant::now();
-        self.cache.clear();  // Force redraw
+        self.overlay_cache.clear();  // Force redraw
     }
 }
 ```
@@ -745,8 +747,10 @@ All text operations properly handle UTF-8 character boundaries to prevent panics
 ### 1. Canvas Caching
 
 ```rust
-self.cache = canvas::Cache::default();  // Create cache
-self.cache.clear();  // Invalidate on changes
+self.content_cache = canvas::Cache::default();
+self.overlay_cache = canvas::Cache::default();
+self.content_cache.clear();
+self.overlay_cache.clear();
 ```
 
 Iced automatically caches canvas frames. We clear the cache only when content changes.
@@ -901,7 +905,7 @@ fn char_to_byte_index(s: &str, char_index: usize) -> usize {
 
 ```rust
 self.cursor = new_position;
-self.cache.clear();  // Don't forget!
+self.overlay_cache.clear();
 ```
 
 ### 3. Command History Grouping

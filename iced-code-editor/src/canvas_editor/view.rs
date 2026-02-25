@@ -10,6 +10,7 @@ use super::ime_requester::ImeRequester;
 use super::search_dialog;
 use super::wrapping::{self, WrappingCalculator};
 use super::{CodeEditor, GUTTER_WIDTH, Message};
+use std::rc::Rc;
 
 impl CodeEditor {
     /// Calculates visual lines and canvas height for the editor.
@@ -17,20 +18,10 @@ impl CodeEditor {
     /// Returns a tuple of (visual_lines, canvas_height) where:
     /// - visual_lines: The visual line mapping with wrapping applied
     /// - canvas_height: The total height needed for the canvas
-    fn calculate_canvas_height(&self) -> (Vec<wrapping::VisualLine>, f32) {
-        let wrapping_calc = WrappingCalculator::new(
-            self.wrap_enabled,
-            self.wrap_column,
-            self.full_char_width,
-            self.char_width,
-        );
-
-        let visual_lines = wrapping_calc.calculate_visual_lines(
-            &self.buffer,
-            self.viewport_width,
-            self.gutter_width(),
-        );
-
+    fn calculate_canvas_height(&self) -> (Rc<Vec<wrapping::VisualLine>>, f32) {
+        // Reuse memoized visual lines so view layout (canvas height + IME cursor rect)
+        // does not trigger repeated wrapping computation.
+        let visual_lines = self.visual_lines_cached(self.viewport_width);
         let total_visual_lines = visual_lines.len();
         let content_height = total_visual_lines as f32 * self.line_height;
 
@@ -282,8 +273,10 @@ impl CodeEditor {
         let mut editor_stack =
             iced::widget::Stack::new().push(background_row).push(scrollable);
 
-        // Add IME layer for input method support
-        let cursor_rect = self.calculate_ime_cursor_rect(&visual_lines);
+        // Add IME layer for input method support.
+        // The IME requester needs the cursor rect in viewport coordinates, which
+        // depends on the current logical↔visual mapping.
+        let cursor_rect = self.calculate_ime_cursor_rect(visual_lines.as_ref());
         let ime_layer = self.create_ime_layer(cursor_rect);
         editor_stack = editor_stack.push(ime_layer);
 

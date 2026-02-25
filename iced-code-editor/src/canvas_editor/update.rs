@@ -20,20 +20,31 @@ impl CodeEditor {
     ///
     /// This method should be called after any operation that modifies the buffer content.
     /// It resets the cursor blink animation, refreshes search matches if search is active,
-    /// and clears the rendering cache to force a redraw.
+    /// and invalidates all caches that depend on buffer content or layout:
+    /// - `buffer_revision` is bumped to invalidate layout-derived caches
+    /// - `visual_lines_cache` is cleared so wrapping is recalculated on next use
+    /// - `content_cache` and `overlay_cache` are cleared to rebuild canvas geometry
     fn finish_edit_operation(&mut self) {
         self.reset_cursor_blink();
         self.refresh_search_matches_if_needed();
-        self.cache.clear();
+        // The exact revision value is not semantically meaningful; it only needs
+        // to change on edits, so `wrapping_add` is sufficient and overflow-safe.
+        self.buffer_revision = self.buffer_revision.wrapping_add(1);
+        *self.visual_lines_cache.borrow_mut() = None;
+        self.content_cache.clear();
+        self.overlay_cache.clear();
     }
 
     /// Performs common cleanup operations after navigation operations.
     ///
     /// This method should be called after cursor movement operations.
-    /// It resets the cursor blink animation and clears the rendering cache.
+    /// It resets the cursor blink animation and invalidates only the overlay
+    /// rendering cache. Cursor movement and selection changes do not modify the
+    /// buffer content, so keeping the content cache intact avoids unnecessary
+    /// re-rendering of syntax-highlighted text.
     fn finish_navigation_operation(&mut self) {
         self.reset_cursor_blink();
-        self.cache.clear();
+        self.overlay_cache.clear();
     }
 
     /// Starts command grouping with the given label if not already grouping.
@@ -272,11 +283,13 @@ impl CodeEditor {
         // End grouping on delete selection
         self.end_grouping_if_active();
 
-        // Delete selected text
-        self.delete_selection();
-        self.reset_cursor_blink();
-        self.cache.clear();
-        self.scroll_to_cursor()
+        if self.selection_start.is_some() && self.selection_end.is_some() {
+            self.delete_selection();
+            self.finish_edit_operation();
+            self.scroll_to_cursor()
+        } else {
+            Task::none()
+        }
     }
 
     // =========================================================================
@@ -483,8 +496,16 @@ impl CodeEditor {
     /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
     fn handle_mouse_drag_msg(&mut self, point: iced::Point) -> Task<Message> {
         if self.is_dragging {
+            let before_cursor = self.cursor;
+            let before_selection_end = self.selection_end;
             self.handle_mouse_drag(point);
-            self.cache.clear();
+            if self.cursor != before_cursor
+                || self.selection_end != before_selection_end
+            {
+                // Mouse move events can be very frequent. Only invalidate the
+                // overlay cache if the drag actually changed selection/cursor.
+                self.overlay_cache.clear();
+            }
         }
         Task::none()
     }
@@ -581,7 +602,7 @@ impl CodeEditor {
     /// A `Task<Message>` that focuses and selects all in the search input
     fn handle_open_search_msg(&mut self) -> Task<Message> {
         self.search_state.open_search();
-        self.cache.clear();
+        self.overlay_cache.clear();
 
         // Focus the search input and select all text if any
         Task::batch([
@@ -597,7 +618,7 @@ impl CodeEditor {
     /// A `Task<Message>` that focuses and selects all in the search input
     fn handle_open_search_replace_msg(&mut self) -> Task<Message> {
         self.search_state.open_replace();
-        self.cache.clear();
+        self.overlay_cache.clear();
 
         // Focus the search input and select all text if any
         Task::batch([
@@ -613,7 +634,7 @@ impl CodeEditor {
     /// A `Task<Message>` (currently Task::none())
     fn handle_close_search_msg(&mut self) -> Task<Message> {
         self.search_state.close();
-        self.cache.clear();
+        self.overlay_cache.clear();
         Task::none()
     }
 
@@ -631,7 +652,7 @@ impl CodeEditor {
         query: &str,
     ) -> Task<Message> {
         self.search_state.set_query(query.to_string(), &self.buffer);
-        self.cache.clear();
+        self.overlay_cache.clear();
 
         // Move cursor to first match if any
         if let Some(match_pos) = self.search_state.current_match() {
@@ -666,7 +687,7 @@ impl CodeEditor {
     /// A `Task<Message>` that scrolls to first match if any
     fn handle_toggle_case_sensitive_msg(&mut self) -> Task<Message> {
         self.search_state.toggle_case_sensitive(&self.buffer);
-        self.cache.clear();
+        self.overlay_cache.clear();
 
         // Move cursor to first match if any
         if let Some(match_pos) = self.search_state.current_match() {
@@ -688,7 +709,7 @@ impl CodeEditor {
             if let Some(match_pos) = self.search_state.current_match() {
                 self.cursor = (match_pos.line, match_pos.col);
                 self.clear_selection();
-                self.cache.clear();
+                self.overlay_cache.clear();
                 return self.scroll_to_cursor();
             }
         }
@@ -706,7 +727,7 @@ impl CodeEditor {
             if let Some(match_pos) = self.search_state.current_match() {
                 self.cursor = (match_pos.line, match_pos.col);
                 self.clear_selection();
-                self.cache.clear();
+                self.overlay_cache.clear();
                 return self.scroll_to_cursor();
             }
         }
@@ -746,7 +767,7 @@ impl CodeEditor {
             }
 
             self.clear_selection();
-            self.cache.clear();
+            self.finish_edit_operation();
             return self.scroll_to_cursor();
         }
         Task::none()
@@ -793,7 +814,7 @@ impl CodeEditor {
             // Update matches (should be empty now)
             self.search_state.update_matches(&self.buffer);
             self.clear_selection();
-            self.cache.clear();
+            self.finish_edit_operation();
             self.scroll_to_cursor()
         } else {
             Task::none()
@@ -854,7 +875,7 @@ impl CodeEditor {
         self.focus_locked = false; // Unlock focus when gained
         self.show_cursor = true;
         self.reset_cursor_blink();
-        self.cache.clear();
+        self.overlay_cache.clear();
         Task::none()
     }
 
@@ -868,7 +889,7 @@ impl CodeEditor {
         self.focus_locked = true; // Lock focus when lost to prevent focus stealing
         self.show_cursor = false;
         self.ime_preedit = None;
-        self.cache.clear();
+        self.overlay_cache.clear();
         Task::none()
     }
 
@@ -881,7 +902,7 @@ impl CodeEditor {
     /// A `Task<Message>` (currently Task::none())
     fn handle_ime_opened_msg(&mut self) -> Task<Message> {
         self.ime_preedit = None;
-        self.cache.clear();
+        self.overlay_cache.clear();
         Task::none()
     }
 
@@ -911,7 +932,7 @@ impl CodeEditor {
             });
         }
 
-        self.cache.clear();
+        self.overlay_cache.clear();
         Task::none()
     }
 
@@ -930,7 +951,7 @@ impl CodeEditor {
         self.ime_preedit = None;
 
         if text.is_empty() {
-            self.cache.clear();
+            self.overlay_cache.clear();
             return Task::none();
         }
 
@@ -950,7 +971,7 @@ impl CodeEditor {
     /// A `Task<Message>` (currently Task::none())
     fn handle_ime_closed_msg(&mut self) -> Task<Message> {
         self.ime_preedit = None;
-        self.cache.clear();
+        self.overlay_cache.clear();
         Task::none()
     }
 
@@ -971,8 +992,8 @@ impl CodeEditor {
             && self.last_blink.elapsed() >= CURSOR_BLINK_INTERVAL
         {
             self.cursor_visible = !self.cursor_visible;
-            self.last_blink = std::time::Instant::now();
-            self.cache.clear();
+            self.last_blink = super::Instant::now();
+            self.overlay_cache.clear();
         }
 
         // Hide cursor if editor doesn't have focus
@@ -1048,7 +1069,8 @@ impl CodeEditor {
             self.cache_window_start_line = window_start;
             self.cache_window_end_line = window_end;
             self.last_first_visible_line = first_visible_line;
-            self.cache.clear();
+            self.content_cache.clear();
+            self.overlay_cache.clear();
         }
         self.viewport_scroll = new_scroll;
         self.viewport_height = new_height;
@@ -1652,6 +1674,34 @@ mod tests {
 
         let _ = editor.update(&Message::Undo);
         assert_eq!(editor.buffer.line(0), "hello");
+    }
+
+    #[test]
+    fn test_edit_increments_revision_and_clears_visual_lines_cache() {
+        let mut editor = CodeEditor::new("hello", "rs");
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+        editor.cursor = (0, 5);
+
+        let _ = editor.visual_lines_cached(800.0);
+        assert!(
+            editor.visual_lines_cache.borrow().is_some(),
+            "visual_lines_cached should populate the cache"
+        );
+
+        let previous_revision = editor.buffer_revision;
+
+        let _ = editor.update(&Message::CharacterInput('!'));
+        assert_eq!(
+            editor.buffer_revision,
+            previous_revision.wrapping_add(1),
+            "buffer_revision should change on buffer edits"
+        );
+        assert!(
+            editor.visual_lines_cache.borrow().is_none(),
+            "buffer edits should invalidate the visual lines cache"
+        );
     }
 
     #[test]

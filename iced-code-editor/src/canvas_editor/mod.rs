@@ -8,9 +8,12 @@ use iced::advanced::text::{
 };
 use iced::widget::operation::{RelativeOffset, snap_to};
 use iced::widget::{Id, canvas};
+use std::cell::RefCell;
 use std::cmp::Ordering as CmpOrdering;
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 use unicode_width::UnicodeWidthChar;
 
@@ -18,6 +21,9 @@ use crate::i18n::Translations;
 use crate::text_buffer::TextBuffer;
 use crate::theme::Style;
 pub use history::CommandHistory;
+
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 /// Global counter for generating unique editor IDs (starts at 1)
 static EDITOR_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -157,8 +163,27 @@ pub struct CodeEditor {
     pub(crate) selection_end: Option<(usize, usize)>,
     /// Mouse is currently dragging for selection
     pub(crate) is_dragging: bool,
-    /// Cache for canvas rendering
-    pub(crate) cache: canvas::Cache,
+    /// Cached geometry for the "content" layer.
+    ///
+    /// This layer includes expensive-to-build, mostly static visuals such as:
+    /// - syntax-highlighted text glyphs
+    /// - line numbers / gutter text
+    ///
+    /// It is intentionally kept stable across selection/cursor movement so
+    /// that mouse-drag selection feels smooth.
+    pub(crate) content_cache: canvas::Cache,
+    /// Cached geometry for the "overlay" layer.
+    ///
+    /// This layer includes visuals that change frequently without modifying the
+    /// underlying buffer, such as:
+    /// - cursor and current-line highlight
+    /// - selection highlight
+    /// - search match highlights
+    /// - IME preedit decorations
+    ///
+    /// Keeping overlays in a separate cache avoids invalidating the content
+    /// layer on every cursor blink or selection drag.
+    pub(crate) overlay_cache: canvas::Cache,
     /// Scrollable ID for programmatic scrolling
     pub(crate) scrollable_id: Id,
     /// Current viewport scroll position (Y offset)
@@ -210,6 +235,38 @@ pub struct CodeEditor {
     pub(crate) cache_window_start_line: usize,
     /// Cached render window end line (exclusive)
     pub(crate) cache_window_end_line: usize,
+    /// Monotonic revision counter for buffer content.
+    ///
+    /// Any operation that changes the buffer must bump this counter to
+    /// invalidate derived layout caches (e.g. wrapping / visual lines). The
+    /// exact value is not semantically meaningful, so `wrapping_add` is used to
+    /// avoid overflow panics while still producing a different key.
+    pub(crate) buffer_revision: u64,
+    /// Cached result of line wrapping ("visual lines") for the current layout key.
+    ///
+    /// This is stored behind a `RefCell` because wrapping is needed during
+    /// rendering (where we only have `&self`), but we still want to memoize the
+    /// expensive computation without forcing external mutability.
+    visual_lines_cache: RefCell<Option<VisualLinesCache>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct VisualLinesKey {
+    buffer_revision: u64,
+    /// `f32::to_bits()` is used so the cache key is stable and exact:
+    /// - no epsilon comparisons are required
+    /// - NaN payloads (if any) do not collapse unexpectedly
+    viewport_width_bits: u32,
+    gutter_width_bits: u32,
+    wrap_enabled: bool,
+    wrap_column: Option<usize>,
+    full_char_width_bits: u32,
+    char_width_bits: u32,
+}
+
+struct VisualLinesCache {
+    key: VisualLinesKey,
+    visual_lines: Rc<Vec<wrapping::VisualLine>>,
 }
 
 /// Messages emitted by the code editor
@@ -342,7 +399,8 @@ impl CodeEditor {
             selection_start: None,
             selection_end: None,
             is_dragging: false,
-            cache: canvas::Cache::default(),
+            content_cache: canvas::Cache::default(),
+            overlay_cache: canvas::Cache::default(),
             scrollable_id: Id::unique(),
             viewport_scroll: 0.0,
             viewport_height: 600.0, // Default, will be updated
@@ -370,6 +428,8 @@ impl CodeEditor {
             last_first_visible_line: 0,
             cache_window_start_line: 0,
             cache_window_end_line: 0,
+            buffer_revision: 0,
+            visual_lines_cache: RefCell::new(None),
         };
 
         // Perform initial character dimension calculation
@@ -422,7 +482,8 @@ impl CodeEditor {
             self.line_height = self.font_size * line_height_ratio;
         }
 
-        self.cache.clear();
+        self.content_cache.clear();
+        self.overlay_cache.clear();
     }
 
     /// Measures the width of a single character string using the current font settings.
@@ -476,7 +537,8 @@ impl CodeEditor {
     /// * `height` - The line height in pixels
     pub fn set_line_height(&mut self, height: f32) {
         self.line_height = height;
-        self.cache.clear();
+        self.content_cache.clear();
+        self.overlay_cache.clear();
     }
 
     /// Returns the current line height.
@@ -540,7 +602,8 @@ impl CodeEditor {
     /// ```
     pub fn set_theme(&mut self, style: Style) {
         self.style = style;
-        self.cache.clear(); // Force redraw with new theme
+        self.content_cache.clear();
+        self.overlay_cache.clear();
     }
 
     /// Sets the language for UI translations.
@@ -562,7 +625,7 @@ impl CodeEditor {
     /// ```
     pub fn set_language(&mut self, language: crate::i18n::Language) {
         self.translations.set_language(language);
-        self.cache.clear(); // Force UI redraw
+        self.overlay_cache.clear();
     }
 
     /// Returns the current UI language.
@@ -667,9 +730,10 @@ impl CodeEditor {
         self.is_grouping = false;
         self.last_blink = Instant::now();
         self.cursor_visible = true;
-        // Create a new cache to ensure complete redraw (clear() is not sufficient
-        // when new content is smaller than previous content)
-        self.cache = canvas::Cache::default();
+        self.content_cache = canvas::Cache::default();
+        self.overlay_cache = canvas::Cache::default();
+        self.buffer_revision = self.buffer_revision.wrapping_add(1);
+        *self.visual_lines_cache.borrow_mut() = None;
 
         // Scroll to top to force a redraw
         snap_to(self.scrollable_id.clone(), RelativeOffset::START)
@@ -742,7 +806,8 @@ impl CodeEditor {
     pub fn set_wrap_enabled(&mut self, enabled: bool) {
         if self.wrap_enabled != enabled {
             self.wrap_enabled = enabled;
-            self.cache.clear(); // Force redraw
+            self.content_cache.clear();
+            self.overlay_cache.clear();
         }
     }
 
@@ -855,7 +920,8 @@ impl CodeEditor {
     pub fn set_line_numbers_enabled(&mut self, enabled: bool) {
         if self.line_numbers_enabled != enabled {
             self.line_numbers_enabled = enabled;
-            self.cache.clear(); // Force redraw
+            self.content_cache.clear();
+            self.overlay_cache.clear();
         }
     }
 
@@ -940,6 +1006,62 @@ impl CodeEditor {
     /// ```
     pub fn reset_focus_lock(&mut self) {
         self.focus_locked = false;
+    }
+
+    /// Returns wrapped "visual lines" for the current buffer and layout, with memoization.
+    ///
+    /// The editor frequently needs the wrapped view of the buffer:
+    /// - hit-testing (mouse selection, cursor placement)
+    /// - mapping logical ↔ visual positions
+    /// - rendering (text, line numbers, highlights)
+    ///
+    /// Computing visual lines is relatively expensive for large files, so we
+    /// cache the result keyed by:
+    /// - `buffer_revision` (buffer content changes)
+    /// - viewport width / gutter width (layout changes)
+    /// - wrapping settings (wrap enabled / wrap column)
+    /// - measured character widths (font / size changes)
+    ///
+    /// The returned `Rc<Vec<VisualLine>>` is cheap to clone and allows multiple
+    /// rendering passes (content + overlay layers) to share the same computed
+    /// layout without extra allocation.
+    pub(crate) fn visual_lines_cached(
+        &self,
+        viewport_width: f32,
+    ) -> Rc<Vec<wrapping::VisualLine>> {
+        let key = VisualLinesKey {
+            buffer_revision: self.buffer_revision,
+            viewport_width_bits: viewport_width.to_bits(),
+            gutter_width_bits: self.gutter_width().to_bits(),
+            wrap_enabled: self.wrap_enabled,
+            wrap_column: self.wrap_column,
+            full_char_width_bits: self.full_char_width.to_bits(),
+            char_width_bits: self.char_width.to_bits(),
+        };
+
+        let mut cache = self.visual_lines_cache.borrow_mut();
+        if let Some(existing) = cache.as_ref()
+            && existing.key == key
+        {
+            return existing.visual_lines.clone();
+        }
+
+        let wrapping_calc = wrapping::WrappingCalculator::new(
+            self.wrap_enabled,
+            self.wrap_column,
+            self.full_char_width,
+            self.char_width,
+        );
+        let visual_lines = wrapping_calc.calculate_visual_lines(
+            &self.buffer,
+            viewport_width,
+            self.gutter_width(),
+        );
+        let visual_lines = Rc::new(visual_lines);
+
+        *cache =
+            Some(VisualLinesCache { key, visual_lines: visual_lines.clone() });
+        visual_lines
     }
 }
 
@@ -1191,5 +1313,45 @@ mod tests {
 
         // Font size should remain unchanged
         assert!((editor.font_size() - FONT_SIZE).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_visual_lines_cached_reuses_cache_for_same_key() {
+        let editor = CodeEditor::new("a\nb\nc", "rs");
+
+        let first = editor.visual_lines_cached(800.0);
+        let second = editor.visual_lines_cached(800.0);
+
+        assert!(
+            Rc::ptr_eq(&first, &second),
+            "visual_lines_cached should reuse the cached Rc for identical keys"
+        );
+    }
+
+    #[test]
+    fn test_visual_lines_cached_changes_on_viewport_width_change() {
+        let editor = CodeEditor::new("a\nb\nc", "rs");
+
+        let first = editor.visual_lines_cached(800.0);
+        let second = editor.visual_lines_cached(801.0);
+
+        assert!(
+            !Rc::ptr_eq(&first, &second),
+            "visual_lines_cached should recompute when viewport width changes"
+        );
+    }
+
+    #[test]
+    fn test_visual_lines_cached_changes_on_buffer_revision_change() {
+        let mut editor = CodeEditor::new("a\nb\nc", "rs");
+
+        let first = editor.visual_lines_cached(800.0);
+        editor.buffer_revision = editor.buffer_revision.wrapping_add(1);
+        let second = editor.visual_lines_cached(800.0);
+
+        assert!(
+            !Rc::ptr_eq(&first, &second),
+            "visual_lines_cached should recompute when buffer_revision changes"
+        );
     }
 }

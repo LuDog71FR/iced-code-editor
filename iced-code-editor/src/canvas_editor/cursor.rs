@@ -108,7 +108,9 @@ impl CodeEditor {
                 }
             }
         }
-        self.cache.clear();
+        // Cursor movement affects only overlay visuals (caret, current-line highlight),
+        // so avoid invalidating the expensive content cache.
+        self.overlay_cache.clear();
     }
 
     /// Computes the cursor logical position (line, col) from a screen point.
@@ -129,18 +131,9 @@ impl CodeEditor {
         // Calculate visual line number - point.y is already in canvas coordinates
         let visual_line_idx = (point.y / self.line_height) as usize;
 
-        // Use wrapping calculator to find logical position
-        let wrapping_calc = WrappingCalculator::new(
-            self.wrap_enabled,
-            self.wrap_column,
-            self.full_char_width,
-            self.char_width,
-        );
-        let visual_lines = wrapping_calc.calculate_visual_lines(
-            &self.buffer,
-            self.viewport_width,
-            self.gutter_width(),
-        );
+        // Reuse memoized wrapping result for hit-testing. This avoids recomputing
+        // visual lines on every mouse move/drag.
+        let visual_lines = self.visual_lines_cached(self.viewport_width);
 
         if visual_line_idx >= visual_lines.len() {
             // Clicked beyond last line - move to end of document
@@ -156,16 +149,16 @@ impl CodeEditor {
 
         // Use correct width calculation for CJK support
         let line_content = self.buffer.line(visual_line.logical_line);
-        let segment_text: String = line_content
-            .chars()
-            .skip(visual_line.start_col)
-            .take(visual_line.end_col - visual_line.start_col)
-            .collect();
 
         let mut current_width = 0.0;
         let mut col_offset = 0;
 
-        for c in segment_text.chars() {
+        // Iterate the visual slice directly to avoid allocating a temporary String.
+        for c in line_content
+            .chars()
+            .skip(visual_line.start_col)
+            .take(visual_line.end_col - visual_line.start_col)
+        {
             let char_width = super::measure_char_width(
                 c,
                 self.full_char_width,
@@ -187,26 +180,21 @@ impl CodeEditor {
     ///
     /// Reuses `calculate_cursor_from_point` to compute the position and updates the cache.
     pub(crate) fn handle_mouse_click(&mut self, point: Point) {
+        let before = self.cursor;
         if let Some(cursor) = self.calculate_cursor_from_point(point) {
             self.cursor = cursor;
-            self.cache.clear();
+            if self.cursor != before {
+                // Only clear overlay when the caret actually moved.
+                self.overlay_cache.clear();
+            }
         }
     }
 
     /// Returns a scroll command to make the cursor visible.
     pub(crate) fn scroll_to_cursor(&self) -> Task<Message> {
-        // Use wrapping calculator to find visual line
-        let wrapping_calc = WrappingCalculator::new(
-            self.wrap_enabled,
-            self.wrap_column,
-            self.full_char_width,
-            self.char_width,
-        );
-        let visual_lines = wrapping_calc.calculate_visual_lines(
-            &self.buffer,
-            self.viewport_width,
-            self.gutter_width(),
-        );
+        // Reuse memoized wrapping result so repeated scroll computations do not
+        // trigger repeated visual line calculation.
+        let visual_lines = self.visual_lines_cached(self.viewport_width);
 
         let cursor_visual = WrappingCalculator::logical_to_visual(
             &visual_lines,
@@ -256,7 +244,7 @@ impl CodeEditor {
         let line_len = self.buffer.line_len(new_line);
 
         self.cursor = (new_line, self.cursor.1.min(line_len));
-        self.cache.clear();
+        self.overlay_cache.clear();
     }
 
     /// Moves cursor down by one page (approximately viewport height).
@@ -269,7 +257,7 @@ impl CodeEditor {
         let line_len = self.buffer.line_len(new_line);
 
         self.cursor = (new_line, self.cursor.1.min(line_len));
-        self.cache.clear();
+        self.overlay_cache.clear();
     }
 
     /// Handles mouse drag for text selection.

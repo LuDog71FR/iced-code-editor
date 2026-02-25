@@ -37,11 +37,20 @@ impl FontOption {
         },
     };
 
-    pub const ALL: [FontOption; 4] = [
+    pub const NOTO_SANS_CJK_SC: FontOption = FontOption {
+        name: "Noto Sans CJK SC",
+        font: Font {
+            family: iced::font::Family::Name("Noto Sans CJK SC"),
+            ..Font::DEFAULT
+        },
+    };
+
+    pub const ALL: [FontOption; 5] = [
         FontOption::MONOSPACE,
         FontOption::SERIF,
         FontOption::SANS_SERIF,
         FontOption::JETBRAINS_MONO,
+        FontOption::NOTO_SANS_CJK_SC,
     ];
 
     pub fn font(&self) -> Font {
