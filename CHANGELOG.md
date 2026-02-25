@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- feat: Handle focus without the needs to check if mouse is out of bounds #10
+None
+
+## [0.3.5] - 2026-02-25
+
+### Added
+
+- feat: Handle focus without the needs to check if mouse is out of bounds ([#10](https://github.com/LuDog71FR/iced-code-editor/issues/10))
+- feat: WASM compatibility optimization
+- feat: Improve selection smoothness via layered canvas caching
+
 
 ## [0.3.4] - 2026-01-28
 
