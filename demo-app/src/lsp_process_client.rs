@@ -239,6 +239,7 @@ impl LspProcessClient {
         let pending_reader = pending_requests.clone();
         let events_reader = events;
         let server_key = server_key.to_string();
+        let tx_reader = tx.clone(); // Clone for reader thread to send responses
 
         // Spawn the writer thread - sends messages to the LSP server
         let writer_thread = thread::spawn(move || {
@@ -295,9 +296,25 @@ impl LspProcessClient {
                 if let Ok(value) =
                     serde_json::from_slice::<serde_json::Value>(&buf)
                 {
-                    // Check if it's a response (has id and no method)
+                    // Check if it's a request from the server (has id and method)
                     if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
-                        if value.get("method").is_none() {
+                         if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
+                             // Handle window/workDoneProgress/create request
+                             if method == "window/workDoneProgress/create" {
+                                 // We need to respond with a success result (null)
+                                 let response = json!({
+                                     "jsonrpc": "2.0",
+                                     "id": id,
+                                     "result": null
+                                 });
+                                 if let Ok(data) = serde_json::to_vec(&response) {
+                                    let mut header = format!("Content-Length: {}\r\n\r\n", data.len()).into_bytes();
+                                    header.extend_from_slice(&data);
+                                    let _ = tx_reader.send(header);
+                                 }
+                             }
+                         } else {
+                            // It's a response (has id and no method)
                             // Look up the request type for this response
                             let kind = {
                                 let mut pending = pending_reader
@@ -338,7 +355,7 @@ impl LspProcessClient {
                                     }
                                 }
                             }
-                        }
+                         }
                     } else if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
                         // Notification from server
                         if method == "$/progress" {
@@ -394,6 +411,9 @@ impl LspProcessClient {
                             "willSave": false,
                             "didSave": true
                         }
+                    },
+                    "window": {
+                        "workDoneProgress": true
                     }
                 },
                 "workspaceFolders": null

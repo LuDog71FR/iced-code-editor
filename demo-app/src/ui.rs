@@ -416,25 +416,37 @@ pub fn view_editor_pane<'a>(
     // LSP Status
     #[cfg(not(target_arch = "wasm32"))]
     let lsp_status: Element<'_, Message> = if let Some(key) = tab.lsp_server_key {
-        let (status_text, is_working) = if let Some(progress_map) = app.lsp_progress.get(key) {
+        let (status_text, is_working, is_finishing) = if let Some(progress_map) = app.lsp_progress.get(key) {
             if let Some(progress) = progress_map.values().next() {
-                let percent = progress.percentage.map(|p| format!(" {}%", p)).unwrap_or_default();
-                let msg = progress.message.as_ref().map(|m| format!(": {}", m)).unwrap_or_default();
-                (format!("LSP: {} ({}{}{})", key, progress.title, msg, percent), true)
+                let percent_val = progress.percentage.unwrap_or(0);
+                if percent_val >= 100 {
+                    (format!("LSP: {} (Finishing...)", key), true, true)
+                } else {
+                    let percent = progress.percentage.map(|p| format!(" {}%", p)).unwrap_or_default();
+                    let msg = progress.message.as_ref().map(|m| format!(": {}", m)).unwrap_or_default();
+                    (format!("LSP: {} ({}{}{})", key, progress.title, msg, percent), true, false)
+                }
             } else {
-                (format!("LSP: {}", key), false)
+                (format!("LSP: {}", key), false, false)
             }
         } else {
-             (format!("LSP: {}", key), false)
+             (format!("LSP: {}", key), false, false)
         };
 
         let spinner = if is_working {
-            let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-            let frame = frames[app.spinner_frame % frames.len()];
-            text(frame).size(14).style(move |theme: &Theme| {
-                let palette = theme.extended_palette();
-                text::Style { color: Some(palette.primary.base.color) }
-            })
+            if is_finishing {
+                 text("✓").size(14).style(move |theme: &Theme| {
+                    let palette = theme.extended_palette();
+                    text::Style { color: Some(palette.success.base.color) }
+                })
+            } else {
+                let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+                let frame = frames[app.spinner_frame % frames.len()];
+                text(frame).size(14).font(iced::font::Font::MONOSPACE).style(move |theme: &Theme| {
+                    let palette = theme.extended_palette();
+                    text::Style { color: Some(palette.primary.base.color) }
+                })
+            }
         } else {
             text("●").size(14).style(move |theme: &Theme| {
                 let palette = theme.extended_palette();
