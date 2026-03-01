@@ -33,6 +33,7 @@ impl CodeEditor {
         *self.visual_lines_cache.borrow_mut() = None;
         self.content_cache.clear();
         self.overlay_cache.clear();
+        self.enqueue_lsp_change();
     }
 
     /// Performs common cleanup operations after navigation operations.
@@ -1116,6 +1117,7 @@ impl CodeEditor {
             // Mouse and selection operations
             Message::MouseClick(point) => self.handle_mouse_click_msg(*point),
             Message::MouseDrag(point) => self.handle_mouse_drag_msg(*point),
+            Message::MouseHover(point) => self.handle_mouse_drag_msg(*point),
             Message::MouseRelease => self.handle_mouse_release_msg(),
 
             // Clipboard operations

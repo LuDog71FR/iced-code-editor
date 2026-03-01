@@ -1154,9 +1154,15 @@ impl CodeEditor {
                 })
             }
             mouse::Event::CursorMoved { .. } => {
-                // Handle mouse drag for selection only when cursor is within bounds
                 cursor.position_in(bounds).map(|position| {
-                    Action::publish(Message::MouseDrag(position)).and_capture()
+                    if self.is_dragging {
+                        // Handle mouse drag for selection only when cursor is within bounds
+                        Action::publish(Message::MouseDrag(position))
+                            .and_capture()
+                    } else {
+                        // Forward hover events when not dragging to enable LSP hover.
+                        Action::publish(Message::MouseHover(position))
+                    }
                 })
             }
             mouse::Event::ButtonReleased(mouse::Button::Left) => {

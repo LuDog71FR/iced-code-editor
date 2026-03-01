@@ -119,7 +119,7 @@ impl CodeEditor {
     /// 1. Whether the click is inside the gutter area.
     /// 2. Visual line mapping after wrapping.
     /// 3. CJK character widths (wide characters use FONT_SIZE, narrow use CHAR_WIDTH).
-    fn calculate_cursor_from_point(
+    pub(crate) fn calculate_cursor_from_point(
         &self,
         point: Point,
     ) -> Option<(usize, usize)> {
