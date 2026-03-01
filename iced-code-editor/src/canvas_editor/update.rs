@@ -106,7 +106,8 @@ impl CodeEditor {
     ///
     /// # Returns
     ///
-    /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
+    /// A `Task<Message>` that scrolls to keep the cursor visible (including
+    /// horizontal scroll when wrap is disabled)
     fn handle_character_input_msg(&mut self, ch: char) -> Task<Message> {
         // Guard clause: only process character input if editor has focus and is not locked
         if !self.has_focus() {
@@ -122,14 +123,15 @@ impl CodeEditor {
         self.history.push(Box::new(cmd));
 
         self.finish_edit_operation();
-        Task::none()
+        self.scroll_to_cursor()
     }
 
     /// Handles Tab key press (inserts 4 spaces).
     ///
     /// # Returns
     ///
-    /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
+    /// A `Task<Message>` that scrolls to keep the cursor visible (including
+    /// horizontal scroll when wrap is disabled)
     fn handle_tab(&mut self) -> Task<Message> {
         // Insert 4 spaces for Tab
         // Start grouping if not already grouping
@@ -149,8 +151,8 @@ impl CodeEditor {
             self.history.push(Box::new(cmd));
         }
 
-        self.finish_navigation_operation();
-        Task::none()
+        self.finish_edit_operation();
+        self.scroll_to_cursor()
     }
 
     /// Handles Tab key press for focus navigation (when search dialog is not open).
@@ -341,7 +343,8 @@ impl CodeEditor {
     ///
     /// # Returns
     ///
-    /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
+    /// A `Task<Message>` that scrolls to keep the cursor visible (including
+    /// horizontal scroll back to x=0 when wrap is disabled)
     fn handle_home(&mut self, shift_pressed: bool) -> Task<Message> {
         if shift_pressed {
             // Start selection if not already started
@@ -356,7 +359,7 @@ impl CodeEditor {
             self.cursor.1 = 0;
         }
         self.finish_navigation_operation();
-        Task::none()
+        self.scroll_to_cursor()
     }
 
     /// Handles End key press.
@@ -369,7 +372,8 @@ impl CodeEditor {
     ///
     /// # Returns
     ///
-    /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
+    /// A `Task<Message>` that scrolls to keep the cursor visible (including
+    /// horizontal scroll to end of line when wrap is disabled)
     fn handle_end(&mut self, shift_pressed: bool) -> Task<Message> {
         let line = self.cursor.0;
         let line_len = self.buffer.line_len(line);
@@ -387,7 +391,7 @@ impl CodeEditor {
             self.cursor.1 = line_len;
         }
         self.finish_navigation_operation();
-        Task::none()
+        self.scroll_to_cursor()
     }
 
     /// Handles Ctrl+Home key press.
@@ -1079,6 +1083,31 @@ impl CodeEditor {
         Task::none()
     }
 
+    /// Handles horizontal scrollbar scrolled event (only active when wrap is disabled).
+    ///
+    /// Updates `horizontal_scroll_offset` and clears render caches when the offset
+    /// changes by more than 0.1 pixels to avoid unnecessary redraws.
+    ///
+    /// # Arguments
+    ///
+    /// * `viewport` - The viewport information after scrolling
+    ///
+    /// # Returns
+    ///
+    /// A `Task<Message>` (currently `Task::none()`)
+    fn handle_horizontal_scrolled_msg(
+        &mut self,
+        viewport: iced::widget::scrollable::Viewport,
+    ) -> Task<Message> {
+        let new_x = viewport.absolute_offset().x;
+        if (self.horizontal_scroll_offset - new_x).abs() > 0.1 {
+            self.horizontal_scroll_offset = new_x;
+            self.content_cache.clear();
+            self.overlay_cache.clear();
+        }
+        Task::none()
+    }
+
     // =========================================================================
     // Main Update Method
     // =========================================================================
@@ -1167,6 +1196,9 @@ impl CodeEditor {
             // UI update operations
             Message::Tick => self.handle_tick_msg(),
             Message::Scrolled(viewport) => self.handle_scrolled_msg(*viewport),
+            Message::HorizontalScrolled(viewport) => {
+                self.handle_horizontal_scrolled_msg(*viewport)
+            }
         }
     }
 }
@@ -1175,6 +1207,30 @@ impl CodeEditor {
 mod tests {
     use super::*;
     use crate::canvas_editor::ArrowDirection;
+
+    #[test]
+    fn test_horizontal_scroll_initial_state() {
+        let editor = CodeEditor::new("short line", "rs");
+        assert!(
+            (editor.horizontal_scroll_offset - 0.0).abs() < f32::EPSILON,
+            "Initial horizontal scroll offset should be 0"
+        );
+    }
+
+    #[test]
+    fn test_set_wrap_enabled_resets_horizontal_offset() {
+        let mut editor = CodeEditor::new("long line", "rs");
+        editor.wrap_enabled = false;
+        // Simulate a non-zero horizontal scroll
+        editor.horizontal_scroll_offset = 100.0;
+
+        // Re-enabling wrap should reset horizontal offset
+        editor.set_wrap_enabled(true);
+        assert!(
+            (editor.horizontal_scroll_offset - 0.0).abs() < f32::EPSILON,
+            "Horizontal scroll offset should be reset when wrap is re-enabled"
+        );
+    }
 
     #[test]
     fn test_canvas_focus_lost() {
@@ -1700,9 +1756,17 @@ mod tests {
             previous_revision.wrapping_add(1),
             "buffer_revision should change on buffer edits"
         );
+        // `scroll_to_cursor` repopulates the cache after the edit with the new
+        // revision, so the cache may be `Some`.  What must never happen is that
+        // stale data (an old revision) survives an edit.
         assert!(
-            editor.visual_lines_cache.borrow().is_none(),
-            "buffer edits should invalidate the visual lines cache"
+            editor
+                .visual_lines_cache
+                .borrow()
+                .as_ref()
+                .map_or(true, |c| c.key.buffer_revision
+                    == editor.buffer_revision),
+            "buffer edits should not leave stale data in the visual lines cache"
         );
     }
 

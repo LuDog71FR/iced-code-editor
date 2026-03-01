@@ -91,6 +91,8 @@ struct RenderContext<'a> {
     char_width: f32,
     /// Font to use for rendering text
     font: iced::Font,
+    /// Horizontal scroll offset in pixels (subtracted from text X positions)
+    horizontal_scroll_offset: f32,
 }
 
 impl CodeEditor {
@@ -215,7 +217,8 @@ impl CodeEditor {
                 });
 
             // Extract only the ranges that fall within our segment
-            let mut x_offset = ctx.gutter_width + 5.0;
+            let mut x_offset =
+                ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset;
             let mut char_pos = 0;
 
             for (style, text) in full_line_ranges {
@@ -275,7 +278,10 @@ impl CodeEditor {
             // Fallback to plain text
             frame.fill_text(canvas::Text {
                 content: line_segment.to_string(),
-                position: Point::new(ctx.gutter_width + 5.0, y + 2.0),
+                position: Point::new(
+                    ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset,
+                    y + 2.0,
+                ),
                 color: self.style.text_color,
                 size: ctx.font_size.into(),
                 font: ctx.font,
@@ -377,6 +383,7 @@ impl CodeEditor {
                             ctx.full_char_width,
                             ctx.char_width,
                         );
+                        let x_start = x_start - ctx.horizontal_scroll_offset;
                         let x_end = x_start + match_width;
 
                         frame.fill_rectangle(
@@ -422,6 +429,8 @@ impl CodeEditor {
                                     ctx.full_char_width,
                                     ctx.char_width,
                                 );
+                            let x_start =
+                                x_start - ctx.horizontal_scroll_offset;
                             let x_end = x_start + sel_width;
 
                             frame.fill_rectangle(
@@ -485,6 +494,7 @@ impl CodeEditor {
                             ctx.full_char_width,
                             ctx.char_width,
                         );
+                        let x_start = x_start - ctx.horizontal_scroll_offset;
                         let x_end = x_start + sel_width;
 
                         frame.fill_rectangle(
@@ -524,6 +534,8 @@ impl CodeEditor {
                                     ctx.full_char_width,
                                     ctx.char_width,
                                 );
+                            let x_start =
+                                x_start - ctx.horizontal_scroll_offset;
                             let x_end = x_start + sel_width;
 
                             frame.fill_rectangle(
@@ -586,6 +598,7 @@ impl CodeEditor {
                             ctx.full_char_width,
                             ctx.char_width,
                         );
+                        let x_start = x_start - ctx.horizontal_scroll_offset;
                         let x_end = x_start + sel_width;
 
                         frame.fill_rectangle(
@@ -639,7 +652,7 @@ impl CodeEditor {
 
                 // Compute the preedit region start X
                 // Use calculate_segment_geometry to ensure correct CJK width handling
-                let (cursor_x, _) = calculate_segment_geometry(
+                let (cursor_x_content, _) = calculate_segment_geometry(
                     line_content,
                     vl.start_col,
                     self.cursor.1,
@@ -648,6 +661,7 @@ impl CodeEditor {
                     ctx.full_char_width,
                     ctx.char_width,
                 );
+                let cursor_x = cursor_x_content - ctx.horizontal_scroll_offset;
                 let cursor_y = cursor_visual as f32 * ctx.line_height;
 
                 if let Some(preedit) = self.ime_preedit.as_ref() {
@@ -765,7 +779,7 @@ impl CodeEditor {
 
                 // Compute exact caret X position
                 // Account for gutter width, left padding, and rendered prefix width
-                let (cursor_x, _) = calculate_segment_geometry(
+                let (cursor_x_content, _) = calculate_segment_geometry(
                     line_content,
                     vl.start_col,
                     self.cursor.1,
@@ -774,6 +788,7 @@ impl CodeEditor {
                     ctx.full_char_width,
                     ctx.char_width,
                 );
+                let cursor_x = cursor_x_content - ctx.horizontal_scroll_offset;
                 let cursor_y = cursor_visual as f32 * ctx.line_height;
 
                 // Draw standard caret (2px vertical bar)
@@ -1327,8 +1342,40 @@ impl canvas::Program<Message> for CodeEditor {
                     full_char_width: self.full_char_width,
                     char_width: self.char_width,
                     font: self.font,
+                    horizontal_scroll_offset: self.horizontal_scroll_offset,
                 };
 
+                // Clip code text to the code area (right of gutter) so that
+                // horizontal scrolling cannot cause text to bleed into the gutter.
+                // Note: iced renders ALL text on top of ALL geometry, so a
+                // fill_rectangle cannot mask text bleed — with_clip is required.
+                let code_clip = Rectangle {
+                    x: ctx.gutter_width,
+                    y: 0.0,
+                    width: (bounds.width - ctx.gutter_width).max(0.0),
+                    height: bounds.height,
+                };
+                frame.with_clip(code_clip, |f| {
+                    for (idx, visual_line) in visual_lines_for_content
+                        .iter()
+                        .enumerate()
+                        .skip(start_idx)
+                        .take(end_idx.saturating_sub(start_idx))
+                    {
+                        let y = idx as f32 * self.line_height;
+                        self.draw_text_with_syntax_highlighting(
+                            f,
+                            &ctx,
+                            visual_line,
+                            y,
+                            syntax_ref,
+                            syntax_set,
+                            syntax_theme,
+                        );
+                    }
+                });
+
+                // Draw line numbers in the gutter (no clip — fixed position)
                 for (idx, visual_line) in visual_lines_for_content
                     .iter()
                     .enumerate()
@@ -1336,17 +1383,7 @@ impl canvas::Program<Message> for CodeEditor {
                     .take(end_idx.saturating_sub(start_idx))
                 {
                     let y = idx as f32 * self.line_height;
-
                     self.draw_line_numbers(frame, &ctx, visual_line, y);
-                    self.draw_text_with_syntax_highlighting(
-                        frame,
-                        &ctx,
-                        visual_line,
-                        y,
-                        syntax_ref,
-                        syntax_set,
-                        syntax_theme,
-                    );
                 }
             });
 
@@ -1364,6 +1401,7 @@ impl canvas::Program<Message> for CodeEditor {
                     full_char_width: self.full_char_width,
                     char_width: self.char_width,
                     font: self.font,
+                    horizontal_scroll_offset: self.horizontal_scroll_offset,
                 };
 
                 for (idx, visual_line) in visual_lines_for_overlay

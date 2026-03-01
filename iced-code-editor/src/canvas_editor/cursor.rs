@@ -4,6 +4,8 @@ use iced::widget::operation::scroll_to;
 use iced::widget::scrollable;
 use iced::{Point, Task};
 
+use super::measure_text_width;
+
 use super::wrapping::WrappingCalculator;
 use super::{ArrowDirection, CodeEditor, Message};
 
@@ -144,8 +146,9 @@ impl CodeEditor {
 
         let visual_line = &visual_lines[visual_line_idx];
 
-        // Calculate column within the segment
-        let x_in_text = point.x - self.gutter_width() - 5.0;
+        // Calculate column within the segment, accounting for horizontal scroll
+        let x_in_text =
+            point.x - self.gutter_width() - 5.0 + self.horizontal_scroll_offset;
 
         // Use correct width calculation for CJK support
         let line_content = self.buffer.line(visual_line.logical_line);
@@ -216,23 +219,78 @@ impl CodeEditor {
         let top_margin = self.line_height * 2.0;
         let bottom_margin = self.line_height * 2.0;
 
-        // Calculate new scroll position if cursor is outside visible area
-        let new_scroll = if cursor_y < viewport_top + top_margin {
+        // Calculate new vertical scroll position if cursor is outside visible area
+        let new_v_scroll = if cursor_y < viewport_top + top_margin {
             // Cursor is above viewport - scroll up
-            (cursor_y - top_margin).max(0.0)
+            Some((cursor_y - top_margin).max(0.0))
         } else if cursor_y + self.line_height > viewport_bottom - bottom_margin
         {
             // Cursor is below viewport - scroll down
-            cursor_y + self.line_height + bottom_margin - self.viewport_height
+            Some(
+                cursor_y + self.line_height + bottom_margin
+                    - self.viewport_height,
+            )
         } else {
-            // Cursor is visible - no scroll needed
-            return Task::none();
+            None
         };
 
-        scroll_to(
-            self.scrollable_id.clone(),
-            scrollable::AbsoluteOffset { x: 0.0, y: new_scroll },
-        )
+        let vertical_task = if let Some(new_scroll) = new_v_scroll {
+            scroll_to(
+                self.scrollable_id.clone(),
+                scrollable::AbsoluteOffset { x: 0.0, y: new_scroll },
+            )
+        } else {
+            Task::none()
+        };
+
+        // Horizontal scroll: only when wrap is disabled
+        let h_task = if !self.wrap_enabled {
+            // Compute cursor content-space X position
+            let cursor_content_x = if let Some(visual_idx) = cursor_visual {
+                let vl = &visual_lines[visual_idx];
+                let line_content = self.buffer.line(vl.logical_line);
+                let prefix: String = line_content
+                    .chars()
+                    .skip(vl.start_col)
+                    .take(self.cursor.1.saturating_sub(vl.start_col))
+                    .collect();
+                self.gutter_width()
+                    + 5.0
+                    + measure_text_width(
+                        &prefix,
+                        self.full_char_width,
+                        self.char_width,
+                    )
+            } else {
+                self.gutter_width() + 5.0
+            };
+
+            let left_boundary = self.gutter_width() + self.char_width;
+            let right_boundary = self.viewport_width - self.char_width * 2.0;
+            let cursor_viewport_x =
+                cursor_content_x - self.horizontal_scroll_offset;
+
+            let new_h_offset = if cursor_viewport_x < left_boundary {
+                (cursor_content_x - left_boundary).max(0.0)
+            } else if cursor_viewport_x > right_boundary {
+                cursor_content_x - right_boundary
+            } else {
+                self.horizontal_scroll_offset // no change
+            };
+
+            if (new_h_offset - self.horizontal_scroll_offset).abs() > 0.5 {
+                scroll_to(
+                    self.horizontal_scrollable_id.clone(),
+                    scrollable::AbsoluteOffset { x: new_h_offset, y: 0.0 },
+                )
+            } else {
+                Task::none()
+            }
+        } else {
+            Task::none()
+        };
+
+        Task::batch([vertical_task, h_task])
     }
 
     /// Moves cursor up by one page (approximately viewport height).

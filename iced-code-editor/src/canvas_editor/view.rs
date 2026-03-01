@@ -3,7 +3,7 @@
 use iced::Size;
 use iced::advanced::input_method;
 use iced::widget::canvas::Canvas;
-use iced::widget::{Row, Scrollable, Space, container, scrollable};
+use iced::widget::{Column, Row, Scrollable, Space, container, scrollable};
 use iced::{Background, Border, Color, Element, Length, Rectangle, Shadow};
 
 use super::ime_requester::ImeRequester;
@@ -114,6 +114,85 @@ impl CodeEditor {
             .style(self.create_scrollable_style())
     }
 
+    /// Creates the horizontal scrollbar element when wrap is disabled and content overflows.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_content_width` - The total pixel width of the widest line
+    ///
+    /// # Returns
+    ///
+    /// `Some(element)` if a horizontal scrollbar is needed, `None` otherwise
+    fn create_horizontal_scrollbar(
+        &self,
+        max_content_width: f32,
+    ) -> Option<Element<'_, Message>> {
+        if self.wrap_enabled || max_content_width <= self.viewport_width {
+            return None;
+        }
+
+        let scrollbar_bg = self.style.scrollbar_background;
+        let scroller_color = self.style.scroller_color;
+
+        let h_scrollable = Scrollable::new(
+            Space::new().width(Length::Fixed(max_content_width)).height(0.0),
+        )
+        .id(self.horizontal_scrollable_id.clone())
+        .width(Length::Fill)
+        .height(Length::Fixed(12.0))
+        .direction(scrollable::Direction::Horizontal(
+            scrollable::Scrollbar::new(),
+        ))
+        .on_scroll(Message::HorizontalScrolled)
+        .style(move |_theme, _status| scrollable::Style {
+            container: container::Style {
+                background: Some(Background::Color(Color::TRANSPARENT)),
+                ..container::Style::default()
+            },
+            vertical_rail: scrollable::Rail {
+                background: Some(scrollbar_bg.into()),
+                border: Border {
+                    radius: 4.0.into(),
+                    width: 0.0,
+                    color: Color::TRANSPARENT,
+                },
+                scroller: scrollable::Scroller {
+                    background: scroller_color.into(),
+                    border: Border {
+                        radius: 4.0.into(),
+                        width: 0.0,
+                        color: Color::TRANSPARENT,
+                    },
+                },
+            },
+            horizontal_rail: scrollable::Rail {
+                background: Some(scrollbar_bg.into()),
+                border: Border {
+                    radius: 4.0.into(),
+                    width: 0.0,
+                    color: Color::TRANSPARENT,
+                },
+                scroller: scrollable::Scroller {
+                    background: scroller_color.into(),
+                    border: Border {
+                        radius: 4.0.into(),
+                        width: 0.0,
+                        color: Color::TRANSPARENT,
+                    },
+                },
+            },
+            gap: None,
+            auto_scroll: scrollable::AutoScroll {
+                background: Color::TRANSPARENT.into(),
+                border: Border::default(),
+                shadow: Shadow::default(),
+                icon: Color::TRANSPARENT,
+            },
+        });
+
+        Some(h_scrollable.into())
+    }
+
     /// Creates the gutter background container if line numbers are enabled.
     ///
     /// # Returns
@@ -215,7 +294,8 @@ impl CodeEditor {
                     &prefix_text,
                     self.full_char_width,
                     self.char_width,
-                );
+                )
+                - self.horizontal_scroll_offset;
 
             // Calculate visual Y position relative to the viewport
             // We subtract viewport_scroll because the content is scrolled up/down
@@ -298,11 +378,20 @@ impl CodeEditor {
             editor_stack = editor_stack.push(positioned_dialog);
         }
 
-        // Wrap in a container with clip to ensure proper bounds
-        container(editor_stack)
+        // Wrap the editor stack in a container with clip
+        let editor_container = container(editor_stack)
             .width(Length::Fill)
             .height(Length::Fill)
-            .clip(true)
-            .into()
+            .clip(true);
+
+        // When wrap is disabled, add a horizontal scrollbar below the editor
+        let max_content_width = self.max_content_width();
+        if let Some(h_scrollbar) =
+            self.create_horizontal_scrollbar(max_content_width)
+        {
+            Column::new().push(editor_container).push(h_scrollbar).into()
+        } else {
+            editor_container.into()
+        }
     }
 }

@@ -148,8 +148,8 @@ pub struct CodeEditor {
     pub(crate) buffer: TextBuffer,
     /// Cursor position (line, column)
     pub(crate) cursor: (usize, usize),
-    /// Scroll offset in pixels
-    pub(crate) scroll_offset: f32,
+    /// Horizontal scroll offset in pixels, only used when wrap_enabled = false
+    pub(crate) horizontal_scroll_offset: f32,
     /// Editor theme style
     pub(crate) style: Style,
     /// Syntax highlighting language
@@ -187,6 +187,10 @@ pub struct CodeEditor {
     pub(crate) overlay_cache: canvas::Cache,
     /// Scrollable ID for programmatic scrolling
     pub(crate) scrollable_id: Id,
+    /// ID for the horizontal scrollable widget (only used when wrap_enabled = false)
+    pub(crate) horizontal_scrollable_id: Id,
+    /// Cache for max content width: (buffer_revision, width_in_pixels)
+    pub(crate) max_content_width_cache: RefCell<Option<(u64, f32)>>,
     /// Current viewport scroll position (Y offset)
     pub(crate) viewport_scroll: f32,
     /// Viewport height (visible area)
@@ -325,6 +329,8 @@ pub enum Message {
     CtrlEnd,
     /// Viewport scrolled - track scroll position
     Scrolled(iced::widget::scrollable::Viewport),
+    /// Horizontal scrollbar scrolled (only when wrap is disabled)
+    HorizontalScrolled(iced::widget::scrollable::Viewport),
     /// Undo last operation (Ctrl+Z)
     Undo,
     /// Redo last undone operation (Ctrl+Y)
@@ -404,7 +410,7 @@ impl CodeEditor {
             editor_id,
             buffer: TextBuffer::new(content),
             cursor: (0, 0),
-            scroll_offset: 0.0,
+            horizontal_scroll_offset: 0.0,
             style: crate::theme::from_iced_theme(&iced::Theme::TokyoNightStorm),
             syntax: syntax.to_string(),
             last_blink: Instant::now(),
@@ -415,6 +421,8 @@ impl CodeEditor {
             content_cache: canvas::Cache::default(),
             overlay_cache: canvas::Cache::default(),
             scrollable_id: Id::unique(),
+            horizontal_scrollable_id: Id::unique(),
+            max_content_width_cache: RefCell::new(None),
             viewport_scroll: 0.0,
             viewport_height: 600.0, // Default, will be updated
             viewport_width: 800.0,  // Default, will be updated
@@ -931,7 +939,7 @@ impl CodeEditor {
     pub fn reset(&mut self, content: &str) -> iced::Task<Message> {
         self.buffer = TextBuffer::new(content);
         self.cursor = (0, 0);
-        self.scroll_offset = 0.0;
+        self.horizontal_scroll_offset = 0.0;
         self.selection_start = None;
         self.selection_end = None;
         self.is_dragging = false;
@@ -1115,6 +1123,9 @@ impl CodeEditor {
     pub fn set_wrap_enabled(&mut self, enabled: bool) {
         if self.wrap_enabled != enabled {
             self.wrap_enabled = enabled;
+            if enabled {
+                self.horizontal_scroll_offset = 0.0;
+            }
             self.content_cache.clear();
             self.overlay_cache.clear();
         }
@@ -1315,6 +1326,39 @@ impl CodeEditor {
     /// ```
     pub fn reset_focus_lock(&mut self) {
         self.focus_locked = false;
+    }
+
+    /// Returns the maximum content width across all lines, in pixels.
+    ///
+    /// Used to size the horizontal scrollbar when `wrap_enabled = false`.
+    /// The result is cached keyed by `buffer_revision` so repeated calls are cheap.
+    ///
+    /// # Returns
+    ///
+    /// Total width in pixels including gutter, padding and a right margin.
+    pub(crate) fn max_content_width(&self) -> f32 {
+        let mut cache = self.max_content_width_cache.borrow_mut();
+        if let Some((rev, w)) = *cache
+            && rev == self.buffer_revision
+        {
+            return w;
+        }
+
+        let gutter = self.gutter_width();
+        let max_line_width = (0..self.buffer.line_count())
+            .map(|i| {
+                measure_text_width(
+                    self.buffer.line(i),
+                    self.full_char_width,
+                    self.char_width,
+                )
+            })
+            .fold(0.0_f32, f32::max);
+
+        // gutter + left padding + text + right margin
+        let total = gutter + 5.0 + max_line_width + 20.0;
+        *cache = Some((self.buffer_revision, total));
+        total
     }
 
     /// Returns wrapped "visual lines" for the current buffer and layout, with memoization.
@@ -1713,6 +1757,43 @@ mod tests {
         assert!(
             !Rc::ptr_eq(&first, &second),
             "visual_lines_cached should recompute when buffer_revision changes"
+        );
+    }
+
+    #[test]
+    fn test_max_content_width_increases_with_longer_lines() {
+        let short = CodeEditor::new("ab", "rs");
+        let long =
+            CodeEditor::new("abcdefghijklmnopqrstuvwxyz0123456789", "rs");
+
+        assert!(
+            long.max_content_width() > short.max_content_width(),
+            "Longer lines should produce a greater max_content_width"
+        );
+    }
+
+    #[test]
+    fn test_max_content_width_cached_by_revision() {
+        let mut editor = CodeEditor::new("hello", "rs");
+        let w1 = editor.max_content_width();
+
+        // Same revision → cache hit
+        let w2 = editor.max_content_width();
+        assert!(
+            (w1 - w2).abs() < f32::EPSILON,
+            "Repeated calls with same revision should return identical value"
+        );
+
+        // Bump revision to simulate edit
+        editor.buffer_revision = editor.buffer_revision.wrapping_add(1);
+        // Update the buffer to reflect a longer line
+        editor.buffer = crate::text_buffer::TextBuffer::new(
+            "hello world with extra content",
+        );
+        let w3 = editor.max_content_width();
+        assert!(
+            w3 > w1,
+            "After revision bump with longer content, width should increase"
         );
     }
 }
