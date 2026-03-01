@@ -1,3 +1,5 @@
+mod lsp;
+
 use crate::app::{DemoApp, Message};
 use crate::types::{EditorId, FontOption, LanguageOption, PaneType, Template};
 use iced::widget::pane_grid::{Content, TitleBar};
@@ -315,6 +317,13 @@ pub fn view_editor_pane(
         ..Default::default()
     });
 
+    let overlay = lsp::view_lsp_overlay(app, editor_id);
+    let editor_stack: Element<'_, Message> =
+        stack![editor_view, overlay].into();
+    let editor_stack = mouse_area(editor_stack)
+        .on_enter(Message::EditorMouseEntered(editor_id))
+        .on_exit(Message::EditorMouseExited(editor_id));
+
     container(
         column![
             row![
@@ -327,7 +336,7 @@ pub fn view_editor_pane(
                 line_numbers_checkbox
             ]
             .padding(10),
-            editor_view,
+            editor_stack,
         ]
         .spacing(5)
         .width(Length::Fill)
@@ -335,7 +344,6 @@ pub fn view_editor_pane(
     )
     .width(Length::Fill)
     .height(Length::Fill)
-    .clip(true)
     .into()
 }
 
@@ -383,6 +391,8 @@ pub fn view_output_pane(
         .padding(5)
         .align_y(iced::Center);
 
+    let lsp_panel = lsp::view_lsp_panel();
+
     // Log messages content
     let log_content: Vec<Element<'_, Message>> = app
         .log_messages
@@ -409,7 +419,7 @@ pub fn view_output_pane(
     .height(Length::Fill)
     .width(Length::Fill);
 
-    column![toolbar, log_scrollable]
+    column![toolbar, lsp_panel, log_scrollable]
         .width(Length::Fill)
         .height(Length::Fill)
         .into()

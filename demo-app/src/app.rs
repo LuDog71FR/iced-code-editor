@@ -1,10 +1,27 @@
 use crate::file_ops;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::lsp_process_client::LspEvent;
 use crate::types::{EditorId, FontOption, LanguageOption, PaneType, Template};
-use iced::widget::pane_grid;
-use iced::{Subscription, Task, Theme, window};
+use iced::widget::operation::focus;
+#[cfg(not(target_arch = "wasm32"))]
+use iced::widget::text_editor;
+use iced::widget::{Id, pane_grid};
+use iced::{Event, Point, Subscription, Task, Theme, event, mouse, window};
+#[cfg(not(target_arch = "wasm32"))]
+use iced_code_editor::LspPosition;
 use iced_code_editor::Message as EditorMessage;
 use iced_code_editor::{CodeEditor, Language, theme};
 use std::path::PathBuf;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{Duration, Instant};
+
+#[cfg(not(target_arch = "wasm32"))]
+mod app_lsp;
+#[cfg(not(target_arch = "wasm32"))]
+use app_lsp::LspHoverPending;
 
 /// Demo application state.
 pub struct DemoApp {
@@ -48,6 +65,38 @@ pub struct DemoApp {
     pub show_settings: bool,
     /// Whether to automatically adjust line height when font size changes
     pub auto_adjust_line_height: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    lsp_events: Option<mpsc::Receiver<LspEvent>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    lsp_event_sender: Option<mpsc::Sender<LspEvent>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_server_left: Option<&'static str>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_server_right: Option<&'static str>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_last_hover: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_last_completion: Vec<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_hover_content: text_editor::Content,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_hover_visible: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_completion_visible: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_completion_selected: usize,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_hover_position: Option<Point>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_hover_anchor: Option<(EditorId, LspPosition)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_hover_interactive: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_overlay_editor: Option<EditorId>,
+    #[cfg(not(target_arch = "wasm32"))]
+    lsp_hover_pending: Option<LspHoverPending>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_hover_hide_deadline: Option<Instant>,
 }
 
 /// Application messages.
@@ -59,6 +108,10 @@ pub enum Message {
     ToggleAutoLineHeight(bool),
     /// Editor event
     EditorEvent(EditorId, EditorMessage),
+    /// Editor mouse entered
+    EditorMouseEntered(EditorId),
+    /// Editor mouse exited
+    EditorMouseExited(EditorId),
     /// Open file
     OpenFile,
     /// File opened
@@ -71,6 +124,8 @@ pub enum Message {
     FileSaved(Result<PathBuf, String>),
     /// Cursor blink tick
     Tick,
+    /// Window-level events
+    WindowEvent(Event),
     /// Font changed
     FontChanged(FontOption),
     /// Font size changed
@@ -99,6 +154,12 @@ pub enum Message {
     TextInputChanged(String),
     /// Test text input clicked
     TextInputClicked,
+    #[cfg(not(target_arch = "wasm32"))]
+    LspHoverContentAction(text_editor::Action),
+    LspHoverEntered,
+    LspHoverExited,
+    LspCompletionSelected(usize),
+    LspCompletionClosed,
 }
 
 impl DemoApp {
@@ -144,31 +205,86 @@ greet("World")
         editor_left.set_font(font);
         editor_right.set_font(font);
 
-        (
-            Self {
-                editor_left,
-                editor_right,
-                current_file_left: None,
-                current_file_right: None,
-                error_message: None,
-                current_theme: Theme::TokyoNightStorm,
-                current_language: Language::English,
-                current_font,
-                current_font_size: 14.0,
-                current_line_height: 20.0,
-                panes,
-                log_messages,
-                search_replace_enabled_left: true,
-                search_replace_enabled_right: true,
-                line_numbers_enabled_left: true,
-                line_numbers_enabled_right: true,
-                active_editor: EditorId::Left,
-                text_input_value: String::new(),
-                show_settings: false,
-                auto_adjust_line_height: true,
-            },
-            Task::none(),
-        )
+        let startup_task = Task::none();
+        #[cfg(not(target_arch = "wasm32"))]
+        let (lsp_event_sender, lsp_events) = {
+            let (event_tx, event_rx) = mpsc::channel();
+            (Some(event_tx), Some(event_rx))
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let lsp_server_left = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        let lsp_server_right = None;
+
+        let mut app = Self {
+            editor_left,
+            editor_right,
+            current_file_left: None,
+            current_file_right: None,
+            error_message: None,
+            current_theme: Theme::TokyoNightStorm,
+            current_language: Language::English,
+            current_font,
+            current_font_size: 14.0,
+            current_line_height: 20.0,
+            panes,
+            log_messages,
+            search_replace_enabled_left: true,
+            search_replace_enabled_right: true,
+            line_numbers_enabled_left: true,
+            line_numbers_enabled_right: true,
+            active_editor: EditorId::Left,
+            text_input_value: String::new(),
+            show_settings: false,
+            auto_adjust_line_height: true,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_events,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_event_sender,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_server_left,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_server_right,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_last_hover: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_last_completion: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_hover_content: text_editor::Content::with_text(""),
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_hover_visible: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_completion_visible: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_completion_selected: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_hover_position: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_hover_anchor: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_hover_interactive: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_overlay_editor: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_hover_pending: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_hover_hide_deadline: None,
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let root_dir = std::env::current_dir().ok();
+            if let Some(root_dir) = root_dir {
+                let left_path = root_dir.join("demo.lua");
+                app.sync_lsp_for_path(EditorId::Left, &left_path);
+                let right_path = root_dir.join("demo.lua");
+                app.sync_lsp_for_path(EditorId::Right, &right_path);
+            } else {
+                app.log("ERROR", "LSP failed: cwd unavailable");
+            }
+        }
+
+        (app, startup_task)
     }
 
     /// Adds a log message.
@@ -287,15 +403,20 @@ greet("World")
                 );
 
                 let style = theme::from_iced_theme(&self.current_theme);
+                let active_editor = self.active_editor;
                 let (editor, current_file) = self.get_active_editor_and_file();
 
                 let task = editor.reset(&content);
                 editor.set_theme(style);
                 editor.mark_saved();
+                let path_for_lsp = path.clone();
                 *current_file = Some(path);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.sync_lsp_for_path(active_editor, &path_for_lsp);
+                }
                 self.error_message = None;
 
-                let active_editor = self.active_editor;
                 task.map(move |e| Message::EditorEvent(active_editor, e))
             }
             Err(err) => {
@@ -590,8 +711,17 @@ greet("World")
         editor_id: EditorId,
         event: &EditorMessage,
     ) -> Task<Message> {
-        let editor = self.get_editor(editor_id);
-        editor.update(event).map(move |e| Message::EditorEvent(editor_id, e))
+        let task = {
+            let editor = self.get_editor(editor_id);
+            editor
+                .update(event)
+                .map(move |e| Message::EditorEvent(editor_id, e))
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if let EditorMessage::MouseHover(point) = event {
+            self.handle_lsp_hover_from_mouse(editor_id, *point);
+        }
+        task
     }
 
     /// Handles periodic tick events for cursor blinking in both editors.
@@ -600,6 +730,11 @@ greet("World")
     ///
     /// A batched `Task` containing tick updates for both editors.
     fn handle_tick(&mut self) -> Task<Message> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.drain_lsp_events();
+            self.process_lsp_hover_timers();
+        }
         let task_left = self
             .editor_left
             .update(&EditorMessage::Tick)
@@ -641,6 +776,10 @@ greet("World")
         let task = editor.reset(template.content());
         editor.set_theme(style);
         *current_file = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.sync_lsp_for_template(editor_id, template);
+        }
 
         task.map(move |e| Message::EditorEvent(editor_id, e))
     }
@@ -764,7 +903,38 @@ greet("World")
             Message::EditorEvent(editor_id, event) => {
                 self.handle_editor_event(editor_id, &event)
             }
+            Message::EditorMouseEntered(editor_id) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.lsp_overlay_editor == Some(editor_id) {
+                    self.lsp_hover_hide_deadline = None;
+                }
+                Task::none()
+            }
+            Message::EditorMouseExited(editor_id) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.lsp_overlay_editor == Some(editor_id)
+                    && self.lsp_hover_visible
+                    && !self.lsp_hover_interactive
+                {
+                    self.lsp_hover_hide_deadline =
+                        Some(Instant::now() + Duration::from_millis(500));
+                }
+                Task::none()
+            }
             Message::Tick => self.handle_tick(),
+            Message::WindowEvent(event) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    if matches!(event, Event::Mouse(mouse::Event::CursorLeft))
+                        && self.lsp_hover_visible
+                    {
+                        self.lsp_hover_interactive = false;
+                        self.lsp_hover_hide_deadline =
+                            Some(Instant::now() + Duration::from_millis(400));
+                    }
+                }
+                Task::none()
+            }
             // Templates and execution
             Message::TemplateSelected(editor_id, template) => {
                 self.handle_template_selected(editor_id, template)
@@ -775,13 +945,65 @@ greet("World")
                 self.handle_text_input_changed(value)
             }
             Message::TextInputClicked => self.handle_text_input_clicked(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::LspHoverContentAction(action) => {
+                self.lsp_hover_content.perform(action);
+                self.lsp_hover_interactive = true;
+                self.lsp_hover_hide_deadline = None;
+                Task::none()
+            }
+            Message::LspHoverEntered => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.lsp_hover_interactive = true;
+                    self.lsp_hover_hide_deadline = None;
+                    self.editor_left.lose_focus();
+                    self.editor_right.lose_focus();
+                }
+                focus(Id::new("lsp_hover_text_editor"))
+            }
+            Message::LspHoverExited => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.lsp_hover_interactive = false;
+                    self.lsp_hover_hide_deadline =
+                        Some(Instant::now() + Duration::from_millis(300));
+                }
+                Task::none()
+            }
+            Message::LspCompletionClosed => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.lsp_completion_visible = false;
+                    if !self.lsp_hover_visible {
+                        self.lsp_overlay_editor = None;
+                    }
+                }
+                Task::none()
+            }
+            Message::LspCompletionSelected(index) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    if let Some(item) = self.lsp_last_completion.get(index) {
+                        self.log("INFO", &format!("LSP completion: {}", item));
+                    }
+                    self.lsp_completion_visible = false;
+                    if !self.lsp_hover_visible {
+                        self.lsp_overlay_editor = None;
+                    }
+                }
+                Task::none()
+            }
         }
     }
 
     /// Subscription for periodic updates.
     pub fn subscription(_state: &Self) -> Subscription<Message> {
         // Cursor blink
-        window::frames().map(|_| Message::Tick)
+        Subscription::batch([
+            window::frames().map(|_| Message::Tick),
+            event::listen().map(Message::WindowEvent),
+        ])
     }
 
     /// Returns the current theme for the application.

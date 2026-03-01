@@ -19,10 +19,8 @@ pub async fn open_file_dialog() -> Result<(PathBuf, String), String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn open_file_dialog() -> Result<(PathBuf, String), String> {
-    let file = rfd::AsyncFileDialog::new()
-        .set_title("Open File")
-        .pick_file()
-        .await;
+    let file =
+        rfd::AsyncFileDialog::new().set_title("Open File").pick_file().await;
 
     if let Some(file) = file {
         let path = file.path().to_path_buf();
@@ -85,10 +83,8 @@ pub async fn save_file_as_dialog(content: String) -> Result<PathBuf, String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn save_file_as_dialog(content: String) -> Result<PathBuf, String> {
-    let file = rfd::AsyncFileDialog::new()
-        .set_title("Save As")
-        .save_file()
-        .await;
+    let file =
+        rfd::AsyncFileDialog::new().set_title("Save As").save_file().await;
 
     if let Some(file) = file {
         let path = file.path().to_path_buf();
