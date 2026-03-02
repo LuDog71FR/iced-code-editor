@@ -8,7 +8,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use crate::types::Template;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Represents a language supported by an LSP server.
@@ -173,6 +173,8 @@ pub(crate) fn resolve_lsp_command(
 ) -> Result<LspCommand, String> {
     let program = if config.key == "rust-analyzer" {
         resolve_rust_analyzer_command()?
+    } else if config.key == "gopls" {
+        resolve_gopls_command()?
     } else {
         resolve_program_from_envs(config.env_vars)
             .unwrap_or_else(|| config.default_command[0].to_string())
@@ -230,6 +232,45 @@ fn resolve_rust_analyzer_command() -> Result<String, String> {
     }
     Err(
         "rust-analyzer not found. Please run rustup component add rust-analyzer or brew install rust-analyzer"
+            .to_string(),
+    )
+}
+
+fn resolve_gopls_command() -> Result<String, String> {
+    if let Some(path) = resolve_program_from_envs(&["GOPLS", "GOPLS_PATH"]) {
+        return Ok(path);
+    }
+    if Command::new("gopls").arg("version").output().is_ok() {
+        return Ok("gopls".to_string());
+    }
+    if let Ok(output) = Command::new("go").args(["env", "GOBIN"]).output()
+        && output.status.success()
+    {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            let candidate = PathBuf::from(path).join("gopls");
+            if candidate.exists() {
+                return Ok(candidate.to_string_lossy().to_string());
+            }
+        }
+    }
+    if let Ok(output) = Command::new("go").args(["env", "GOPATH"]).output()
+        && output.status.success()
+    {
+        let paths = String::from_utf8_lossy(&output.stdout);
+        for path in paths.trim().split(':') {
+            let path = path.trim();
+            if path.is_empty() {
+                continue;
+            }
+            let candidate = PathBuf::from(path).join("bin").join("gopls");
+            if candidate.exists() {
+                return Ok(candidate.to_string_lossy().to_string());
+            }
+        }
+    }
+    Err(
+        "gopls not found. Please set GOPLS/GOPLS_PATH or add GOPATH/bin to PATH"
             .to_string(),
     )
 }
