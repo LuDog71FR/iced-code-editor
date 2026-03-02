@@ -35,6 +35,7 @@ brew install lua-language-server
 
 # Go
 go install golang.org/x/tools/gopls@latest
+export PATH=$PATH:$(go env GOPATH)/bin
 ```
 
 ### Custom Paths

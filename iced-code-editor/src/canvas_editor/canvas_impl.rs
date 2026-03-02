@@ -4,6 +4,7 @@ use iced::advanced::input_method;
 use iced::mouse;
 use iced::widget::canvas::{self, Geometry};
 use iced::{Color, Event, Point, Rectangle, Size, Theme, keyboard};
+use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
@@ -61,6 +62,25 @@ fn calculate_segment_geometry(
     }
 
     (base_offset + prefix_width, segment_width)
+}
+
+fn expand_tabs(text: &str, tab_width: usize) -> Cow<'_, str> {
+    if !text.contains('\t') {
+        return Cow::Borrowed(text);
+    }
+
+    let mut expanded = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch == '\t' {
+            for _ in 0..tab_width {
+                expanded.push(' ');
+            }
+        } else {
+            expanded.push(ch);
+        }
+    }
+
+    Cow::Owned(expanded)
 }
 
 use super::wrapping::{VisualLine, WrappingCalculator};
@@ -249,6 +269,14 @@ impl CodeEditor {
                         .map_or(text.len(), |(idx, _)| idx);
 
                     let segment_text = &text[start_byte..end_byte];
+                    let display_text =
+                        expand_tabs(segment_text, super::TAB_WIDTH)
+                            .into_owned();
+                    let display_width = measure_text_width(
+                        &display_text,
+                        ctx.full_char_width,
+                        ctx.char_width,
+                    );
 
                     let color = Color::from_rgb(
                         f32::from(style.foreground.r) / 255.0,
@@ -257,7 +285,7 @@ impl CodeEditor {
                     );
 
                     frame.fill_text(canvas::Text {
-                        content: segment_text.to_string(),
+                        content: display_text,
                         position: Point::new(x_offset, y + 2.0),
                         color,
                         size: ctx.font_size.into(),
@@ -265,19 +293,17 @@ impl CodeEditor {
                         ..canvas::Text::default()
                     });
 
-                    x_offset += measure_text_width(
-                        segment_text,
-                        ctx.full_char_width,
-                        ctx.char_width,
-                    );
+                    x_offset += display_width;
                 }
 
                 char_pos = text_end;
             }
         } else {
             // Fallback to plain text
+            let display_text =
+                expand_tabs(line_segment, super::TAB_WIDTH).into_owned();
             frame.fill_text(canvas::Text {
-                content: line_segment.to_string(),
+                content: display_text,
                 position: Point::new(
                     ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset,
                     y + 2.0,
@@ -1761,7 +1787,7 @@ mod tests {
     #[test]
     fn test_calculate_segment_geometry_special_chars() {
         // Emoji "👋" (width > 1 => FONT_SIZE)
-        // Tab "\t" (width None => 0.0)
+        // Tab "\t" (width = 4 * CHAR_WIDTH)
         let content = "A👋\tB";
         // Measure "👋" (index 1 to 2)
         // Indices in chars: 'A' (0), '👋' (1), '\t' (2), 'B' (3)
@@ -1789,7 +1815,7 @@ mod tests {
             content, 0, 2, 3, 0.0, FONT_SIZE, CHAR_WIDTH,
         );
         let expected_x_tab = CHAR_WIDTH + FONT_SIZE; // 'A' + '👋'
-        let expected_w_tab = 0.0; // Tab width is 0 in this implementation
+        let expected_w_tab = CHAR_WIDTH * crate::canvas_editor::TAB_WIDTH as f32;
 
         assert_eq!(
             compare_floats(x_tab, expected_x_tab),

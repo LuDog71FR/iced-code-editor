@@ -50,6 +50,7 @@ mod wrapping;
 pub(crate) const FONT_SIZE: f32 = 14.0;
 pub(crate) const LINE_HEIGHT: f32 = 20.0;
 pub(crate) const CHAR_WIDTH: f32 = 8.4; // Monospace character width
+pub(crate) const TAB_WIDTH: usize = 4;
 pub(crate) const GUTTER_WIDTH: f32 = 45.0;
 pub(crate) const CURSOR_BLINK_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(530);
@@ -70,6 +71,9 @@ pub(crate) fn measure_char_width(
     full_char_width: f32,
     char_width: f32,
 ) -> f32 {
+    if c == '\t' {
+        return char_width * TAB_WIDTH as f32;
+    }
     match c.width() {
         Some(w) if w > 1 => full_char_width,
         Some(_) => char_width,
@@ -81,7 +85,7 @@ pub(crate) fn measure_char_width(
 ///
 /// - Wide characters (e.g. Chinese) use FONT_SIZE.
 /// - Narrow characters (e.g. Latin) use CHAR_WIDTH.
-/// - Control characters have width 0.
+/// - Control characters (except tab) have width 0.
 ///
 /// # Arguments
 ///
@@ -1590,10 +1594,10 @@ mod tests {
     #[test]
     fn test_measure_text_width_control_chars() {
         // "\t\n" (2 chars)
-        // width = 0.0 (control chars have 0 width in this implementation)
+        // width = 4 * CHAR_WIDTH (tab) + 0 (newline)
         let text = "\t\n";
         let width = measure_text_width(text, FONT_SIZE, CHAR_WIDTH);
-        let expected = 0.0;
+        let expected = CHAR_WIDTH * TAB_WIDTH as f32;
         assert_eq!(
             compare_floats(width, expected),
             CmpOrdering::Equal,
