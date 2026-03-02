@@ -389,6 +389,12 @@ impl DemoApp {
                                 });
                         }
                     }
+                    LspEvent::Log { server_key, message } => {
+                        self.log(
+                            "LSP",
+                            &format!("[{}] {}", server_key, message),
+                        );
+                    }
                 },
                 // No more events available right now
                 Err(mpsc::TryRecvError::Empty) => {

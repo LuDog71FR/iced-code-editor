@@ -152,6 +152,7 @@ pub(crate) enum LspEvent {
     Definition { uri: String, range: iced_code_editor::LspRange },
     /// Progress notification received
     Progress { token: String, server_key: String, title: String, message: Option<String>, percentage: Option<u32>, done: bool },
+    Log { server_key: String, message: String },
 }
 
 // =============================================================================
@@ -215,6 +216,7 @@ impl LspProcessClient {
             .args(&command.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
                 // Provide helpful error messages for common issues
@@ -232,13 +234,17 @@ impl LspProcessClient {
         // Take ownership of the process's stdin and stdout
         let stdin = child.stdin.take().ok_or("stdin unavailable")?;
         let stdout = child.stdout.take().ok_or("stdout unavailable")?;
+        let stderr = child.stderr.take().ok_or("stderr unavailable")?;
 
         // Create channel for sending messages to the writer thread
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         let pending_requests = Arc::new(Mutex::new(HashMap::new()));
         let pending_reader = pending_requests.clone();
-        let events_reader = events;
+        let events_reader = events.clone();
+        let events_log = events;
         let server_key = server_key.to_string();
+        let server_key_reader = server_key.clone();
+        let server_key_log = server_key;
         let tx_reader = tx.clone(); // Clone for reader thread to send responses
 
         // Spawn the writer thread - sends messages to the LSP server
@@ -371,7 +377,7 @@ impl LspProcessClient {
                                         
                                         let _ = events_reader.send(LspEvent::Progress {
                                             token,
-                                            server_key: server_key.clone(),
+                                            server_key: server_key_reader.clone(),
                                             title,
                                             message,
                                             percentage,
@@ -383,6 +389,20 @@ impl LspProcessClient {
                         }
                     }
                 }
+            }
+        });
+        let stderr_thread = thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let _ = events_log.send(LspEvent::Log {
+                    server_key: server_key_log.clone(),
+                    message: line.to_string(),
+                });
             }
         });
 
@@ -433,6 +453,7 @@ impl LspProcessClient {
         // Keep thread handles alive (they will be joined when dropped)
         let _ = writer_thread;
         let _ = reader_thread;
+        let _ = stderr_thread;
 
         Ok(client)
     }
