@@ -336,6 +336,8 @@ pub enum Message {
     CtrlHome,
     /// Ctrl+End pressed (move to end of document)
     CtrlEnd,
+    /// Go to an explicit logical position (line, column), both 0-based.
+    GotoPosition(usize, usize),
     /// Viewport scrolled - track scroll position
     Scrolled(iced::widget::scrollable::Viewport),
     /// Horizontal scrollbar scrolled (only when wrap is disabled)

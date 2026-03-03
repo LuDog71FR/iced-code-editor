@@ -459,6 +459,26 @@ impl CodeEditor {
         self.scroll_to_cursor()
     }
 
+    /// Handles direct navigation to an explicit logical position.
+    ///
+    /// # Arguments
+    ///
+    /// * `line` - Target line index (0-based)
+    /// * `col` - Target column index (0-based)
+    ///
+    /// # Returns
+    ///
+    /// A `Task<Message>` that scrolls to keep the cursor visible
+    fn handle_goto_position(
+        &mut self,
+        line: usize,
+        col: usize,
+    ) -> Task<Message> {
+        // End grouping on navigation command
+        self.end_grouping_if_active();
+        self.set_cursor(line, col)
+    }
+
     // =========================================================================
     // Mouse and Selection Handlers
     // =========================================================================
@@ -1147,6 +1167,9 @@ impl CodeEditor {
             Message::End(shift) => self.handle_end(*shift),
             Message::CtrlHome => self.handle_ctrl_home(),
             Message::CtrlEnd => self.handle_ctrl_end(),
+            Message::GotoPosition(line, col) => {
+                self.handle_goto_position(*line, *col)
+            }
             Message::PageUp => self.handle_page_up(),
             Message::PageDown => self.handle_page_down(),
 
@@ -1399,6 +1422,29 @@ mod tests {
         assert_eq!(editor.cursor, (2, 5));
         assert_eq!(editor.selection_start, None);
         assert_eq!(editor.selection_end, None);
+    }
+
+    #[test]
+    fn test_goto_position_sets_cursor_and_clears_selection() {
+        let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
+        editor.selection_start = Some((0, 0));
+        editor.selection_end = Some((1, 2));
+
+        let _ = editor.update(&Message::GotoPosition(1, 3));
+
+        assert_eq!(editor.cursor, (1, 3));
+        assert_eq!(editor.selection_start, None);
+        assert_eq!(editor.selection_end, None);
+    }
+
+    #[test]
+    fn test_goto_position_clamps_out_of_range() {
+        let mut editor = CodeEditor::new("a\nbb", "py");
+
+        let _ = editor.update(&Message::GotoPosition(99, 99));
+
+        // Clamped to last line (index 1) and end of that line (len = 2)
+        assert_eq!(editor.cursor, (1, 2));
     }
 
     #[test]
