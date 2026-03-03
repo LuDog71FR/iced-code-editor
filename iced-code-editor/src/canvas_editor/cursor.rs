@@ -35,6 +35,9 @@ impl CodeEditor {
         let col = col.min(line_len);
 
         self.cursor = (line, col);
+        // Programmatic jumps should end any drag gesture. Otherwise, a stale
+        // drag state may let subsequent hover events move the caret away.
+        self.is_dragging = false;
         self.selection_start = None;
         self.selection_end = None;
 
