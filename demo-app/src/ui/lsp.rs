@@ -5,11 +5,18 @@
 
 use crate::app::{DemoApp, Message};
 use crate::types::EditorId;
+#[cfg(not(target_arch = "wasm32"))]
 use iced::widget::{
     Id, Space, button, column, container, markdown, mouse_area, row,
     scrollable, stack, text,
 };
+#[cfg(target_arch = "wasm32")]
+use iced::widget::{Space, column, container};
+#[cfg(not(target_arch = "wasm32"))]
 use iced::{Background, Border, Color, Element, Length, Point, Shadow, Theme};
+#[cfg(target_arch = "wasm32")]
+use iced::{Element, Length};
+#[cfg(not(target_arch = "wasm32"))]
 use iced_code_editor::CodeEditor;
 
 /// Returns an empty LSP panel for native platforms.

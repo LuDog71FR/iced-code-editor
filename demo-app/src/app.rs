@@ -2,14 +2,20 @@ use crate::file_ops;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::lsp_process_client::LspEvent;
 use crate::types::{EditorId, FontOption, LanguageOption, Template};
+#[cfg(not(target_arch = "wasm32"))]
 use iced::widget::Id;
+#[cfg(not(target_arch = "wasm32"))]
 use iced::widget::operation::{focus, scroll_to};
+#[cfg(not(target_arch = "wasm32"))]
 use iced::widget::scrollable;
-use iced::{Event, Point, Subscription, Task, Theme, event, mouse, window};
+use iced::{Event, Subscription, Task, Theme, event, window};
+#[cfg(not(target_arch = "wasm32"))]
+use iced::{Point, mouse};
 #[cfg(not(target_arch = "wasm32"))]
 use iced_code_editor::LspPosition;
 use iced_code_editor::Message as EditorMessage;
 use iced_code_editor::{CodeEditor, Language, theme};
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -177,13 +183,21 @@ pub enum Message {
     NewTab,
     #[cfg(not(target_arch = "wasm32"))]
     LspHoverEntered,
+    #[cfg(not(target_arch = "wasm32"))]
     LspHoverExited,
+    #[cfg(not(target_arch = "wasm32"))]
     LspCompletionSelected(usize),
+    #[cfg(not(target_arch = "wasm32"))]
     LspCompletionClosed,
+    #[cfg(not(target_arch = "wasm32"))]
     LspCompletionNavigateUp,
+    #[cfg(not(target_arch = "wasm32"))]
     LspCompletionNavigateDown,
+    #[cfg(not(target_arch = "wasm32"))]
     LspCompletionConfirm,
+    #[cfg(not(target_arch = "wasm32"))]
     JumpToFile(PathBuf, usize, usize),
+    #[cfg(not(target_arch = "wasm32"))]
     FileOpenedAndJump(Result<(PathBuf, String, usize, usize), String>),
 }
 
@@ -234,7 +248,7 @@ greet("World")
             (Some(event_tx), Some(event_rx))
         };
 
-        let mut app = Self {
+        let app = Self {
             tabs,
             active_tab_id,
             next_tab_id,
@@ -294,6 +308,11 @@ greet("World")
         };
 
         #[cfg(not(target_arch = "wasm32"))]
+        let mut app = app;
+        #[cfg(target_arch = "wasm32")]
+        let app = app;
+
+        #[cfg(not(target_arch = "wasm32"))]
         {
             let root_dir = std::env::current_dir().ok();
             if let Some(root_dir) = root_dir {
@@ -326,16 +345,16 @@ greet("World")
         self.get_active_tab().map(|tab| &mut tab.editor)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn get_editor(&mut self, id: EditorId) -> Option<&mut CodeEditor> {
+        self.get_tab(id).map(|tab| &mut tab.editor)
+    }
+
     /// Returns a mutable reference to the active editor and its associated file path.
     fn get_active_editor_and_file(
         &mut self,
     ) -> Option<(&mut CodeEditor, &mut Option<PathBuf>)> {
         self.get_active_tab().map(|tab| (&mut tab.editor, &mut tab.file_path))
-    }
-
-    /// Returns a mutable reference to the specified editor.
-    fn get_editor(&mut self, id: EditorId) -> Option<&mut CodeEditor> {
-        self.get_tab(id).map(|tab| &mut tab.editor)
     }
 
     /// Returns a mutable reference to the specified editor and its associated file path.
@@ -442,6 +461,7 @@ greet("World")
                 let task = editor.reset(&content);
                 editor.set_theme(style);
                 editor.mark_saved();
+                #[cfg(not(target_arch = "wasm32"))]
                 let path_for_lsp = path.clone();
                 *current_file = Some(path);
 
@@ -751,9 +771,9 @@ greet("World")
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let EditorMessage::JumpClick(point) = event
-            && let Some(editor) = self.get_editor(editor_id)
+            && let Some(tab) = self.get_tab(editor_id)
         {
-            editor.lsp_request_definition_at(*point);
+            tab.editor.lsp_request_definition_at(*point);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let EditorMessage::CharacterInput(ch) = event
@@ -887,6 +907,7 @@ greet("World")
         Task::none()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn handle_jump_to_file(
         &mut self,
         path: PathBuf,
@@ -915,6 +936,7 @@ greet("World")
         })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn handle_file_opened_and_jump(
         &mut self,
         result: Result<(PathBuf, String, usize, usize), String>,
@@ -1096,16 +1118,16 @@ greet("World")
             Message::EditorEvent(editor_id, event) => {
                 self.handle_editor_event(editor_id, &event)
             }
-            Message::EditorMouseEntered(editor_id) => {
+            Message::EditorMouseEntered(_editor_id) => {
                 #[cfg(not(target_arch = "wasm32"))]
-                if self.lsp_overlay_editor == Some(editor_id) {
+                if self.lsp_overlay_editor == Some(_editor_id) {
                     self.lsp_hover_hide_deadline = None;
                 }
                 Task::none()
             }
-            Message::EditorMouseExited(editor_id) => {
+            Message::EditorMouseExited(_editor_id) => {
                 #[cfg(not(target_arch = "wasm32"))]
-                if self.lsp_overlay_editor == Some(editor_id)
+                if self.lsp_overlay_editor == Some(_editor_id)
                     && self.lsp_hover_visible
                     && !self.lsp_hover_interactive
                 {
@@ -1165,9 +1187,11 @@ greet("World")
                 self.handle_text_input_changed(value)
             }
             Message::TextInputClicked => self.handle_text_input_clicked(),
+            #[cfg(not(target_arch = "wasm32"))]
             Message::JumpToFile(path, line, col) => {
                 self.handle_jump_to_file(path, line, col)
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Message::FileOpenedAndJump(result) => {
                 self.handle_file_opened_and_jump(result)
             }
@@ -1180,32 +1204,81 @@ greet("World")
                 }
                 focus(Id::new("lsp_hover_text_editor"))
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Message::LspHoverExited => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.lsp_hover_interactive = false;
-                    self.lsp_hover_hide_deadline =
-                        Some(Instant::now() + Duration::from_millis(300));
-                }
+                self.lsp_hover_interactive = false;
+                self.lsp_hover_hide_deadline =
+                    Some(Instant::now() + Duration::from_millis(300));
                 Task::none()
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Message::LspCompletionClosed => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.lsp_completion_visible = false;
-                    self.lsp_completion_suppressed = false;
-                    if !self.lsp_hover_visible {
-                        self.lsp_overlay_editor = None;
-                    }
+                self.lsp_completion_visible = false;
+                self.lsp_completion_suppressed = false;
+                if !self.lsp_hover_visible {
+                    self.lsp_overlay_editor = None;
                 }
                 Task::none()
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Message::LspCompletionSelected(index) => {
-                #[cfg(not(target_arch = "wasm32"))]
+                self.lsp_applying_completion = true;
+                let completion = self.lsp_last_completion.get(index).cloned();
+                if let Some(item) = completion {
+                    self.apply_completion(&item);
+                }
+                self.lsp_applying_completion = false;
+                self.lsp_completion_visible = false;
+                self.lsp_completion_suppressed = true;
+                if !self.lsp_hover_visible {
+                    self.lsp_overlay_editor = None;
+                }
+                Task::none()
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::LspCompletionNavigateUp => {
+                if self.lsp_completion_visible
+                    && !self.lsp_last_completion.is_empty()
                 {
+                    if self.lsp_completion_selected > 0 {
+                        self.lsp_completion_selected -= 1;
+                    } else {
+                        self.lsp_completion_selected =
+                            self.lsp_last_completion.len() - 1;
+                    }
+                    let selected = self.lsp_completion_selected;
+                    let scroll_y = selected as f32 * 20.0;
+                    return scroll_to(
+                        Id::new("completion_scrollable"),
+                        scrollable::AbsoluteOffset { x: 0.0, y: scroll_y },
+                    );
+                }
+                Task::none()
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::LspCompletionNavigateDown => {
+                if self.lsp_completion_visible
+                    && !self.lsp_last_completion.is_empty()
+                {
+                    self.lsp_completion_selected =
+                        (self.lsp_completion_selected + 1)
+                            % self.lsp_last_completion.len();
+                    let selected = self.lsp_completion_selected;
+                    let scroll_y = selected as f32 * 20.0;
+                    return scroll_to(
+                        Id::new("completion_scrollable"),
+                        scrollable::AbsoluteOffset { x: 0.0, y: scroll_y },
+                    );
+                }
+                Task::none()
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::LspCompletionConfirm => {
+                if self.lsp_completion_visible {
+                    let selected = self.lsp_completion_selected;
                     self.lsp_applying_completion = true;
                     let completion =
-                        self.lsp_last_completion.get(index).cloned();
+                        self.lsp_last_completion.get(selected).cloned();
                     if let Some(item) = completion {
                         self.apply_completion(&item);
                     }
@@ -1214,68 +1287,6 @@ greet("World")
                     self.lsp_completion_suppressed = true;
                     if !self.lsp_hover_visible {
                         self.lsp_overlay_editor = None;
-                    }
-                }
-                Task::none()
-            }
-            Message::LspCompletionNavigateUp => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    if self.lsp_completion_visible
-                        && !self.lsp_last_completion.is_empty()
-                    {
-                        if self.lsp_completion_selected > 0 {
-                            self.lsp_completion_selected -= 1;
-                        } else {
-                            self.lsp_completion_selected =
-                                self.lsp_last_completion.len() - 1;
-                        }
-                        let selected = self.lsp_completion_selected;
-                        let scroll_y = selected as f32 * 20.0;
-                        return scroll_to(
-                            Id::new("completion_scrollable"),
-                            scrollable::AbsoluteOffset { x: 0.0, y: scroll_y },
-                        );
-                    }
-                }
-                Task::none()
-            }
-            Message::LspCompletionNavigateDown => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    if self.lsp_completion_visible
-                        && !self.lsp_last_completion.is_empty()
-                    {
-                        self.lsp_completion_selected =
-                            (self.lsp_completion_selected + 1)
-                                % self.lsp_last_completion.len();
-                        let selected = self.lsp_completion_selected;
-                        let scroll_y = selected as f32 * 20.0;
-                        return scroll_to(
-                            Id::new("completion_scrollable"),
-                            scrollable::AbsoluteOffset { x: 0.0, y: scroll_y },
-                        );
-                    }
-                }
-                Task::none()
-            }
-            Message::LspCompletionConfirm => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    if self.lsp_completion_visible {
-                        let selected = self.lsp_completion_selected;
-                        self.lsp_applying_completion = true;
-                        let completion =
-                            self.lsp_last_completion.get(selected).cloned();
-                        if let Some(item) = completion {
-                            self.apply_completion(&item);
-                        }
-                        self.lsp_applying_completion = false;
-                        self.lsp_completion_visible = false;
-                        self.lsp_completion_suppressed = true;
-                        if !self.lsp_hover_visible {
-                            self.lsp_overlay_editor = None;
-                        }
                     }
                 }
                 Task::none()
