@@ -182,4 +182,3 @@ impl std::fmt::Display for Template {
         write!(f, "{}", self.name())
     }
 }
-

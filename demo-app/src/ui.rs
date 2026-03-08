@@ -3,8 +3,8 @@ mod lsp;
 use crate::app::{DemoApp, EditorTab, Message};
 use crate::types::{FontOption, LanguageOption, Template};
 use iced::widget::{
-    Space, button, center, checkbox, column, container, mouse_area,
-    pick_list, row, scrollable, slider, stack, text, text_input,
+    Space, button, center, checkbox, column, container, mouse_area, pick_list,
+    row, scrollable, slider, stack, text, text_input,
 };
 use iced::{Color, Element, Length, Theme};
 
@@ -46,11 +46,12 @@ pub fn view(app: &DemoApp) -> Element<'_, Message> {
     };
 
     // Tab Bar
-    let tabs_list = row(
-        app.tabs.iter().map(|tab| {
-            view_tab_header(tab, tab.id == app.active_tab_id)
-        }).collect::<Vec<_>>()
-    ).spacing(2);
+    let tabs_list = row(app
+        .tabs
+        .iter()
+        .map(|tab| view_tab_header(tab, tab.id == app.active_tab_id))
+        .collect::<Vec<_>>())
+    .spacing(2);
 
     let tab_height = 38.0;
     let tab_scrollbar_height = 12.0;
@@ -61,16 +62,18 @@ pub fn view(app: &DemoApp) -> Element<'_, Message> {
     };
 
     let tab_bar = scrollable(tabs_list)
-        .direction(scrollable::Direction::Horizontal(scrollable::Scrollbar::new()))
+        .direction(scrollable::Direction::Horizontal(
+            scrollable::Scrollbar::new(),
+        ))
         .height(tab_bar_height)
         .style(|theme: &Theme, _status| {
-             let palette = theme.extended_palette();
-             scrollable::Style {
-                 container: container::Style {
-                     background: Some(palette.background.weak.color.into()),
-                     ..Default::default()
-                 },
-                 vertical_rail: scrollable::Rail {
+            let palette = theme.extended_palette();
+            scrollable::Style {
+                container: container::Style {
+                    background: Some(palette.background.weak.color.into()),
+                    ..Default::default()
+                },
+                vertical_rail: scrollable::Rail {
                     background: Some(palette.background.weak.color.into()),
                     border: iced::Border {
                         radius: 4.0.into(),
@@ -85,8 +88,8 @@ pub fn view(app: &DemoApp) -> Element<'_, Message> {
                             color: Color::TRANSPARENT,
                         },
                     },
-                 },
-                 horizontal_rail: scrollable::Rail {
+                },
+                horizontal_rail: scrollable::Rail {
                     background: Some(palette.background.weak.color.into()),
                     border: iced::Border {
                         radius: 4.0.into(),
@@ -101,25 +104,29 @@ pub fn view(app: &DemoApp) -> Element<'_, Message> {
                             color: Color::TRANSPARENT,
                         },
                     },
-                 },
-                 gap: None,
-                 auto_scroll: scrollable::AutoScroll {
+                },
+                gap: None,
+                auto_scroll: scrollable::AutoScroll {
                     background: Color::TRANSPARENT.into(),
                     border: iced::Border::default(),
                     shadow: iced::Shadow::default(),
                     icon: Color::TRANSPARENT,
-                 },
-             }
+                },
+            }
         });
 
     // File path display below tabs
-    let file_path_display: Element<'_, Message> = if let Some(tab) = app.tabs.iter().find(|t| t.id == app.active_tab_id) {
-        let path_text = tab.file_path.as_ref()
+    let file_path_display: Element<'_, Message> = if let Some(tab) =
+        app.tabs.iter().find(|t| t.id == app.active_tab_id)
+    {
+        let path_text = tab
+            .file_path
+            .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "Untitled".to_string());
-        
-        container(text(path_text).size(12).style(move |_| text::Style { 
-            color: Some(palette.background.weak.text) 
+
+        container(text(path_text).size(12).style(move |_| text::Style {
+            color: Some(palette.background.weak.text),
         }))
         .padding([4, 10])
         .width(Length::Fill)
@@ -141,7 +148,9 @@ pub fn view(app: &DemoApp) -> Element<'_, Message> {
     };
 
     // Editor Pane
-    let editor_pane = if let Some(tab) = app.tabs.iter().find(|t| t.id == app.active_tab_id) {
+    let editor_pane = if let Some(tab) =
+        app.tabs.iter().find(|t| t.id == app.active_tab_id)
+    {
         view_editor_pane(app, tab, text_color)
     } else {
         container(text("No open tabs").size(20))
@@ -181,10 +190,17 @@ pub fn view(app: &DemoApp) -> Element<'_, Message> {
 
     // Main layout
     let content = container(
-        column![toolbar, error_bar, tab_bar, file_path_display, editor_pane, output_view]
-            .spacing(2)
-            .width(Length::Fill)
-            .height(Length::Fill),
+        column![
+            toolbar,
+            error_bar,
+            tab_bar,
+            file_path_display,
+            editor_pane,
+            output_view
+        ]
+        .spacing(2)
+        .width(Length::Fill)
+        .height(Length::Fill),
     )
     .style(move |_| container::Style {
         background: Some(iced::Background::Color(
@@ -298,27 +314,27 @@ pub fn view(app: &DemoApp) -> Element<'_, Message> {
 }
 
 fn view_tab_header(tab: &EditorTab, is_active: bool) -> Element<'_, Message> {
-    let name = tab.file_path.as_ref()
+    let name = tab
+        .file_path
+        .as_ref()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
         .unwrap_or("Untitled");
     let modified = if tab.is_dirty { "*" } else { "" };
     let label = format!("{}{}", name, modified);
-    
-    let label_text = text(label)
-        .size(14)
-        .style(move |theme: &Theme| {
-            let palette = theme.extended_palette();
-             text::Style {
-                 color: Some(if is_active {
-                     palette.background.base.text
-                 } else {
-                     let mut color = palette.background.base.text;
-                     color.a = 0.6;
-                     color
-                 }),
-             }
-        });
+
+    let label_text = text(label).size(14).style(move |theme: &Theme| {
+        let palette = theme.extended_palette();
+        text::Style {
+            color: Some(if is_active {
+                palette.background.base.text
+            } else {
+                let mut color = palette.background.base.text;
+                color.a = 0.6;
+                color
+            }),
+        }
+    });
 
     let close_btn = button(text("×").size(16))
         .on_press(Message::CloseTab(tab.id))
@@ -365,11 +381,14 @@ fn view_tab_header(tab: &EditorTab, is_active: bool) -> Element<'_, Message> {
         .style(move |theme: &Theme| {
             let palette = theme.extended_palette();
             container::Style {
-                background: Some(if is_active {
-                    palette.background.base.color
-                } else {
-                    palette.background.weak.color
-                }.into()),
+                background: Some(
+                    if is_active {
+                        palette.background.base.color
+                    } else {
+                        palette.background.weak.color
+                    }
+                    .into(),
+                ),
                 border: iced::Border {
                     width: 1.0,
                     color: palette.background.strong.color,
@@ -389,7 +408,7 @@ pub fn view_editor_pane<'a>(
 ) -> Element<'a, Message> {
     let editor_id = tab.id;
     let editor = &tab.editor;
-    
+
     // We assume these settings are global for now, but could be per-tab
     let wrap_enabled = editor.wrap_enabled();
     let search_replace_enabled = editor.search_replace_enabled();
@@ -423,37 +442,55 @@ pub fn view_editor_pane<'a>(
 
     // LSP Status
     #[cfg(not(target_arch = "wasm32"))]
-    let lsp_status: Element<'_, Message> = if let Some(key) = tab.lsp_server_key {
-        let (status_text, is_working, is_finishing) = if let Some(progress_map) = app.lsp_progress.get(key) {
-            if let Some(progress) = progress_map.values().next() {
-                let percent_val = progress.percentage.unwrap_or(0);
-                if percent_val >= 100 {
-                    (format!("LSP: {} (Finishing...)", key), true, true)
+    let lsp_status: Element<'_, Message> = if let Some(key) = tab.lsp_server_key
+    {
+        let (status_text, is_working, is_finishing) =
+            if let Some(progress_map) = app.lsp_progress.get(key) {
+                if let Some(progress) = progress_map.values().next() {
+                    let percent_val = progress.percentage.unwrap_or(0);
+                    if percent_val >= 100 {
+                        (format!("LSP: {} (Finishing...)", key), true, true)
+                    } else {
+                        let percent = progress
+                            .percentage
+                            .map(|p| format!(" {}%", p))
+                            .unwrap_or_default();
+                        let msg = progress
+                            .message
+                            .as_ref()
+                            .map(|m| format!(": {}", m))
+                            .unwrap_or_default();
+                        (
+                            format!(
+                                "LSP: {} ({}{}{})",
+                                key, progress.title, msg, percent
+                            ),
+                            true,
+                            false,
+                        )
+                    }
                 } else {
-                    let percent = progress.percentage.map(|p| format!(" {}%", p)).unwrap_or_default();
-                    let msg = progress.message.as_ref().map(|m| format!(": {}", m)).unwrap_or_default();
-                    (format!("LSP: {} ({}{}{})", key, progress.title, msg, percent), true, false)
+                    (format!("LSP: {}", key), false, false)
                 }
             } else {
                 (format!("LSP: {}", key), false, false)
-            }
-        } else {
-             (format!("LSP: {}", key), false, false)
-        };
+            };
 
         let spinner = if is_working {
             if is_finishing {
-                 text("✓").size(14).style(move |theme: &Theme| {
+                text("✓").size(14).style(move |theme: &Theme| {
                     let palette = theme.extended_palette();
                     text::Style { color: Some(palette.success.base.color) }
                 })
             } else {
                 let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
                 let frame = frames[app.spinner_frame % frames.len()];
-                text(frame).size(14).font(iced::font::Font::MONOSPACE).style(move |theme: &Theme| {
-                    let palette = theme.extended_palette();
-                    text::Style { color: Some(palette.primary.base.color) }
-                })
+                text(frame).size(14).font(iced::font::Font::MONOSPACE).style(
+                    move |theme: &Theme| {
+                        let palette = theme.extended_palette();
+                        text::Style { color: Some(palette.primary.base.color) }
+                    },
+                )
             }
         } else {
             text("●").size(14).style(move |theme: &Theme| {
@@ -473,12 +510,15 @@ pub fn view_editor_pane<'a>(
         .align_y(iced::Center)
         .into()
     } else {
-        text("LSP: Inactive").size(14).style(move |theme: &Theme| {
-            let palette = theme.extended_palette();
-            text::Style { color: Some(palette.danger.base.color) }
-        }).into()
+        text("LSP: Inactive")
+            .size(14)
+            .style(move |theme: &Theme| {
+                let palette = theme.extended_palette();
+                text::Style { color: Some(palette.danger.base.color) }
+            })
+            .into()
     };
-    
+
     #[cfg(target_arch = "wasm32")]
     let lsp_status: Element<'_, Message> = text("LSP: N/A").size(14).into();
 

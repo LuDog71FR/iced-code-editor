@@ -145,14 +145,31 @@ enum LspRequestKind {
 /// Events that can be sent from the LSP client to the application
 pub(crate) enum LspEvent {
     /// Hover information received
-    Hover { text: String },
+    Hover {
+        text: String,
+    },
     /// Completion items received
-    Completion { items: Vec<String> },
+    Completion {
+        items: Vec<String>,
+    },
     /// Definition location received
-    Definition { uri: String, range: iced_code_editor::LspRange },
+    Definition {
+        uri: String,
+        range: iced_code_editor::LspRange,
+    },
     /// Progress notification received
-    Progress { token: String, server_key: String, title: String, message: Option<String>, percentage: Option<u32>, done: bool },
-    Log { server_key: String, message: String },
+    Progress {
+        token: String,
+        server_key: String,
+        title: String,
+        message: Option<String>,
+        percentage: Option<u32>,
+        done: bool,
+    },
+    Log {
+        server_key: String,
+        message: String,
+    },
 }
 
 // =============================================================================
@@ -304,22 +321,29 @@ impl LspProcessClient {
                 {
                     // Check if it's a request from the server (has id and method)
                     if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
-                         if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
-                             // Handle window/workDoneProgress/create request
-                             if method == "window/workDoneProgress/create" {
-                                 // We need to respond with a success result (null)
-                                 let response = json!({
-                                     "jsonrpc": "2.0",
-                                     "id": id,
-                                     "result": null
-                                 });
-                                 if let Ok(data) = serde_json::to_vec(&response) {
-                                    let mut header = format!("Content-Length: {}\r\n\r\n", data.len()).into_bytes();
+                        if let Some(method) =
+                            value.get("method").and_then(|m| m.as_str())
+                        {
+                            // Handle window/workDoneProgress/create request
+                            if method == "window/workDoneProgress/create" {
+                                // We need to respond with a success result (null)
+                                let response = json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id,
+                                    "result": null
+                                });
+                                if let Ok(data) = serde_json::to_vec(&response)
+                                {
+                                    let mut header = format!(
+                                        "Content-Length: {}\r\n\r\n",
+                                        data.len()
+                                    )
+                                    .into_bytes();
                                     header.extend_from_slice(&data);
                                     let _ = tx_reader.send(header);
-                                 }
-                             }
-                         } else {
+                                }
+                            }
+                        } else {
                             // It's a response (has id and no method)
                             // Look up the request type for this response
                             let kind = {
@@ -343,10 +367,12 @@ impl LspProcessClient {
                                     }
                                     // Handle completion response
                                     LspRequestKind::Completion => {
-                                        let items = parse_completion_items(result);
+                                        let items =
+                                            parse_completion_items(result);
                                         if !items.is_empty() {
-                                            let _ = events_reader
-                                                .send(LspEvent::Completion { items });
+                                            let _ = events_reader.send(
+                                                LspEvent::Completion { items },
+                                            );
                                         }
                                     }
                                     // Handle definition response
@@ -355,34 +381,64 @@ impl LspProcessClient {
                                             parse_definition_location(result)
                                         {
                                             let _ = events_reader.send(
-                                                LspEvent::Definition { uri, range },
+                                                LspEvent::Definition {
+                                                    uri,
+                                                    range,
+                                                },
                                             );
                                         }
                                     }
                                 }
                             }
-                         }
-                    } else if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
+                        }
+                    } else if let Some(method) =
+                        value.get("method").and_then(|m| m.as_str())
+                    {
                         // Notification from server
                         if method == "$/progress" {
                             if let Some(params) = value.get("params") {
-                                if let Some(token) = params.get("token").and_then(|t| t.as_str().map(String::from).or_else(|| t.as_i64().map(|i| i.to_string()))) {
+                                if let Some(token) =
+                                    params.get("token").and_then(|t| {
+                                        t.as_str().map(String::from).or_else(
+                                            || {
+                                                t.as_i64()
+                                                    .map(|i| i.to_string())
+                                            },
+                                        )
+                                    })
+                                {
                                     if let Some(val) = params.get("value") {
-                                        let kind = val.get("kind").and_then(|k| k.as_str()).unwrap_or("");
-                                        let title = val.get("title").and_then(|t| t.as_str()).map(String::from).unwrap_or_default();
-                                        let message = val.get("message").and_then(|m| m.as_str()).map(String::from);
-                                        let percentage = val.get("percentage").and_then(|p| p.as_u64()).map(|p| p as u32);
-                                        
+                                        let kind = val
+                                            .get("kind")
+                                            .and_then(|k| k.as_str())
+                                            .unwrap_or("");
+                                        let title = val
+                                            .get("title")
+                                            .and_then(|t| t.as_str())
+                                            .map(String::from)
+                                            .unwrap_or_default();
+                                        let message = val
+                                            .get("message")
+                                            .and_then(|m| m.as_str())
+                                            .map(String::from);
+                                        let percentage = val
+                                            .get("percentage")
+                                            .and_then(|p| p.as_u64())
+                                            .map(|p| p as u32);
+
                                         let done = kind == "end";
-                                        
-                                        let _ = events_reader.send(LspEvent::Progress {
-                                            token,
-                                            server_key: server_key_reader.clone(),
-                                            title,
-                                            message,
-                                            percentage,
-                                            done
-                                        });
+
+                                        let _ = events_reader.send(
+                                            LspEvent::Progress {
+                                                token,
+                                                server_key: server_key_reader
+                                                    .clone(),
+                                                title,
+                                                message,
+                                                percentage,
+                                                done,
+                                            },
+                                        );
                                     }
                                 }
                             }
