@@ -7,12 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+None
+
 ## [0.3.7] - 2026-03-09
 
 ### Added
 
-feat: Handle horizontal scrolling when line wrapping is disabled ([#13](https://github.com/LuDog71FR/iced-code-editor/issues/13))
-feat: Language Server Protocol (LSP) support
+- feat: Handle horizontal scrolling when line wrapping is disabled ([#13](https://github.com/LuDog71FR/iced-code-editor/issues/13))
+- feat: Language Server Protocol (LSP) support
 
 ## [0.3.6] - 2026-02-25
 
