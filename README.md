@@ -36,6 +36,7 @@ Screenshot of the demo application:
 - **High performance** canvas-based rendering
 - **Search and replace** text
 - **Language Server Protocol** (LSP) support
+- **Auto indentation** with custom indent style
 
 ## Planned features
 
@@ -516,6 +517,14 @@ Run it with:
 
 ```bash
 cargo run --package demo-app --release
+```
+
+## Simple Example
+
+A minimal standalone example is available in the `simple-example` directory. It demonstrates the basic integration pattern with a `text_input` sibling widget and focus management:
+
+```bash
+cargo run --package simple-example
 ```
 
 ## Contributing
