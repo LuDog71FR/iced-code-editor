@@ -11,8 +11,79 @@ use web_time::Instant;
 
 use super::measure_text_width;
 
-use super::wrapping::WrappingCalculator;
+use super::wrapping::{VisualLine, WrappingCalculator};
 use super::{ArrowDirection, CodeEditor, Message};
+use crate::text_buffer::TextBuffer;
+
+/// Computes the next logical `(line, col)` position for a cursor at `pos` moving in `direction`.
+///
+/// Returns `None` if the cursor is already at the boundary and cannot move further.
+fn compute_next_position(
+    pos: (usize, usize),
+    direction: ArrowDirection,
+    buffer: &TextBuffer,
+    visual_lines: &[VisualLine],
+) -> Option<(usize, usize)> {
+    let (line, col) = pos;
+    match direction {
+        ArrowDirection::Up | ArrowDirection::Down => {
+            let current_visual =
+                WrappingCalculator::logical_to_visual(visual_lines, line, col)?;
+
+            let target_visual = match direction {
+                ArrowDirection::Up => current_visual.checked_sub(1)?,
+                ArrowDirection::Down => {
+                    let next = current_visual + 1;
+                    if next < visual_lines.len() {
+                        next
+                    } else {
+                        return None;
+                    }
+                }
+                _ => return None,
+            };
+
+            let target_vl = &visual_lines[target_visual];
+            let current_vl = &visual_lines[current_visual];
+
+            let new_col = if target_vl.logical_line == line {
+                let offset_in_current =
+                    col.saturating_sub(current_vl.start_col);
+                let target_col = target_vl.start_col + offset_in_current;
+                if target_col >= target_vl.end_col {
+                    target_vl.end_col.saturating_sub(1).max(target_vl.start_col)
+                } else {
+                    target_col
+                }
+            } else {
+                let target_line_len = buffer.line_len(target_vl.logical_line);
+                (target_vl.start_col + col.min(target_vl.len()))
+                    .min(target_line_len)
+            };
+
+            Some((target_vl.logical_line, new_col))
+        }
+        ArrowDirection::Left => {
+            if col > 0 {
+                Some((line, col - 1))
+            } else if line > 0 {
+                Some((line - 1, buffer.line_len(line - 1)))
+            } else {
+                None
+            }
+        }
+        ArrowDirection::Right => {
+            let line_len = buffer.line_len(line);
+            if col < line_len {
+                Some((line, col + 1))
+            } else if line + 1 < buffer.line_count() {
+                Some((line + 1, 0))
+            } else {
+                None
+            }
+        }
+    }
+}
 
 impl CodeEditor {
     /// Sets the cursor position to the specified line and column.
@@ -34,12 +105,10 @@ impl CodeEditor {
         let line_len = self.buffer.line(line).chars().count();
         let col = col.min(line_len);
 
-        self.cursor = (line, col);
+        self.cursors.set_single((line, col));
         // Programmatic jumps should end any drag gesture. Otherwise, a stale
         // drag state may let subsequent hover events move the caret away.
         self.is_dragging = false;
-        self.selection_start = None;
-        self.selection_end = None;
 
         // Reset blink
         self.last_blink = Instant::now();
@@ -48,106 +117,38 @@ impl CodeEditor {
         self.scroll_to_cursor()
     }
 
-    /// Moves the cursor based on arrow key direction.
+    /// Moves all cursors one step in `direction`.
+    ///
+    /// Visual lines are computed once and shared across all cursor movements.
+    /// After moving, overlapping cursors are merged via `sort_and_merge`.
     pub(crate) fn move_cursor(&mut self, direction: ArrowDirection) {
-        let (line, col) = self.cursor;
+        // Compute visual lines once — used by Up/Down movement for all cursors.
+        let wrapping_calc = WrappingCalculator::new(
+            self.wrap_enabled,
+            self.wrap_column,
+            self.full_char_width,
+            self.char_width,
+        );
+        let visual_lines = wrapping_calc.calculate_visual_lines(
+            &self.buffer,
+            self.viewport_width,
+            self.gutter_width(),
+        );
 
-        match direction {
-            ArrowDirection::Up | ArrowDirection::Down => {
-                // For up/down, we need to handle wrapped lines
-                let wrapping_calc = WrappingCalculator::new(
-                    self.wrap_enabled,
-                    self.wrap_column,
-                    self.full_char_width,
-                    self.char_width,
-                );
-                let visual_lines = wrapping_calc.calculate_visual_lines(
-                    &self.buffer,
-                    self.viewport_width,
-                    self.gutter_width(),
-                );
-
-                // Find current visual line
-                if let Some(current_visual) =
-                    WrappingCalculator::logical_to_visual(
-                        &visual_lines,
-                        line,
-                        col,
-                    )
-                {
-                    let target_visual = match direction {
-                        ArrowDirection::Up => {
-                            if current_visual > 0 {
-                                current_visual - 1
-                            } else {
-                                return; // Already at top
-                            }
-                        }
-                        ArrowDirection::Down => {
-                            if current_visual + 1 < visual_lines.len() {
-                                current_visual + 1
-                            } else {
-                                return; // Already at bottom
-                            }
-                        }
-                        _ => {
-                            // This should never happen as we're in the Up/Down branch
-                            return;
-                        }
-                    };
-
-                    let target_vl = &visual_lines[target_visual];
-                    let current_vl = &visual_lines[current_visual];
-
-                    // Try to maintain column position, clamped to segment
-                    let new_col = if target_vl.logical_line == line {
-                        // Same logical line, different segment
-                        // Calculate relative position in current segment
-                        let offset_in_current =
-                            col.saturating_sub(current_vl.start_col);
-                        // Apply to target segment, ensuring we stay within bounds
-                        let target_col =
-                            target_vl.start_col + offset_in_current;
-                        // Clamp to segment bounds: stay strictly within [start_col, end_col)
-                        // but make sure we don't go to exactly end_col unless it's the last segment
-                        if target_col >= target_vl.end_col {
-                            target_vl
-                                .end_col
-                                .saturating_sub(1)
-                                .max(target_vl.start_col)
-                        } else {
-                            target_col
-                        }
-                    } else {
-                        // Different logical line
-                        let target_line_len =
-                            self.buffer.line_len(target_vl.logical_line);
-                        (target_vl.start_col + col.min(target_vl.len()))
-                            .min(target_line_len)
-                    };
-
-                    self.cursor = (target_vl.logical_line, new_col);
-                }
-            }
-            ArrowDirection::Left => {
-                if col > 0 {
-                    self.cursor.1 -= 1;
-                } else if line > 0 {
-                    // Move to end of previous line
-                    let prev_line_len = self.buffer.line_len(line - 1);
-                    self.cursor = (line - 1, prev_line_len);
-                }
-            }
-            ArrowDirection::Right => {
-                let line_len = self.buffer.line_len(line);
-                if col < line_len {
-                    self.cursor.1 += 1;
-                } else if line + 1 < self.buffer.line_count() {
-                    // Move to start of next line
-                    self.cursor = (line + 1, 0);
-                }
+        for cursor in self.cursors.as_mut_slice() {
+            if let Some(new_pos) = compute_next_position(
+                cursor.position,
+                direction,
+                &self.buffer,
+                &visual_lines,
+            ) {
+                cursor.position = new_pos;
             }
         }
+
+        // Deduplicate cursors that landed on the same position after movement.
+        self.cursors.sort_and_merge();
+
         // Cursor movement affects only overlay visuals (caret, current-line highlight),
         // so avoid invalidating the expensive content cache.
         self.overlay_cache.clear();
@@ -221,10 +222,10 @@ impl CodeEditor {
     ///
     /// Reuses `calculate_cursor_from_point` to compute the position and updates the cache.
     pub(crate) fn handle_mouse_click(&mut self, point: Point) {
-        let before = self.cursor;
-        if let Some(cursor) = self.calculate_cursor_from_point(point) {
-            self.cursor = cursor;
-            if self.cursor != before {
+        let before = self.cursors.primary_position();
+        if let Some(pos) = self.calculate_cursor_from_point(point) {
+            self.cursors.primary_mut().position = pos;
+            if self.cursors.primary_position() != before {
                 // Only clear overlay when the caret actually moved.
                 self.overlay_cache.clear();
             }
@@ -237,17 +238,15 @@ impl CodeEditor {
         // trigger repeated visual line calculation.
         let visual_lines = self.visual_lines_cached(self.viewport_width);
 
-        let cursor_visual = WrappingCalculator::logical_to_visual(
-            &visual_lines,
-            self.cursor.0,
-            self.cursor.1,
-        );
+        let pos = self.cursors.primary_position();
+        let cursor_visual =
+            WrappingCalculator::logical_to_visual(&visual_lines, pos.0, pos.1);
 
         let cursor_y = if let Some(visual_idx) = cursor_visual {
             visual_idx as f32 * self.line_height
         } else {
             // Fallback to logical line if visual not found
-            self.cursor.0 as f32 * self.line_height
+            pos.0 as f32 * self.line_height
         };
 
         let viewport_top = self.viewport_scroll;
@@ -290,7 +289,7 @@ impl CodeEditor {
                 let prefix: String = line_content
                     .chars()
                     .skip(vl.start_col)
-                    .take(self.cursor.1.saturating_sub(vl.start_col))
+                    .take(pos.1.saturating_sub(vl.start_col))
                     .collect();
                 self.gutter_width()
                     + 5.0
@@ -331,28 +330,28 @@ impl CodeEditor {
         Task::batch([vertical_task, h_task])
     }
 
-    /// Moves cursor up by one page (approximately viewport height).
+    /// Moves all cursors up by one page (approximately viewport height).
     pub(crate) fn page_up(&mut self) {
         let lines_per_page = (self.viewport_height / self.line_height) as usize;
-
-        let current_line = self.cursor.0;
-        let new_line = current_line.saturating_sub(lines_per_page);
-        let line_len = self.buffer.line_len(new_line);
-
-        self.cursor = (new_line, self.cursor.1.min(line_len));
+        for cursor in self.cursors.as_mut_slice() {
+            let new_line = cursor.position.0.saturating_sub(lines_per_page);
+            let line_len = self.buffer.line_len(new_line);
+            cursor.position = (new_line, cursor.position.1.min(line_len));
+        }
+        self.cursors.sort_and_merge();
         self.overlay_cache.clear();
     }
 
-    /// Moves cursor down by one page (approximately viewport height).
+    /// Moves all cursors down by one page (approximately viewport height).
     pub(crate) fn page_down(&mut self) {
         let lines_per_page = (self.viewport_height / self.line_height) as usize;
-
-        let current_line = self.cursor.0;
         let max_line = self.buffer.line_count().saturating_sub(1);
-        let new_line = (current_line + lines_per_page).min(max_line);
-        let line_len = self.buffer.line_len(new_line);
-
-        self.cursor = (new_line, self.cursor.1.min(line_len));
+        for cursor in self.cursors.as_mut_slice() {
+            let new_line = (cursor.position.0 + lines_per_page).min(max_line);
+            let line_len = self.buffer.line_len(new_line);
+            cursor.position = (new_line, cursor.position.1.min(line_len));
+        }
+        self.cursors.sort_and_merge();
         self.overlay_cache.clear();
     }
 
@@ -360,9 +359,8 @@ impl CodeEditor {
     ///
     /// Reuses `calculate_cursor_from_point` to compute the position and update selection end.
     pub(crate) fn handle_mouse_drag(&mut self, point: Point) {
-        if let Some(cursor) = self.calculate_cursor_from_point(point) {
-            self.cursor = cursor;
-            self.selection_end = Some(self.cursor);
+        if let Some(pos) = self.calculate_cursor_from_point(point) {
+            self.cursors.primary_mut().position = pos;
         }
     }
 }
@@ -375,9 +373,9 @@ mod tests {
     fn test_cursor_movement() {
         let mut editor = CodeEditor::new("line1\nline2", "py");
         editor.move_cursor(ArrowDirection::Down);
-        assert_eq!(editor.cursor.0, 1);
+        assert_eq!(editor.cursors.primary_position().0, 1);
         editor.move_cursor(ArrowDirection::Right);
-        assert_eq!(editor.cursor.1, 1);
+        assert_eq!(editor.cursors.primary_position().1, 1);
     }
 
     #[test]
@@ -391,8 +389,8 @@ mod tests {
 
         editor.page_down();
         // Should move approximately 30 lines (600px / 20px per line)
-        assert!(editor.cursor.0 >= 25);
-        assert!(editor.cursor.0 <= 35);
+        assert!(editor.cursors.primary_position().0 >= 25);
+        assert!(editor.cursors.primary_position().0 <= 35);
     }
 
     #[test]
@@ -405,12 +403,12 @@ mod tests {
         let mut editor = CodeEditor::new(&content, "py");
 
         // Move to line 50
-        editor.cursor = (50, 0);
+        editor.cursors.primary_mut().position = (50, 0);
         editor.page_up();
 
         // Should move approximately 30 lines up
-        assert!(editor.cursor.0 >= 15);
-        assert!(editor.cursor.0 <= 25);
+        assert!(editor.cursors.primary_position().0 >= 15);
+        assert!(editor.cursors.primary_position().0 <= 25);
     }
 
     #[test]
@@ -421,7 +419,7 @@ mod tests {
 
         editor.page_down();
         // Should be at last line (line 9)
-        assert_eq!(editor.cursor.0, 9);
+        assert_eq!(editor.cursors.primary_position().0, 9);
     }
 
     #[test]
@@ -433,9 +431,9 @@ mod tests {
         let mut editor = CodeEditor::new(&content, "py");
 
         // Already at start
-        editor.cursor = (0, 0);
+        editor.cursors.primary_mut().position = (0, 0);
         editor.page_up();
-        assert_eq!(editor.cursor.0, 0);
+        assert_eq!(editor.cursors.primary_position().0, 0);
     }
 
     #[test]
@@ -456,13 +454,13 @@ mod tests {
         editor
             .handle_mouse_click(Point::new((half_width - 2.0) + padding, 10.0));
 
-        assert_eq!(editor.cursor, (0, 0));
+        assert_eq!(editor.cursors.primary_position(), (0, 0));
 
         // Case 2: Click inside "你", at more than half its width.
         // Expect col 1
         editor
             .handle_mouse_click(Point::new((half_width + 2.0) + padding, 10.0));
-        assert_eq!(editor.cursor, (0, 1));
+        assert_eq!(editor.cursors.primary_position(), (0, 1));
 
         // Case 3: Click inside "好", at less than half its width.
         // "好" starts at full_char_width. Offset into "好" is < half_width.
@@ -471,7 +469,7 @@ mod tests {
             (full_char_width + half_width - 2.0) + padding,
             10.0,
         ));
-        assert_eq!(editor.cursor, (0, 1));
+        assert_eq!(editor.cursors.primary_position(), (0, 1));
 
         // Case 4: Click inside "好", at more than half its width.
         // "好" starts at full_char_width. Offset into "好" is > half_width.
@@ -480,6 +478,49 @@ mod tests {
             (full_char_width + half_width + 2.0) + padding,
             10.0,
         ));
-        assert_eq!(editor.cursor, (0, 2));
+        assert_eq!(editor.cursors.primary_position(), (0, 2));
+    }
+
+    #[test]
+    fn test_multi_cursor_move_left() {
+        let mut editor = CodeEditor::new("abc\ndef", "rs");
+        editor.cursors.primary_mut().position = (0, 2);
+        editor.cursors.add_cursor((1, 2));
+
+        editor.move_cursor(ArrowDirection::Left);
+
+        // Both cursors should have moved left by one
+        let positions: Vec<(usize, usize)> =
+            editor.cursors.iter().map(|c| c.position).collect();
+        assert!(positions.contains(&(0, 1)));
+        assert!(positions.contains(&(1, 1)));
+    }
+
+    #[test]
+    fn test_multi_cursor_move_right() {
+        let mut editor = CodeEditor::new("abc\ndef", "rs");
+        editor.cursors.primary_mut().position = (0, 1);
+        editor.cursors.add_cursor((1, 1));
+
+        editor.move_cursor(ArrowDirection::Right);
+
+        let positions: Vec<(usize, usize)> =
+            editor.cursors.iter().map(|c| c.position).collect();
+        assert!(positions.contains(&(0, 2)));
+        assert!(positions.contains(&(1, 2)));
+    }
+
+    #[test]
+    fn test_multi_cursor_move_deduplicates() {
+        let mut editor = CodeEditor::new("abc", "rs");
+        // Place two cursors adjacent, moving right will merge them
+        editor.cursors.primary_mut().position = (0, 0);
+        editor.cursors.add_cursor((0, 1));
+        assert_eq!(editor.cursors.len(), 2);
+
+        editor.move_cursor(ArrowDirection::Right);
+
+        // Both moved right: (0,1) and (0,2). Still 2 distinct positions.
+        assert_eq!(editor.cursors.len(), 2);
     }
 }

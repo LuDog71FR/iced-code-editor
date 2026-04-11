@@ -36,6 +36,7 @@ mod canvas_impl;
 mod clipboard;
 pub mod command;
 mod cursor;
+pub(crate) mod cursor_set;
 pub mod history;
 pub mod ime_requester;
 pub mod lsp;
@@ -152,8 +153,8 @@ pub struct CodeEditor {
     pub(crate) editor_id: u64,
     /// Text buffer
     pub(crate) buffer: TextBuffer,
-    /// Cursor position (line, column)
-    pub(crate) cursor: (usize, usize),
+    /// All cursor positions (multi-cursor support).
+    pub(crate) cursors: cursor_set::CursorSet,
     /// Horizontal scroll offset in pixels, only used when wrap_enabled = false
     pub(crate) horizontal_scroll_offset: f32,
     /// Editor theme style
@@ -164,10 +165,6 @@ pub struct CodeEditor {
     pub(crate) last_blink: Instant,
     /// Cursor visible state
     pub(crate) cursor_visible: bool,
-    /// Selection start (if any)
-    pub(crate) selection_start: Option<(usize, usize)>,
-    /// Selection end (if any) - cursor position during selection
-    pub(crate) selection_end: Option<(usize, usize)>,
     /// Mouse is currently dragging for selection
     pub(crate) is_dragging: bool,
     /// Cached geometry for the "content" layer.
@@ -398,6 +395,14 @@ pub enum Message {
     ImeCommit(String),
     /// IME input method closed
     ImeClosed,
+    /// Alt+Click: add a new cursor at the given canvas position
+    AltClick(iced::Point),
+    /// Ctrl+Alt+Up: add a cursor on the line above the primary cursor
+    AddCursorAbove,
+    /// Ctrl+Alt+Down: add a cursor on the line below the primary cursor
+    AddCursorBelow,
+    /// Ctrl+D: select the next occurrence of the currently selected text (or word under cursor)
+    SelectNextOccurrence,
 }
 
 /// Indentation style used when pressing the Tab key.
@@ -463,14 +468,12 @@ impl CodeEditor {
         let mut editor = Self {
             editor_id,
             buffer: TextBuffer::new(content),
-            cursor: (0, 0),
+            cursors: cursor_set::CursorSet::new((0, 0)),
             horizontal_scroll_offset: 0.0,
             style: crate::theme::from_iced_theme(&iced::Theme::TokyoNightStorm),
             syntax: syntax.to_string(),
             last_blink: Instant::now(),
             cursor_visible: true,
-            selection_start: None,
-            selection_end: None,
             is_dragging: false,
             content_cache: canvas::Cache::default(),
             overlay_cache: canvas::Cache::default(),
@@ -999,10 +1002,8 @@ impl CodeEditor {
     /// ```
     pub fn reset(&mut self, content: &str) -> iced::Task<Message> {
         self.buffer = TextBuffer::new(content);
-        self.cursor = (0, 0);
+        self.cursors.set_single((0, 0));
         self.horizontal_scroll_offset = 0.0;
-        self.selection_start = None;
-        self.selection_end = None;
         self.is_dragging = false;
         self.viewport_scroll = 0.0;
         self.history = CommandHistory::new(100);
@@ -1027,8 +1028,9 @@ impl CodeEditor {
 
     /// Converts the current cursor position into an LSP position.
     fn lsp_position_from_cursor(&self) -> lsp::LspPosition {
-        let line = u32::try_from(self.cursor.0).unwrap_or(u32::MAX);
-        let character = u32::try_from(self.cursor.1).unwrap_or(u32::MAX);
+        let pos = self.cursors.primary_position();
+        let line = u32::try_from(pos.0).unwrap_or(u32::MAX);
+        let character = u32::try_from(pos.1).unwrap_or(u32::MAX);
         lsp::LspPosition { line, character }
     }
 
@@ -1166,7 +1168,8 @@ impl CodeEditor {
             self.search_state.update_matches(&self.buffer);
 
             // Select match closest to cursor to maintain context
-            self.search_state.select_match_near_cursor(self.cursor);
+            self.search_state
+                .select_match_near_cursor(self.cursors.primary_position());
         }
     }
 
@@ -1559,8 +1562,8 @@ impl CodeEditor {
     /// }
     /// ```
     pub fn cursor_screen_position(&self) -> Option<iced::Point> {
-        let (line, col) = self.cursor;
-        self.point_from_position(line, col)
+        let pos = self.cursors.primary_position();
+        self.point_from_position(pos.0, pos.1)
     }
 
     /// Returns the current cursor position as (line, column).
@@ -1582,7 +1585,7 @@ impl CodeEditor {
     /// println!("Cursor at line {}, column {}", line, col);
     /// ```
     pub fn cursor_position(&self) -> (usize, usize) {
-        self.cursor
+        self.cursors.primary_position()
     }
 
     /// Returns the maximum content width across all lines, in pixels.

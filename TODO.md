@@ -10,11 +10,6 @@ None
 
 ## Features
 
-1. **Multiple cursors**
-
-   - Simultaneous editing at multiple positions
-   - Requires refactoring cursor from `(usize, usize)` to `Vec<(usize, usize)>`
-
 2. **Code folding**
 
    - Collapse/expand blocks

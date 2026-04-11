@@ -182,7 +182,8 @@ impl CodeEditor {
         visual_line: &VisualLine,
         y: f32,
     ) {
-        if visual_line.logical_line == self.cursor.0 {
+        if self.cursors.iter().any(|c| c.position.0 == visual_line.logical_line)
+        {
             frame.fill_rectangle(
                 Point::new(ctx.gutter_width, y),
                 Size::new(ctx.bounds_width - ctx.gutter_width, ctx.line_height),
@@ -474,122 +475,62 @@ impl CodeEditor {
         }
     }
 
-    /// Draws text selection highlights.
+    /// Draws the selection highlight for a single cursor range.
     ///
     /// # Arguments
     ///
     /// * `frame` - The canvas frame to draw on
     /// * `ctx` - Rendering context containing visual lines and metrics
-    fn draw_selection_highlight(
+    /// * `start` - Selection start (line, col)
+    /// * `end` - Selection end (line, col), must be >= start
+    fn draw_single_selection(
         &self,
         frame: &mut canvas::Frame,
         ctx: &RenderContext,
+        start: (usize, usize),
+        end: (usize, usize),
     ) {
-        if let Some((start, end)) = self.get_selection_range()
-            && start != end
-        {
-            let selection_color = Color { r: 0.3, g: 0.5, b: 0.8, a: 0.3 };
+        let selection_color = Color { r: 0.3, g: 0.5, b: 0.8, a: 0.3 };
 
-            if start.0 == end.0 {
-                // Single line selection - need to handle wrapped segments
-                let start_visual = WrappingCalculator::logical_to_visual(
-                    ctx.visual_lines,
-                    start.0,
-                    start.1,
-                );
-                let end_visual = WrappingCalculator::logical_to_visual(
-                    ctx.visual_lines,
-                    end.0,
-                    end.1,
-                );
+        if start.0 == end.0 {
+            // Single line selection - need to handle wrapped segments
+            let start_visual = WrappingCalculator::logical_to_visual(
+                ctx.visual_lines,
+                start.0,
+                start.1,
+            );
+            let end_visual = WrappingCalculator::logical_to_visual(
+                ctx.visual_lines,
+                end.0,
+                end.1,
+            );
 
-                if let (Some(start_v), Some(end_v)) = (start_visual, end_visual)
-                {
-                    if start_v == end_v {
-                        // Selection within same visual line
-                        let y = start_v as f32 * ctx.line_height;
-                        let vl = &ctx.visual_lines[start_v];
-                        let line_content = self.buffer.line(vl.logical_line);
+            if let (Some(start_v), Some(end_v)) = (start_visual, end_visual) {
+                if start_v == end_v {
+                    // Selection within same visual line
+                    let y = start_v as f32 * ctx.line_height;
+                    let vl = &ctx.visual_lines[start_v];
+                    let line_content = self.buffer.line(vl.logical_line);
 
-                        let (x_start, sel_width) = calculate_segment_geometry(
-                            line_content,
-                            vl.start_col,
-                            start.1,
-                            end.1,
-                            ctx.gutter_width + 5.0,
-                            ctx.full_char_width,
-                            ctx.char_width,
-                        );
-                        let x_start = x_start - ctx.horizontal_scroll_offset;
-                        let x_end = x_start + sel_width;
+                    let (x_start, sel_width) = calculate_segment_geometry(
+                        line_content,
+                        vl.start_col,
+                        start.1,
+                        end.1,
+                        ctx.gutter_width + 5.0,
+                        ctx.full_char_width,
+                        ctx.char_width,
+                    );
+                    let x_start = x_start - ctx.horizontal_scroll_offset;
+                    let x_end = x_start + sel_width;
 
-                        frame.fill_rectangle(
-                            Point::new(x_start, y + 2.0),
-                            Size::new(x_end - x_start, ctx.line_height - 4.0),
-                            selection_color,
-                        );
-                    } else {
-                        // Selection spans multiple visual lines (same logical line)
-                        for (v_idx, vl) in ctx
-                            .visual_lines
-                            .iter()
-                            .enumerate()
-                            .skip(start_v)
-                            .take(end_v - start_v + 1)
-                        {
-                            let y = v_idx as f32 * ctx.line_height;
-
-                            let sel_start_col = if v_idx == start_v {
-                                start.1
-                            } else {
-                                vl.start_col
-                            };
-                            let sel_end_col =
-                                if v_idx == end_v { end.1 } else { vl.end_col };
-
-                            let line_content =
-                                self.buffer.line(vl.logical_line);
-
-                            let (x_start, sel_width) =
-                                calculate_segment_geometry(
-                                    line_content,
-                                    vl.start_col,
-                                    sel_start_col,
-                                    sel_end_col,
-                                    ctx.gutter_width + 5.0,
-                                    ctx.full_char_width,
-                                    ctx.char_width,
-                                );
-                            let x_start =
-                                x_start - ctx.horizontal_scroll_offset;
-                            let x_end = x_start + sel_width;
-
-                            frame.fill_rectangle(
-                                Point::new(x_start, y + 2.0),
-                                Size::new(
-                                    x_end - x_start,
-                                    ctx.line_height - 4.0,
-                                ),
-                                selection_color,
-                            );
-                        }
-                    }
-                }
-            } else {
-                // Multi-line selection
-                let start_visual = WrappingCalculator::logical_to_visual(
-                    ctx.visual_lines,
-                    start.0,
-                    start.1,
-                );
-                let end_visual = WrappingCalculator::logical_to_visual(
-                    ctx.visual_lines,
-                    end.0,
-                    end.1,
-                );
-
-                if let (Some(start_v), Some(end_v)) = (start_visual, end_visual)
-                {
+                    frame.fill_rectangle(
+                        Point::new(x_start, y + 2.0),
+                        Size::new(x_end - x_start, ctx.line_height - 4.0),
+                        selection_color,
+                    );
+                } else {
+                    // Selection spans multiple visual lines (same logical line)
                     for (v_idx, vl) in ctx
                         .visual_lines
                         .iter()
@@ -599,19 +540,13 @@ impl CodeEditor {
                     {
                         let y = v_idx as f32 * ctx.line_height;
 
-                        let sel_start_col =
-                            if vl.logical_line == start.0 && v_idx == start_v {
-                                start.1
-                            } else {
-                                vl.start_col
-                            };
-
+                        let sel_start_col = if v_idx == start_v {
+                            start.1
+                        } else {
+                            vl.start_col
+                        };
                         let sel_end_col =
-                            if vl.logical_line == end.0 && v_idx == end_v {
-                                end.1
-                            } else {
-                                vl.end_col
-                            };
+                            if v_idx == end_v { end.1 } else { vl.end_col };
 
                         let line_content = self.buffer.line(vl.logical_line);
 
@@ -634,6 +569,84 @@ impl CodeEditor {
                         );
                     }
                 }
+            }
+        } else {
+            // Multi-line selection
+            let start_visual = WrappingCalculator::logical_to_visual(
+                ctx.visual_lines,
+                start.0,
+                start.1,
+            );
+            let end_visual = WrappingCalculator::logical_to_visual(
+                ctx.visual_lines,
+                end.0,
+                end.1,
+            );
+
+            if let (Some(start_v), Some(end_v)) = (start_visual, end_visual) {
+                for (v_idx, vl) in ctx
+                    .visual_lines
+                    .iter()
+                    .enumerate()
+                    .skip(start_v)
+                    .take(end_v - start_v + 1)
+                {
+                    let y = v_idx as f32 * ctx.line_height;
+
+                    let sel_start_col =
+                        if vl.logical_line == start.0 && v_idx == start_v {
+                            start.1
+                        } else {
+                            vl.start_col
+                        };
+
+                    let sel_end_col =
+                        if vl.logical_line == end.0 && v_idx == end_v {
+                            end.1
+                        } else {
+                            vl.end_col
+                        };
+
+                    let line_content = self.buffer.line(vl.logical_line);
+
+                    let (x_start, sel_width) = calculate_segment_geometry(
+                        line_content,
+                        vl.start_col,
+                        sel_start_col,
+                        sel_end_col,
+                        ctx.gutter_width + 5.0,
+                        ctx.full_char_width,
+                        ctx.char_width,
+                    );
+                    let x_start = x_start - ctx.horizontal_scroll_offset;
+                    let x_end = x_start + sel_width;
+
+                    frame.fill_rectangle(
+                        Point::new(x_start, y + 2.0),
+                        Size::new(x_end - x_start, ctx.line_height - 4.0),
+                        selection_color,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Draws text selection highlights for all cursors.
+    ///
+    /// # Arguments
+    ///
+    /// * `frame` - The canvas frame to draw on
+    /// * `ctx` - Rendering context containing visual lines and metrics
+    fn draw_selection_highlight(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext,
+    ) {
+        for cursor in self.cursors.iter() {
+            if let Some((start, end)) = cursor.selection_range()
+                && start != end
+            {
+                self.draw_single_selection(frame, ctx, start, end);
             }
         }
     }
@@ -670,8 +683,8 @@ impl CodeEditor {
             // ---------------------------------------------------------------------
             if let Some(cursor_visual) = WrappingCalculator::logical_to_visual(
                 ctx.visual_lines,
-                self.cursor.0,
-                self.cursor.1,
+                self.cursors.primary_position().0,
+                self.cursors.primary_position().1,
             ) {
                 let vl = &ctx.visual_lines[cursor_visual];
                 let line_content = self.buffer.line(vl.logical_line);
@@ -681,8 +694,8 @@ impl CodeEditor {
                 let (cursor_x_content, _) = calculate_segment_geometry(
                     line_content,
                     vl.start_col,
-                    self.cursor.1,
-                    self.cursor.1,
+                    self.cursors.primary_position().1,
+                    self.cursors.primary_position().1,
                     ctx.gutter_width + 5.0,
                     ctx.full_char_width,
                     ctx.char_width,
@@ -786,44 +799,57 @@ impl CodeEditor {
         } else if self.show_cursor && self.cursor_visible && self.has_focus() {
             // [Branch B] Normal caret rendering mode
             // ---------------------------------------------------------------------
-            // When there is no IME preedit, draw the standard editor caret.
-            // Key checks:
-            // - is_focused(): the widget has Iced focus
-            // - has_canvas_focus: internal focus state (mouse clicks, etc.)
-            // - draw only when both are true to avoid ghost cursors
+            // Draw a caret for every cursor in the set.
+            // The primary cursor is drawn exactly like secondary ones — the viewport
+            // follows the primary, but visually all carets look the same.
             // ---------------------------------------------------------------------
-
-            // Map logical cursor position (Line, Col) to visual line index
-            // to handle line wrapping changes
-            if let Some(cursor_visual) = WrappingCalculator::logical_to_visual(
-                ctx.visual_lines,
-                self.cursor.0,
-                self.cursor.1,
-            ) {
-                let vl = &ctx.visual_lines[cursor_visual];
-                let line_content = self.buffer.line(vl.logical_line);
-
-                // Compute exact caret X position
-                // Account for gutter width, left padding, and rendered prefix width
-                let (cursor_x_content, _) = calculate_segment_geometry(
-                    line_content,
-                    vl.start_col,
-                    self.cursor.1,
-                    self.cursor.1,
-                    ctx.gutter_width + 5.0,
-                    ctx.full_char_width,
-                    ctx.char_width,
-                );
-                let cursor_x = cursor_x_content - ctx.horizontal_scroll_offset;
-                let cursor_y = cursor_visual as f32 * ctx.line_height;
-
-                // Draw standard caret (2px vertical bar)
-                frame.fill_rectangle(
-                    Point::new(cursor_x, cursor_y + 2.0),
-                    Size::new(2.0, ctx.line_height - 4.0),
-                    self.style.text_color,
-                );
+            for cursor in self.cursors.iter() {
+                self.draw_single_caret(frame, ctx, cursor.position);
             }
+        }
+    }
+
+    /// Draws a single 2px vertical caret at the given logical (line, col) position.
+    ///
+    /// # Arguments
+    ///
+    /// * `frame` - The canvas frame to draw on
+    /// * `ctx` - Rendering context containing visual lines and metrics
+    /// * `position` - Logical cursor position (line, col)
+    fn draw_single_caret(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext,
+        position: (usize, usize),
+    ) {
+        // Map logical cursor position (line, col) to visual line index
+        if let Some(cursor_visual) = WrappingCalculator::logical_to_visual(
+            ctx.visual_lines,
+            position.0,
+            position.1,
+        ) {
+            let vl = &ctx.visual_lines[cursor_visual];
+            let line_content = self.buffer.line(vl.logical_line);
+
+            // Compute exact caret X position
+            let (cursor_x_content, _) = calculate_segment_geometry(
+                line_content,
+                vl.start_col,
+                position.1,
+                position.1,
+                ctx.gutter_width + 5.0,
+                ctx.full_char_width,
+                ctx.char_width,
+            );
+            let cursor_x = cursor_x_content - ctx.horizontal_scroll_offset;
+            let cursor_y = cursor_visual as f32 * ctx.line_height;
+
+            // Draw standard caret (2px vertical bar)
+            frame.fill_rectangle(
+                Point::new(cursor_x, cursor_y + 2.0),
+                Size::new(2.0, ctx.line_height - 4.0),
+                self.style.text_color,
+            );
         }
     }
 
@@ -913,9 +939,44 @@ impl CodeEditor {
             );
         }
 
-        // Handle Escape (close search dialog if open)
+        // Handle Escape — handled by CloseSearch message, which also collapses multi-cursor
         if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
             return Some(Action::publish(Message::CloseSearch).and_capture());
+        }
+
+        // Handle Ctrl+D (select next occurrence)
+        if modifiers.control()
+            && matches!(key, keyboard::Key::Character(d) if d.as_str() == "d")
+        {
+            return Some(
+                Action::publish(Message::SelectNextOccurrence).and_capture(),
+            );
+        }
+
+        // Handle Ctrl+Alt+Up (add cursor above)
+        if modifiers.control()
+            && modifiers.alt()
+            && matches!(
+                key,
+                keyboard::Key::Named(keyboard::key::Named::ArrowUp)
+            )
+        {
+            return Some(
+                Action::publish(Message::AddCursorAbove).and_capture(),
+            );
+        }
+
+        // Handle Ctrl+Alt+Down (add cursor below)
+        if modifiers.control()
+            && modifiers.alt()
+            && matches!(
+                key,
+                keyboard::Key::Named(keyboard::key::Named::ArrowDown)
+            )
+        {
+            return Some(
+                Action::publish(Message::AddCursorBelow).and_capture(),
+            );
         }
 
         // Handle Tab (cycle forward in search dialog if open)
@@ -1188,6 +1249,12 @@ impl CodeEditor {
 
                     if is_jump_click {
                         return Action::publish(Message::JumpClick(position));
+                    }
+
+                    // Alt+Click: add a new cursor at the clicked position
+                    if self.modifiers.get().alt() {
+                        return Action::publish(Message::AltClick(position))
+                            .and_capture();
                     }
 
                     // Don't capture the event so it can bubble up for focus management

@@ -11,7 +11,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.3.7"
+version = "0.3.8"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/LuDog71FR/iced-code-editor"

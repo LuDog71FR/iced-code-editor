@@ -37,10 +37,10 @@ Screenshot of the demo application:
 - **Search and replace** text
 - **Language Server Protocol** (LSP) support
 - **Auto indentation** with custom indent style
+- **Multiple cursors** for simultaneous editing at multiple positions
 
 ## Planned features
 
-- [ ] Multiple cursors for simultaneous editing at multiple positions
 - [ ] Collapse/expand blocks
 - [ ] Minimap
 
@@ -174,6 +174,18 @@ The editor supports a comprehensive set of keyboard shortcuts:
 | **Ctrl + Y** | Redo last undone operation |
 
 The editor features smart command grouping - consecutive typing is grouped into single undo operations, while navigation or deletion actions create separate undo points.
+
+### Multiple Cursors
+
+| Shortcut              | Action                                          |
+| --------------------- | ----------------------------------------------- |
+| **Alt + Click**       | Add a cursor at the clicked position             |
+| **Ctrl + Alt + Up**   | Add a cursor on the line above                   |
+| **Ctrl + Alt + Down** | Add a cursor on the line below                   |
+| **Ctrl + D**          | Select the next occurrence of the current word/selection |
+| **Escape**            | Collapse all cursors back to one (when search dialog is closed) |
+
+All editing operations (typing, backspace, delete, enter, tab, paste) apply simultaneously to every cursor. Copy with multiple selections joins all selected texts with newlines. Paste with the same number of clipboard lines as cursors pastes one line per cursor.
 
 ### Search and Replace
 

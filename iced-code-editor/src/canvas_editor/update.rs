@@ -9,8 +9,100 @@ use super::command::{
 };
 use super::{
     ArrowDirection, CURSOR_BLINK_INTERVAL, CodeEditor, ImePreedit, IndentStyle,
-    Message,
+    Message, cursor_set,
 };
+
+// =========================================================================
+// Cursor adjustment helpers for multi-cursor editing
+// =========================================================================
+
+/// Describes the kind of edit applied to a single position.
+#[derive(Clone, Copy)]
+enum EditType {
+    /// Insert one char at `(edit_line, edit_col)`.
+    InsertChar,
+    /// Backspace: delete char at `(edit_line, edit_col - 1)`.
+    DeleteCharBack,
+    /// Delete-forward: delete char at `(edit_line, edit_col)`.
+    DeleteCharForward,
+    /// Enter: split `edit_line` at `edit_col`; new line has `extra` indent chars.
+    InsertNewline { indent_len: usize },
+    /// Backspace-at-col-0: merge `edit_line` into `edit_line - 1`.
+    /// `extra` = length of the previous line before merge.
+    MergePrev { prev_line_len: usize },
+    /// Delete-at-end-of-line: merge `edit_line + 1` into `edit_line`.
+    /// `extra` = length of `edit_line` before merge.
+    MergeNext { edit_line_len: usize },
+}
+
+/// Adjusts a single `(line, col)` pair after an edit.
+fn adjust_pos(
+    pos: &mut (usize, usize),
+    edit_line: usize,
+    edit_col: usize,
+    kind: EditType,
+) {
+    match kind {
+        EditType::InsertChar => {
+            if pos.0 == edit_line && pos.1 >= edit_col {
+                pos.1 += 1;
+            }
+        }
+        EditType::DeleteCharBack => {
+            if edit_col > 0 && pos.0 == edit_line && pos.1 > edit_col - 1 {
+                pos.1 -= 1;
+            }
+        }
+        EditType::DeleteCharForward => {
+            if pos.0 == edit_line && pos.1 > edit_col {
+                pos.1 -= 1;
+            }
+        }
+        EditType::InsertNewline { indent_len } => {
+            if pos.0 > edit_line {
+                pos.0 += 1;
+            } else if pos.0 == edit_line && pos.1 >= edit_col {
+                pos.0 += 1;
+                pos.1 = pos.1 - edit_col + indent_len;
+            }
+        }
+        EditType::MergePrev { prev_line_len } => {
+            if pos.0 == edit_line {
+                pos.0 -= 1;
+                pos.1 += prev_line_len;
+            } else if pos.0 > edit_line {
+                pos.0 -= 1;
+            }
+        }
+        EditType::MergeNext { edit_line_len } => {
+            if pos.0 == edit_line + 1 {
+                pos.0 = edit_line;
+                pos.1 += edit_line_len;
+            } else if pos.0 > edit_line + 1 {
+                pos.0 -= 1;
+            }
+        }
+    }
+}
+
+/// Adjusts all cursors except `skip_idx` after an edit at `(edit_line, edit_col)`.
+fn adjust_other_cursors(
+    cursors: &mut [cursor_set::Cursor],
+    skip_idx: usize,
+    edit_line: usize,
+    edit_col: usize,
+    kind: EditType,
+) {
+    for (i, cursor) in cursors.iter_mut().enumerate() {
+        if i == skip_idx {
+            continue;
+        }
+        adjust_pos(&mut cursor.position, edit_line, edit_col, kind);
+        if let Some(ref mut anchor) = cursor.anchor {
+            adjust_pos(anchor, edit_line, edit_col, kind);
+        }
+    }
+}
 
 impl CodeEditor {
     // =========================================================================
@@ -76,13 +168,13 @@ impl CodeEditor {
         }
     }
 
-    /// Deletes the current selection and performs cleanup if a selection exists.
+    /// Deletes all active selections across every cursor and performs cleanup.
     ///
     /// # Returns
     ///
-    /// `true` if a selection was deleted, `false` if no selection existed
+    /// `true` if at least one selection was deleted, `false` if no cursor had a selection
     fn delete_selection_if_present(&mut self) -> bool {
-        if self.selection_start.is_some() && self.selection_end.is_some() {
+        if self.cursors.iter().any(|c| c.has_selection()) {
             self.delete_selection();
             self.finish_edit_operation();
             true
@@ -118,10 +210,36 @@ impl CodeEditor {
         // Start grouping if not already grouping (for smart undo)
         self.ensure_grouping_started("Typing");
 
-        let (line, col) = self.cursor;
-        let mut cmd = InsertCharCommand::new(line, col, ch, self.cursor);
-        cmd.execute(&mut self.buffer, &mut self.cursor);
-        self.history.push(Box::new(cmd));
+        // Multi-cursor: build a sorted index list (descending document order)
+        // so that edits at higher positions don't invalidate lower positions.
+        let mut order: Vec<usize> = (0..self.cursors.len()).collect();
+        order.sort_by(|&a, &b| {
+            self.cursors.as_slice()[b]
+                .position
+                .cmp(&self.cursors.as_slice()[a].position)
+        });
+
+        for &idx in &order {
+            let cursor = &self.cursors.as_slice()[idx];
+            // Insert at the selection start when the cursor has an active selection,
+            // otherwise insert at the cursor position.
+            let pos = match cursor.anchor {
+                Some(anchor) if anchor < cursor.position => anchor,
+                _ => cursor.position,
+            };
+            let mut cmd = InsertCharCommand::new(pos.0, pos.1, ch, pos);
+            let mut cursor_pos = pos;
+            cmd.execute(&mut self.buffer, &mut cursor_pos);
+            self.cursors.as_mut_slice()[idx].position = cursor_pos;
+            adjust_other_cursors(
+                self.cursors.as_mut_slice(),
+                idx,
+                pos.0,
+                pos.1,
+                EditType::InsertChar,
+            );
+            self.history.push(Box::new(cmd));
+        }
 
         self.finish_edit_operation();
 
@@ -143,26 +261,54 @@ impl CodeEditor {
     fn handle_tab(&mut self) -> Task<Message> {
         self.ensure_grouping_started("Tab");
 
-        let (line, col) = self.cursor;
-        match self.indent_style {
-            IndentStyle::Spaces(n) => {
-                for i in 0..n as usize {
-                    let current_col = col + i;
-                    let mut cmd = InsertCharCommand::new(
-                        line,
-                        current_col,
-                        ' ',
-                        (line, current_col),
+        // Multi-cursor: process in descending document order
+        let mut order: Vec<usize> = (0..self.cursors.len()).collect();
+        order.sort_by(|&a, &b| {
+            self.cursors.as_slice()[b]
+                .position
+                .cmp(&self.cursors.as_slice()[a].position)
+        });
+
+        for &idx in &order {
+            let pos = self.cursors.as_slice()[idx].position;
+            match self.indent_style {
+                IndentStyle::Spaces(n) => {
+                    let mut cursor_pos = pos;
+                    for _i in 0..n as usize {
+                        let current_col = cursor_pos.1;
+                        let mut cmd = InsertCharCommand::new(
+                            pos.0,
+                            current_col,
+                            ' ',
+                            cursor_pos,
+                        );
+                        cmd.execute(&mut self.buffer, &mut cursor_pos);
+                        adjust_other_cursors(
+                            self.cursors.as_mut_slice(),
+                            idx,
+                            pos.0,
+                            current_col,
+                            EditType::InsertChar,
+                        );
+                        self.history.push(Box::new(cmd));
+                    }
+                    self.cursors.as_mut_slice()[idx].position = cursor_pos;
+                }
+                IndentStyle::Tab => {
+                    let mut cmd =
+                        InsertCharCommand::new(pos.0, pos.1, '\t', pos);
+                    let mut cursor_pos = pos;
+                    cmd.execute(&mut self.buffer, &mut cursor_pos);
+                    adjust_other_cursors(
+                        self.cursors.as_mut_slice(),
+                        idx,
+                        pos.0,
+                        pos.1,
+                        EditType::InsertChar,
                     );
-                    cmd.execute(&mut self.buffer, &mut self.cursor);
+                    self.cursors.as_mut_slice()[idx].position = cursor_pos;
                     self.history.push(Box::new(cmd));
                 }
-            }
-            IndentStyle::Tab => {
-                let mut cmd =
-                    InsertCharCommand::new(line, col, '\t', (line, col));
-                cmd.execute(&mut self.buffer, &mut self.cursor);
-                self.history.push(Box::new(cmd));
             }
         }
 
@@ -221,23 +367,43 @@ impl CodeEditor {
         // End grouping on enter
         self.end_grouping_if_active();
 
-        let (line, col) = self.cursor;
+        // Multi-cursor: process in descending document order
+        let mut order: Vec<usize> = (0..self.cursors.len()).collect();
+        order.sort_by(|&a, &b| {
+            self.cursors.as_slice()[b]
+                .position
+                .cmp(&self.cursors.as_slice()[a].position)
+        });
 
-        // Copy leading whitespace of the current line to the new line (if enabled)
-        let indent: String = if self.auto_indent_enabled {
-            self.buffer
-                .line(line)
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect()
-        } else {
-            String::new()
-        };
+        for &idx in &order {
+            let pos = self.cursors.as_slice()[idx].position;
 
-        let mut cmd =
-            InsertNewlineCommand::with_indent(line, col, self.cursor, indent);
-        cmd.execute(&mut self.buffer, &mut self.cursor);
-        self.history.push(Box::new(cmd));
+            // Copy leading whitespace of the current line to the new line (if enabled)
+            let indent: String = if self.auto_indent_enabled {
+                self.buffer
+                    .line(pos.0)
+                    .chars()
+                    .take_while(|c| c.is_whitespace())
+                    .collect()
+            } else {
+                String::new()
+            };
+            let indent_len = indent.chars().count();
+
+            let mut cmd =
+                InsertNewlineCommand::with_indent(pos.0, pos.1, pos, indent);
+            let mut cursor_pos = pos;
+            cmd.execute(&mut self.buffer, &mut cursor_pos);
+            self.cursors.as_mut_slice()[idx].position = cursor_pos;
+            adjust_other_cursors(
+                self.cursors.as_mut_slice(),
+                idx,
+                pos.0,
+                pos.1,
+                EditType::InsertNewline { indent_len },
+            );
+            self.history.push(Box::new(cmd));
+        }
 
         self.finish_edit_operation();
         self.scroll_to_cursor()
@@ -259,17 +425,45 @@ impl CodeEditor {
         // End grouping on backspace (separate from typing)
         self.end_grouping_if_active();
 
-        // Check if there's a selection - if so, delete it instead
+        // If any cursor has a selection, delete all selections first
         if self.delete_selection_if_present() {
             return self.scroll_to_cursor();
         }
 
-        // No selection - perform normal backspace
-        let (line, col) = self.cursor;
-        let mut cmd =
-            DeleteCharCommand::new(&self.buffer, line, col, self.cursor);
-        cmd.execute(&mut self.buffer, &mut self.cursor);
-        self.history.push(Box::new(cmd));
+        // Multi-cursor: process in descending document order
+        let mut order: Vec<usize> = (0..self.cursors.len()).collect();
+        order.sort_by(|&a, &b| {
+            self.cursors.as_slice()[b]
+                .position
+                .cmp(&self.cursors.as_slice()[a].position)
+        });
+
+        for &idx in &order {
+            let pos = self.cursors.as_slice()[idx].position;
+            // Determine edit type for adjusting other cursors
+            let edit_kind = if pos.1 > 0 {
+                EditType::DeleteCharBack
+            } else if pos.0 > 0 {
+                let prev_line_len = self.buffer.line_len(pos.0 - 1);
+                EditType::MergePrev { prev_line_len }
+            } else {
+                // At very start of document: nothing to delete
+                continue;
+            };
+            let mut cmd =
+                DeleteCharCommand::new(&self.buffer, pos.0, pos.1, pos);
+            let mut cursor_pos = pos;
+            cmd.execute(&mut self.buffer, &mut cursor_pos);
+            self.cursors.as_mut_slice()[idx].position = cursor_pos;
+            adjust_other_cursors(
+                self.cursors.as_mut_slice(),
+                idx,
+                pos.0,
+                pos.1,
+                edit_kind,
+            );
+            self.history.push(Box::new(cmd));
+        }
 
         self.finish_edit_operation();
         self.scroll_to_cursor()
@@ -287,17 +481,44 @@ impl CodeEditor {
         // End grouping on delete
         self.end_grouping_if_active();
 
-        // Check if there's a selection - if so, delete it instead
+        // If any cursor has a selection, delete all selections first
         if self.delete_selection_if_present() {
             return self.scroll_to_cursor();
         }
 
-        // No selection - perform normal forward delete
-        let (line, col) = self.cursor;
-        let mut cmd =
-            DeleteForwardCommand::new(&self.buffer, line, col, self.cursor);
-        cmd.execute(&mut self.buffer, &mut self.cursor);
-        self.history.push(Box::new(cmd));
+        // Multi-cursor: process in descending document order
+        let mut order: Vec<usize> = (0..self.cursors.len()).collect();
+        order.sort_by(|&a, &b| {
+            self.cursors.as_slice()[b]
+                .position
+                .cmp(&self.cursors.as_slice()[a].position)
+        });
+
+        for &idx in &order {
+            let pos = self.cursors.as_slice()[idx].position;
+            let line_len = self.buffer.line_len(pos.0);
+            let edit_kind = if pos.1 < line_len {
+                EditType::DeleteCharForward
+            } else if pos.0 + 1 < self.buffer.line_count() {
+                EditType::MergeNext { edit_line_len: line_len }
+            } else {
+                // At very end of document: nothing to delete
+                continue;
+            };
+            let mut cmd =
+                DeleteForwardCommand::new(&self.buffer, pos.0, pos.1, pos);
+            let mut cursor_pos = pos;
+            cmd.execute(&mut self.buffer, &mut cursor_pos);
+            self.cursors.as_mut_slice()[idx].position = cursor_pos;
+            adjust_other_cursors(
+                self.cursors.as_mut_slice(),
+                idx,
+                pos.0,
+                pos.1,
+                edit_kind,
+            );
+            self.history.push(Box::new(cmd));
+        }
 
         self.finish_edit_operation();
         Task::none()
@@ -314,7 +535,7 @@ impl CodeEditor {
         // End grouping on delete selection
         self.end_grouping_if_active();
 
-        if self.selection_start.is_some() && self.selection_end.is_some() {
+        if self.cursors.iter().any(|c| c.has_selection()) {
             self.delete_selection();
             self.finish_edit_operation();
             self.scroll_to_cursor()
@@ -346,14 +567,15 @@ impl CodeEditor {
         self.end_grouping_if_active();
 
         if shift_pressed {
-            // Start selection if not already started
-            if self.selection_start.is_none() {
-                self.selection_start = Some(self.cursor);
+            // Set anchor on ALL cursors that don't yet have one
+            for cursor in self.cursors.as_mut_slice() {
+                if cursor.anchor.is_none() {
+                    cursor.set_anchor();
+                }
             }
             self.move_cursor(direction);
-            self.selection_end = Some(self.cursor);
         } else {
-            // Clear selection and move cursor
+            // Clear all selections, then move all cursors
             self.clear_selection();
             self.move_cursor(direction);
         }
@@ -375,17 +597,19 @@ impl CodeEditor {
     /// horizontal scroll back to x=0 when wrap is disabled)
     fn handle_home(&mut self, shift_pressed: bool) -> Task<Message> {
         if shift_pressed {
-            // Start selection if not already started
-            if self.selection_start.is_none() {
-                self.selection_start = Some(self.cursor);
+            for cursor in self.cursors.as_mut_slice() {
+                if cursor.anchor.is_none() {
+                    cursor.set_anchor();
+                }
+                cursor.position.1 = 0;
             }
-            self.cursor.1 = 0; // Move to start of line
-            self.selection_end = Some(self.cursor);
         } else {
-            // Clear selection and move cursor
             self.clear_selection();
-            self.cursor.1 = 0;
+            for cursor in self.cursors.as_mut_slice() {
+                cursor.position.1 = 0;
+            }
         }
+        self.cursors.sort_and_merge();
         self.finish_navigation_operation();
         self.scroll_to_cursor()
     }
@@ -403,21 +627,20 @@ impl CodeEditor {
     /// A `Task<Message>` that scrolls to keep the cursor visible (including
     /// horizontal scroll to end of line when wrap is disabled)
     fn handle_end(&mut self, shift_pressed: bool) -> Task<Message> {
-        let line = self.cursor.0;
-        let line_len = self.buffer.line_len(line);
-
         if shift_pressed {
-            // Start selection if not already started
-            if self.selection_start.is_none() {
-                self.selection_start = Some(self.cursor);
+            for cursor in self.cursors.as_mut_slice() {
+                if cursor.anchor.is_none() {
+                    cursor.set_anchor();
+                }
+                cursor.position.1 = self.buffer.line_len(cursor.position.0);
             }
-            self.cursor.1 = line_len; // Move to end of line
-            self.selection_end = Some(self.cursor);
         } else {
-            // Clear selection and move cursor
             self.clear_selection();
-            self.cursor.1 = line_len;
+            for cursor in self.cursors.as_mut_slice() {
+                cursor.position.1 = self.buffer.line_len(cursor.position.0);
+            }
         }
+        self.cursors.sort_and_merge();
         self.finish_navigation_operation();
         self.scroll_to_cursor()
     }
@@ -432,7 +655,7 @@ impl CodeEditor {
     fn handle_ctrl_home(&mut self) -> Task<Message> {
         // Move cursor to the beginning of the document
         self.clear_selection();
-        self.cursor = (0, 0);
+        self.cursors.set_single((0, 0));
         self.finish_navigation_operation();
         self.scroll_to_cursor()
     }
@@ -449,7 +672,7 @@ impl CodeEditor {
         self.clear_selection();
         let last_line = self.buffer.line_count().saturating_sub(1);
         let last_col = self.buffer.line_len(last_line);
-        self.cursor = (last_line, last_col);
+        self.cursors.set_single((last_line, last_col));
         self.finish_navigation_operation();
         self.scroll_to_cursor()
     }
@@ -525,12 +748,16 @@ impl CodeEditor {
         // End grouping on mouse click
         self.end_grouping_if_active();
 
+        // Regular click collapses any multi-cursor state to a single cursor
+        // positioned at the click location.
+        self.cursors.remove_all_but_primary();
+
         self.handle_mouse_click(point);
         self.reset_cursor_blink();
-        // Clear selection on click
+        // Clear selection on click, then set anchor for potential drag selection
         self.clear_selection();
         self.is_dragging = true;
-        self.selection_start = Some(self.cursor);
+        self.cursors.primary_mut().set_anchor();
 
         // Show cursor when focused
         self.show_cursor = true;
@@ -549,12 +776,9 @@ impl CodeEditor {
     /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
     fn handle_mouse_drag_msg(&mut self, point: iced::Point) -> Task<Message> {
         if self.is_dragging {
-            let before_cursor = self.cursor;
-            let before_selection_end = self.selection_end;
+            let before_pos = self.cursors.primary_position();
             self.handle_mouse_drag(point);
-            if self.cursor != before_cursor
-                || self.selection_end != before_selection_end
-            {
+            if self.cursors.primary_position() != before_pos {
                 // Mouse move events can be very frequent. Only invalidate the
                 // overlay cache if the drag actually changed selection/cursor.
                 self.overlay_cache.clear();
@@ -620,7 +844,9 @@ impl CodeEditor {
         // End any current grouping before undoing
         self.end_grouping_if_active();
 
-        if self.history.undo(&mut self.buffer, &mut self.cursor) {
+        let mut cursor_pos = self.cursors.primary_position();
+        if self.history.undo(&mut self.buffer, &mut cursor_pos) {
+            self.cursors.primary_mut().position = cursor_pos;
             self.clear_selection();
             self.finish_edit_operation();
             self.scroll_to_cursor()
@@ -635,7 +861,9 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` that scrolls to cursor if redo succeeded
     fn handle_redo_msg(&mut self) -> Task<Message> {
-        if self.history.redo(&mut self.buffer, &mut self.cursor) {
+        let mut cursor_pos = self.cursors.primary_position();
+        if self.history.redo(&mut self.buffer, &mut cursor_pos) {
+            self.cursors.primary_mut().position = cursor_pos;
             self.clear_selection();
             self.finish_edit_operation();
             self.scroll_to_cursor()
@@ -686,6 +914,12 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` (currently Task::none())
     fn handle_close_search_msg(&mut self) -> Task<Message> {
+        // Escape with multiple cursors and no open search: collapse to primary cursor
+        if self.cursors.is_multi() && !self.search_state.is_open {
+            self.cursors.remove_all_but_primary();
+            self.overlay_cache.clear();
+            return Task::none();
+        }
         self.search_state.close();
         self.overlay_cache.clear();
         Task::none()
@@ -709,7 +943,8 @@ impl CodeEditor {
 
         // Move cursor to first match if any
         if let Some(match_pos) = self.search_state.current_match() {
-            self.cursor = (match_pos.line, match_pos.col);
+            self.cursors.primary_mut().position =
+                (match_pos.line, match_pos.col);
             self.clear_selection();
             return self.scroll_to_cursor();
         }
@@ -744,7 +979,8 @@ impl CodeEditor {
 
         // Move cursor to first match if any
         if let Some(match_pos) = self.search_state.current_match() {
-            self.cursor = (match_pos.line, match_pos.col);
+            self.cursors.primary_mut().position =
+                (match_pos.line, match_pos.col);
             self.clear_selection();
             return self.scroll_to_cursor();
         }
@@ -760,7 +996,8 @@ impl CodeEditor {
         if !self.search_state.matches.is_empty() {
             self.search_state.next_match();
             if let Some(match_pos) = self.search_state.current_match() {
-                self.cursor = (match_pos.line, match_pos.col);
+                self.cursors.primary_mut().position =
+                    (match_pos.line, match_pos.col);
                 self.clear_selection();
                 self.overlay_cache.clear();
                 return self.scroll_to_cursor();
@@ -778,7 +1015,8 @@ impl CodeEditor {
         if !self.search_state.matches.is_empty() {
             self.search_state.previous_match();
             if let Some(match_pos) = self.search_state.current_match() {
-                self.cursor = (match_pos.line, match_pos.col);
+                self.cursors.primary_mut().position =
+                    (match_pos.line, match_pos.col);
                 self.clear_selection();
                 self.overlay_cache.clear();
                 return self.scroll_to_cursor();
@@ -799,14 +1037,17 @@ impl CodeEditor {
             let replace_text = self.search_state.replace_with.clone();
 
             // Create and execute replace command
+            let pos = self.cursors.primary_position();
             let mut cmd = ReplaceTextCommand::new(
                 &self.buffer,
                 (match_pos.line, match_pos.col),
                 query_len,
                 replace_text,
-                self.cursor,
+                pos,
             );
-            cmd.execute(&mut self.buffer, &mut self.cursor);
+            let mut cursor_pos = pos;
+            cmd.execute(&mut self.buffer, &mut cursor_pos);
+            self.cursors.primary_mut().position = cursor_pos;
             self.history.push(Box::new(cmd));
 
             // Update matches after replacement
@@ -816,7 +1057,8 @@ impl CodeEditor {
             if !self.search_state.matches.is_empty()
                 && let Some(next_match) = self.search_state.current_match()
             {
-                self.cursor = (next_match.line, next_match.col);
+                self.cursors.primary_mut().position =
+                    (next_match.line, next_match.col);
             }
 
             self.clear_selection();
@@ -850,18 +1092,21 @@ impl CodeEditor {
 
             // Process matches in reverse order (to preserve positions)
             for match_pos in all_matches.iter().rev() {
+                let pos = self.cursors.primary_position();
                 let cmd = ReplaceTextCommand::new(
                     &self.buffer,
                     (match_pos.line, match_pos.col),
                     query_len,
                     replace_text.clone(),
-                    self.cursor,
+                    pos,
                 );
                 composite.add(Box::new(cmd));
             }
 
             // Execute all replacements
-            composite.execute(&mut self.buffer, &mut self.cursor);
+            let mut cursor_pos = self.cursors.primary_position();
+            composite.execute(&mut self.buffer, &mut cursor_pos);
+            self.cursors.primary_mut().position = cursor_pos;
             self.history.push(Box::new(composite));
 
             // Update matches (should be empty now)
@@ -1157,6 +1402,151 @@ impl CodeEditor {
     }
 
     // =========================================================================
+    // Multi-cursor operations
+    // =========================================================================
+
+    /// Handles Alt+Click: adds a new cursor at the clicked position without
+    /// disturbing existing cursors.
+    ///
+    /// # Arguments
+    ///
+    /// * `point` - Canvas-local position of the click
+    ///
+    /// # Returns
+    ///
+    /// `Task::none()` — no async work needed
+    fn handle_alt_click_msg(&mut self, point: iced::Point) -> Task<Message> {
+        if let Some(pos) = self.calculate_cursor_from_point(point) {
+            self.cursors.add_cursor(pos);
+            self.overlay_cache.clear();
+            self.reset_cursor_blink();
+        }
+        Task::none()
+    }
+
+    /// Handles Ctrl+Alt+Up: adds a cursor on the line above the primary cursor,
+    /// at the same column (clamped to line length).
+    ///
+    /// # Returns
+    ///
+    /// `Task::none()`
+    fn handle_add_cursor_above_msg(&mut self) -> Task<Message> {
+        let (line, col) = self.cursors.primary_position();
+        if line == 0 {
+            return Task::none();
+        }
+        let new_line = line - 1;
+        let new_col = col.min(self.buffer.line_len(new_line));
+        self.cursors.add_cursor((new_line, new_col));
+        self.overlay_cache.clear();
+        self.reset_cursor_blink();
+        Task::none()
+    }
+
+    /// Handles Ctrl+Alt+Down: adds a cursor on the line below the primary cursor,
+    /// at the same column (clamped to line length).
+    ///
+    /// # Returns
+    ///
+    /// `Task::none()`
+    fn handle_add_cursor_below_msg(&mut self) -> Task<Message> {
+        let (line, col) = self.cursors.primary_position();
+        let last_line = self.buffer.line_count().saturating_sub(1);
+        if line >= last_line {
+            return Task::none();
+        }
+        let new_line = line + 1;
+        let new_col = col.min(self.buffer.line_len(new_line));
+        self.cursors.add_cursor((new_line, new_col));
+        self.overlay_cache.clear();
+        self.reset_cursor_blink();
+        Task::none()
+    }
+
+    /// Handles Ctrl+D: selects the next occurrence of the text currently selected
+    /// by the primary cursor, or the word under the primary cursor if there is no
+    /// selection. A new cursor with that selection is added.
+    ///
+    /// # Returns
+    ///
+    /// `Task::none()`
+    fn handle_select_next_occurrence_msg(&mut self) -> Task<Message> {
+        // Determine the search text: selected text on primary cursor, or word under cursor
+        let search_text = if let Some(text) = self.get_selected_text() {
+            text
+        } else {
+            // Select word under primary cursor first
+            let (line, col) = self.cursors.primary_position();
+            let line_str = self.buffer.line(line).to_string();
+            let word_start = Self::word_start_in_line(&line_str, col);
+            let word_end = Self::word_end_in_line(&line_str, col);
+            if word_start == word_end {
+                return Task::none();
+            }
+            // Apply selection to primary cursor and stop: the next Ctrl+D call
+            // will find the next occurrence (selection will be non-empty then).
+            self.cursors.primary_mut().anchor = Some((line, word_start));
+            self.cursors.primary_mut().position = (line, word_end);
+            self.overlay_cache.clear();
+            return Task::none();
+        };
+
+        if search_text.is_empty() {
+            return Task::none();
+        }
+
+        // Find the search start position: just after the last cursor's selection end
+        let search_start = self
+            .cursors
+            .as_slice()
+            .last()
+            .map(|last| {
+                last.selection_range()
+                    .map(|(_, end)| end)
+                    .unwrap_or(last.position)
+            })
+            .unwrap_or((0, 0));
+
+        // Search forward from search_start for the next occurrence
+        let (start_line, start_col) = search_start;
+        let line_count = self.buffer.line_count();
+
+        for line_offset in 0..=line_count {
+            let line_idx = (start_line + line_offset) % line_count;
+            let line_str = self.buffer.line(line_idx).to_string();
+            let chars: Vec<char> = line_str.chars().collect();
+
+            // On the first iteration, start after start_col; on wrap-around, start from 0
+            let search_col = if line_offset == 0 { start_col } else { 0 };
+
+            // Build substring from search_col onward (char-indexed)
+            let prefix_bytes: usize =
+                chars.iter().take(search_col).map(|c| c.len_utf8()).sum();
+            let haystack = &line_str[prefix_bytes..];
+
+            // The search_text is also char-based; find it as a substring
+            if let Some(byte_offset) = haystack.find(search_text.as_str()) {
+                // Convert byte_offset back to char offset
+                let char_start =
+                    search_col + haystack[..byte_offset].chars().count();
+                let char_end = char_start + search_text.chars().count();
+
+                // Build cursor with selection for the found occurrence
+                let found_cursor = cursor_set::Cursor {
+                    position: (line_idx, char_end),
+                    anchor: Some((line_idx, char_start)),
+                };
+                self.cursors.add_cursor_with_selection(found_cursor);
+                self.overlay_cache.clear();
+                self.reset_cursor_blink();
+                return self.scroll_to_cursor();
+            }
+        }
+
+        Task::none()
+    }
+
+    // =========================================================================
     // Main Update Method
     // =========================================================================
 
@@ -1255,6 +1645,14 @@ impl CodeEditor {
             // Currently, this returns `Task::none()` as the actual navigation logic
             // is delegated to the `LspClient` implementation or handled elsewhere.
             Message::JumpClick(_point) => Task::none(),
+
+            // Multi-cursor operations
+            Message::AltClick(point) => self.handle_alt_click_msg(*point),
+            Message::AddCursorAbove => self.handle_add_cursor_above_msg(),
+            Message::AddCursorBelow => self.handle_add_cursor_below_msg(),
+            Message::SelectNextOccurrence => {
+                self.handle_select_next_occurrence_msg()
+            }
         }
     }
 }
@@ -1350,40 +1748,40 @@ mod tests {
     #[test]
     fn test_home_key() {
         let mut editor = CodeEditor::new("hello world", "py");
-        editor.cursor = (0, 5); // Move to middle of line
+        editor.cursors.primary_mut().position = (0, 5); // Move to middle of line
         let _ = editor.update(&Message::Home(false));
-        assert_eq!(editor.cursor, (0, 0));
+        assert_eq!(editor.cursors.primary_position(), (0, 0));
     }
 
     #[test]
     fn test_end_key() {
         let mut editor = CodeEditor::new("hello world", "py");
-        editor.cursor = (0, 0);
+        editor.cursors.primary_mut().position = (0, 0);
         let _ = editor.update(&Message::End(false));
-        assert_eq!(editor.cursor, (0, 11)); // Length of "hello world"
+        assert_eq!(editor.cursors.primary_position(), (0, 11)); // Length of "hello world"
     }
 
     #[test]
     fn test_arrow_key_with_shift_creates_selection() {
         let mut editor = CodeEditor::new("hello world", "py");
-        editor.cursor = (0, 0);
+        editor.cursors.primary_mut().position = (0, 0);
 
         // Shift+Right should start selection
         let _ = editor.update(&Message::ArrowKey(ArrowDirection::Right, true));
-        assert!(editor.selection_start.is_some());
-        assert!(editor.selection_end.is_some());
+        assert!(editor.cursors.primary().anchor.is_some());
+        assert!(editor.cursors.primary().has_selection());
     }
 
     #[test]
     fn test_arrow_key_without_shift_clears_selection() {
         let mut editor = CodeEditor::new("hello world", "py");
-        editor.selection_start = Some((0, 0));
-        editor.selection_end = Some((0, 5));
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 5);
 
         // Regular arrow key should clear selection
         let _ = editor.update(&Message::ArrowKey(ArrowDirection::Right, false));
-        assert_eq!(editor.selection_start, None);
-        assert_eq!(editor.selection_end, None);
+        assert!(editor.cursors.primary().anchor.is_none());
+        assert!(!editor.cursors.primary().has_selection());
     }
 
     #[test]
@@ -1394,8 +1792,8 @@ mod tests {
         editor.has_canvas_focus = true;
         editor.focus_locked = false;
 
-        editor.selection_start = Some((0, 0));
-        editor.selection_end = Some((0, 5));
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 5);
 
         let _ = editor.update(&Message::CharacterInput('X'));
         // Current behavior: character is inserted at cursor, selection is NOT automatically deleted
@@ -1406,56 +1804,56 @@ mod tests {
     #[test]
     fn test_ctrl_home() {
         let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
-        editor.cursor = (2, 5); // Start at line 3, column 5
+        editor.cursors.primary_mut().position = (2, 5); // Start at line 3, column 5
         let _ = editor.update(&Message::CtrlHome);
-        assert_eq!(editor.cursor, (0, 0)); // Should move to beginning of document
+        assert_eq!(editor.cursors.primary_position(), (0, 0)); // Should move to beginning of document
     }
 
     #[test]
     fn test_ctrl_end() {
         let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
-        editor.cursor = (0, 0); // Start at beginning
+        editor.cursors.primary_mut().position = (0, 0); // Start at beginning
         let _ = editor.update(&Message::CtrlEnd);
-        assert_eq!(editor.cursor, (2, 5)); // Should move to end of last line (line3 has 5 chars)
+        assert_eq!(editor.cursors.primary_position(), (2, 5)); // Should move to end of last line (line3 has 5 chars)
     }
 
     #[test]
     fn test_ctrl_home_clears_selection() {
         let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
-        editor.cursor = (2, 5);
-        editor.selection_start = Some((0, 0));
-        editor.selection_end = Some((2, 5));
+        editor.cursors.primary_mut().position = (2, 5);
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (2, 5);
 
         let _ = editor.update(&Message::CtrlHome);
-        assert_eq!(editor.cursor, (0, 0));
-        assert_eq!(editor.selection_start, None);
-        assert_eq!(editor.selection_end, None);
+        assert_eq!(editor.cursors.primary_position(), (0, 0));
+        assert!(editor.cursors.primary().anchor.is_none());
+        assert!(!editor.cursors.primary().has_selection());
     }
 
     #[test]
     fn test_ctrl_end_clears_selection() {
         let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
-        editor.cursor = (0, 0);
-        editor.selection_start = Some((0, 0));
-        editor.selection_end = Some((1, 3));
+        editor.cursors.primary_mut().position = (0, 0);
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (1, 3);
 
         let _ = editor.update(&Message::CtrlEnd);
-        assert_eq!(editor.cursor, (2, 5));
-        assert_eq!(editor.selection_start, None);
-        assert_eq!(editor.selection_end, None);
+        assert_eq!(editor.cursors.primary_position(), (2, 5));
+        assert!(editor.cursors.primary().anchor.is_none());
+        assert!(!editor.cursors.primary().has_selection());
     }
 
     #[test]
     fn test_goto_position_sets_cursor_and_clears_selection() {
         let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
-        editor.selection_start = Some((0, 0));
-        editor.selection_end = Some((1, 2));
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (1, 2);
 
         let _ = editor.update(&Message::GotoPosition(1, 3));
 
-        assert_eq!(editor.cursor, (1, 3));
-        assert_eq!(editor.selection_start, None);
-        assert_eq!(editor.selection_end, None);
+        assert_eq!(editor.cursors.primary_position(), (1, 3));
+        assert!(editor.cursors.primary().anchor.is_none());
+        assert!(!editor.cursors.primary().has_selection());
     }
 
     #[test]
@@ -1465,7 +1863,7 @@ mod tests {
         let _ = editor.update(&Message::GotoPosition(99, 99));
 
         // Clamped to last line (index 1) and end of that line (len = 2)
-        assert_eq!(editor.cursor, (1, 2));
+        assert_eq!(editor.cursors.primary_position(), (1, 2));
     }
 
     #[test]
@@ -1607,39 +2005,39 @@ mod tests {
     #[test]
     fn test_delete_selection_message() {
         let mut editor = CodeEditor::new("hello world", "py");
-        editor.cursor = (0, 0);
-        editor.selection_start = Some((0, 0));
-        editor.selection_end = Some((0, 5));
+        editor.cursors.primary_mut().position = (0, 0);
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 5);
 
         let _ = editor.update(&Message::DeleteSelection);
         assert_eq!(editor.buffer.line(0), " world");
-        assert_eq!(editor.cursor, (0, 0));
-        assert_eq!(editor.selection_start, None);
-        assert_eq!(editor.selection_end, None);
+        assert_eq!(editor.cursors.primary_position(), (0, 0));
+        assert!(editor.cursors.primary().anchor.is_none());
+        assert!(!editor.cursors.primary().has_selection());
     }
 
     #[test]
     fn test_delete_selection_multiline() {
         let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
-        editor.cursor = (0, 2);
-        editor.selection_start = Some((0, 2));
-        editor.selection_end = Some((2, 2));
+        editor.cursors.primary_mut().position = (0, 2);
+        editor.cursors.primary_mut().anchor = Some((0, 2));
+        editor.cursors.primary_mut().position = (2, 2);
 
         let _ = editor.update(&Message::DeleteSelection);
         assert_eq!(editor.buffer.line(0), "line3");
-        assert_eq!(editor.cursor, (0, 2));
-        assert_eq!(editor.selection_start, None);
+        assert_eq!(editor.cursors.primary_position(), (0, 2));
+        assert!(editor.cursors.primary().anchor.is_none());
     }
 
     #[test]
     fn test_delete_selection_no_selection() {
         let mut editor = CodeEditor::new("hello world", "py");
-        editor.cursor = (0, 5);
+        editor.cursors.primary_mut().position = (0, 5);
 
         let _ = editor.update(&Message::DeleteSelection);
         // Should do nothing if there's no selection
         assert_eq!(editor.buffer.line(0), "hello world");
-        assert_eq!(editor.cursor, (0, 5));
+        assert_eq!(editor.cursors.primary_position(), (0, 5));
     }
 
     #[test]
@@ -1670,7 +2068,10 @@ mod tests {
         let _ = editor.update(&Message::ImeCommit("安全与合规".to_string()));
         assert!(editor.ime_preedit.is_none());
         assert_eq!(editor.buffer.line(0), "安全与合规");
-        assert_eq!(editor.cursor, (0, "安全与合规".chars().count()));
+        assert_eq!(
+            editor.cursors.primary_position(),
+            (0, "安全与合规".chars().count())
+        );
     }
 
     #[test]
@@ -1681,18 +2082,18 @@ mod tests {
         editor.has_canvas_focus = true;
         editor.focus_locked = false;
 
-        editor.cursor = (0, 5);
+        editor.cursors.primary_mut().position = (0, 5);
 
         // Type a character
         let _ = editor.update(&Message::CharacterInput('!'));
         assert_eq!(editor.buffer.line(0), "hello!");
-        assert_eq!(editor.cursor, (0, 6));
+        assert_eq!(editor.cursors.primary_position(), (0, 6));
 
         // Undo should remove it (but first end the grouping)
         editor.history.end_group();
         let _ = editor.update(&Message::Undo);
         assert_eq!(editor.buffer.line(0), "hello");
-        assert_eq!(editor.cursor, (0, 5));
+        assert_eq!(editor.cursors.primary_position(), (0, 5));
     }
 
     #[test]
@@ -1703,7 +2104,7 @@ mod tests {
         editor.has_canvas_focus = true;
         editor.focus_locked = false;
 
-        editor.cursor = (0, 5);
+        editor.cursors.primary_mut().position = (0, 5);
 
         // Type a character
         let _ = editor.update(&Message::CharacterInput('!'));
@@ -1716,40 +2117,40 @@ mod tests {
         // Redo
         let _ = editor.update(&Message::Redo);
         assert_eq!(editor.buffer.line(0), "hello!");
-        assert_eq!(editor.cursor, (0, 6));
+        assert_eq!(editor.cursors.primary_position(), (0, 6));
     }
 
     #[test]
     fn test_undo_backspace() {
         let mut editor = CodeEditor::new("hello", "py");
-        editor.cursor = (0, 5);
+        editor.cursors.primary_mut().position = (0, 5);
 
         // Backspace
         let _ = editor.update(&Message::Backspace);
         assert_eq!(editor.buffer.line(0), "hell");
-        assert_eq!(editor.cursor, (0, 4));
+        assert_eq!(editor.cursors.primary_position(), (0, 4));
 
         // Undo
         let _ = editor.update(&Message::Undo);
         assert_eq!(editor.buffer.line(0), "hello");
-        assert_eq!(editor.cursor, (0, 5));
+        assert_eq!(editor.cursors.primary_position(), (0, 5));
     }
 
     #[test]
     fn test_undo_newline() {
         let mut editor = CodeEditor::new("hello world", "py");
-        editor.cursor = (0, 5);
+        editor.cursors.primary_mut().position = (0, 5);
 
         // Insert newline
         let _ = editor.update(&Message::Enter);
         assert_eq!(editor.buffer.line(0), "hello");
         assert_eq!(editor.buffer.line(1), " world");
-        assert_eq!(editor.cursor, (1, 0));
+        assert_eq!(editor.cursors.primary_position(), (1, 0));
 
         // Undo
         let _ = editor.update(&Message::Undo);
         assert_eq!(editor.buffer.line(0), "hello world");
-        assert_eq!(editor.cursor, (0, 5));
+        assert_eq!(editor.cursors.primary_position(), (0, 5));
     }
 
     #[test]
@@ -1760,7 +2161,7 @@ mod tests {
         editor.has_canvas_focus = true;
         editor.focus_locked = false;
 
-        editor.cursor = (0, 5);
+        editor.cursors.primary_mut().position = (0, 5);
 
         // Type multiple characters (they should be grouped)
         let _ = editor.update(&Message::CharacterInput(' '));
@@ -1778,7 +2179,7 @@ mod tests {
         // Single undo should remove all grouped characters
         let _ = editor.update(&Message::Undo);
         assert_eq!(editor.buffer.line(0), "hello");
-        assert_eq!(editor.cursor, (0, 5));
+        assert_eq!(editor.cursors.primary_position(), (0, 5));
     }
 
     #[test]
@@ -1789,7 +2190,7 @@ mod tests {
         editor.has_canvas_focus = true;
         editor.focus_locked = false;
 
-        editor.cursor = (0, 5);
+        editor.cursors.primary_mut().position = (0, 5);
 
         // Type a character (starts grouping)
         let _ = editor.update(&Message::CharacterInput('!'));
@@ -1819,7 +2220,7 @@ mod tests {
         editor.request_focus();
         editor.has_canvas_focus = true;
         editor.focus_locked = false;
-        editor.cursor = (0, 5);
+        editor.cursors.primary_mut().position = (0, 5);
 
         let _ = editor.visual_lines_cached(800.0);
         assert!(
@@ -1856,7 +2257,7 @@ mod tests {
         editor.has_canvas_focus = true;
         editor.focus_locked = false;
 
-        editor.cursor = (0, 1);
+        editor.cursors.primary_mut().position = (0, 1);
 
         // Make several changes
         let _ = editor.update(&Message::CharacterInput('b'));
@@ -1894,69 +2295,69 @@ mod tests {
     #[test]
     fn test_delete_key_with_selection() {
         let mut editor = CodeEditor::new("hello world", "py");
-        editor.selection_start = Some((0, 0));
-        editor.selection_end = Some((0, 5));
-        editor.cursor = (0, 5);
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 5);
+        editor.cursors.primary_mut().position = (0, 5);
 
         let _ = editor.update(&Message::Delete);
 
         assert_eq!(editor.buffer.line(0), " world");
-        assert_eq!(editor.cursor, (0, 0));
-        assert_eq!(editor.selection_start, None);
-        assert_eq!(editor.selection_end, None);
+        assert_eq!(editor.cursors.primary_position(), (0, 0));
+        assert!(editor.cursors.primary().anchor.is_none());
+        assert!(!editor.cursors.primary().has_selection());
     }
 
     #[test]
     fn test_delete_key_without_selection() {
         let mut editor = CodeEditor::new("hello", "py");
-        editor.cursor = (0, 0);
+        editor.cursors.primary_mut().position = (0, 0);
 
         let _ = editor.update(&Message::Delete);
 
         // Should delete the 'h'
         assert_eq!(editor.buffer.line(0), "ello");
-        assert_eq!(editor.cursor, (0, 0));
+        assert_eq!(editor.cursors.primary_position(), (0, 0));
     }
 
     #[test]
     fn test_backspace_with_selection() {
         let mut editor = CodeEditor::new("hello world", "py");
-        editor.selection_start = Some((0, 6));
-        editor.selection_end = Some((0, 11));
-        editor.cursor = (0, 11);
+        editor.cursors.primary_mut().anchor = Some((0, 6));
+        editor.cursors.primary_mut().position = (0, 11);
+        editor.cursors.primary_mut().position = (0, 11);
 
         let _ = editor.update(&Message::Backspace);
 
         assert_eq!(editor.buffer.line(0), "hello ");
-        assert_eq!(editor.cursor, (0, 6));
-        assert_eq!(editor.selection_start, None);
-        assert_eq!(editor.selection_end, None);
+        assert_eq!(editor.cursors.primary_position(), (0, 6));
+        assert!(editor.cursors.primary().anchor.is_none());
+        assert!(!editor.cursors.primary().has_selection());
     }
 
     #[test]
     fn test_backspace_without_selection() {
         let mut editor = CodeEditor::new("hello", "py");
-        editor.cursor = (0, 5);
+        editor.cursors.primary_mut().position = (0, 5);
 
         let _ = editor.update(&Message::Backspace);
 
         // Should delete the 'o'
         assert_eq!(editor.buffer.line(0), "hell");
-        assert_eq!(editor.cursor, (0, 4));
+        assert_eq!(editor.cursors.primary_position(), (0, 4));
     }
 
     #[test]
     fn test_delete_multiline_selection() {
         let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
-        editor.selection_start = Some((0, 2));
-        editor.selection_end = Some((2, 2));
-        editor.cursor = (2, 2);
+        editor.cursors.primary_mut().anchor = Some((0, 2));
+        editor.cursors.primary_mut().position = (2, 2);
+        editor.cursors.primary_mut().position = (2, 2);
 
         let _ = editor.update(&Message::Delete);
 
         assert_eq!(editor.buffer.line(0), "line3");
-        assert_eq!(editor.cursor, (0, 2));
-        assert_eq!(editor.selection_start, None);
+        assert_eq!(editor.cursors.primary_position(), (0, 2));
+        assert!(editor.cursors.primary().anchor.is_none());
     }
 
     #[test]
@@ -1987,43 +2388,162 @@ mod tests {
     #[test]
     fn test_enter_no_indent() {
         let mut editor = CodeEditor::new("hello", "rs");
-        editor.cursor = (0, 5);
+        editor.cursors.primary_mut().position = (0, 5);
         let _ = editor.update(&Message::Enter);
         assert_eq!(editor.buffer.line(0), "hello");
         assert_eq!(editor.buffer.line(1), "");
-        assert_eq!(editor.cursor, (1, 0));
+        assert_eq!(editor.cursors.primary_position(), (1, 0));
     }
 
     #[test]
     fn test_enter_auto_indent_spaces() {
         let mut editor = CodeEditor::new("    hello", "rs");
-        editor.cursor = (0, 9);
+        editor.cursors.primary_mut().position = (0, 9);
         let _ = editor.update(&Message::Enter);
         assert_eq!(editor.buffer.line(0), "    hello");
         assert_eq!(editor.buffer.line(1), "    ");
-        assert_eq!(editor.cursor, (1, 4));
+        assert_eq!(editor.cursors.primary_position(), (1, 4));
     }
 
     #[test]
     fn test_enter_auto_indent_tab() {
         let mut editor = CodeEditor::new("\thello", "rs");
-        editor.cursor = (0, 6);
+        editor.cursors.primary_mut().position = (0, 6);
         let _ = editor.update(&Message::Enter);
         assert_eq!(editor.buffer.line(0), "\thello");
         assert_eq!(editor.buffer.line(1), "\t");
-        assert_eq!(editor.cursor, (1, 1));
+        assert_eq!(editor.cursors.primary_position(), (1, 1));
     }
 
     #[test]
     fn test_enter_auto_indent_undo() {
         let mut editor = CodeEditor::new("    hello", "rs");
-        editor.cursor = (0, 9);
+        editor.cursors.primary_mut().position = (0, 9);
         let _ = editor.update(&Message::Enter);
         assert_eq!(editor.buffer.line_count(), 2);
 
         let _ = editor.update(&Message::Undo);
         assert_eq!(editor.buffer.line_count(), 1);
         assert_eq!(editor.buffer.line(0), "    hello");
-        assert_eq!(editor.cursor, (0, 9));
+        assert_eq!(editor.cursors.primary_position(), (0, 9));
+    }
+
+    // =========================================================================
+    // Multi-cursor tests
+    // =========================================================================
+
+    #[test]
+    fn test_multi_cursor_char_input_different_lines() {
+        let mut editor = CodeEditor::new("aaa\nbbb", "rs");
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+        // Place cursors at (0, 1) and (1, 1)
+        editor.cursors.primary_mut().position = (0, 1);
+        editor.cursors.add_cursor((1, 1));
+
+        let _ = editor.update(&Message::CharacterInput('X'));
+
+        // Both lines should have 'X' inserted at col 1
+        assert_eq!(editor.buffer.line(0), "aXaa");
+        assert_eq!(editor.buffer.line(1), "bXbb");
+    }
+
+    #[test]
+    fn test_multi_cursor_char_input_same_line() {
+        let mut editor = CodeEditor::new("abcd", "rs");
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+        // Place cursors at col 1 and col 3 (same line)
+        editor.cursors.primary_mut().position = (0, 1);
+        editor.cursors.add_cursor((0, 3));
+
+        let _ = editor.update(&Message::CharacterInput('X'));
+
+        // Process descending: col 3 first → "abcXd"; then col 1 → "aXbcXd"
+        // Col 1 cursor adjustment: insert at col 3 does not affect col 1 (col 1 < 3)
+        assert_eq!(editor.buffer.line(0), "aXbcXd");
+    }
+
+    #[test]
+    fn test_add_cursor_above() {
+        let mut editor = CodeEditor::new("line0\nline1\nline2", "rs");
+        editor.cursors.primary_mut().position = (1, 3);
+
+        let _ = editor.update(&Message::AddCursorAbove);
+
+        assert!(editor.cursors.is_multi());
+        // New cursor should be at line 0, col 3
+        assert_eq!(editor.cursors.as_slice()[0].position, (0, 3));
+    }
+
+    #[test]
+    fn test_add_cursor_below() {
+        let mut editor = CodeEditor::new("line0\nline1\nline2", "rs");
+        editor.cursors.primary_mut().position = (1, 3);
+
+        let _ = editor.update(&Message::AddCursorBelow);
+
+        assert!(editor.cursors.is_multi());
+        // New cursor should be at line 2, col 3
+        assert_eq!(
+            editor
+                .cursors
+                .as_slice()
+                .iter()
+                .find(|c| c.position.0 == 2)
+                .map(|c| c.position),
+            Some((2, 3))
+        );
+    }
+
+    #[test]
+    fn test_escape_collapses_multi_cursor() {
+        let mut editor = CodeEditor::new("line0\nline1", "rs");
+        editor.cursors.primary_mut().position = (0, 0);
+        editor.cursors.add_cursor((1, 0));
+        assert!(editor.cursors.is_multi());
+
+        let _ = editor.update(&Message::CloseSearch);
+
+        assert!(!editor.cursors.is_multi());
+    }
+
+    #[test]
+    fn test_select_next_occurrence_selects_word() {
+        let mut editor = CodeEditor::new("foo bar foo", "rs");
+        editor.cursors.primary_mut().position = (0, 1); // inside "foo"
+
+        let _ = editor.update(&Message::SelectNextOccurrence);
+
+        // Primary cursor should now have "foo" selected
+        let range = editor.cursors.primary().selection_range();
+        assert_eq!(range, Some(((0, 0), (0, 3))));
+    }
+
+    #[test]
+    fn test_select_next_occurrence_adds_cursor_for_second_occurrence() {
+        let mut editor = CodeEditor::new("foo bar foo", "rs");
+        // Set up primary cursor with "foo" selected
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 3);
+
+        let _ = editor.update(&Message::SelectNextOccurrence);
+
+        // Should now have 2 cursors: primary at "foo" (0..3) and new at "foo" (8..11)
+        assert_eq!(editor.cursors.len(), 2);
+    }
+
+    #[test]
+    fn test_multi_cursor_backspace() {
+        let mut editor = CodeEditor::new("abc\ndef", "rs");
+        editor.cursors.primary_mut().position = (0, 2);
+        editor.cursors.add_cursor((1, 2));
+
+        let _ = editor.update(&Message::Backspace);
+
+        assert_eq!(editor.buffer.line(0), "ac");
+        assert_eq!(editor.buffer.line(1), "df");
     }
 }

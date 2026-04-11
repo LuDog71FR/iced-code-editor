@@ -277,12 +277,13 @@ impl CodeEditor {
 
         if let Some(cursor_visual) = WrappingCalculator::logical_to_visual(
             visual_lines,
-            self.cursor.0,
-            self.cursor.1,
+            self.cursors.primary_position().0,
+            self.cursors.primary_position().1,
         ) {
             let vl = &visual_lines[cursor_visual];
             let line_content = self.buffer.line(vl.logical_line);
-            let prefix_len = self.cursor.1.saturating_sub(vl.start_col);
+            let prefix_len =
+                self.cursors.primary_position().1.saturating_sub(vl.start_col);
             let prefix_text: String = line_content
                 .chars()
                 .skip(vl.start_col)

@@ -7,10 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+None
+
+## [0.3.8] - 2026-04-11
+
 ### Added
 
-- feat: auto-indentation on Enter — copies the leading whitespace of the current line to the new line
+- feat: **Multiple cursors** for simultaneous editing at multiple positions
+
+- feat: **auto-indentation on Enter**: copies the leading whitespace of the current line to the new line
   - Toggle on/off via `set_auto_indent_enabled()` / `auto_indent_enabled()`
+
 - feat: configurable indentation style via `IndentStyle` enum
   - `IndentStyle::Spaces(n)` (2, 4 or 8 spaces) or `IndentStyle::Tab`
   - Configure via `set_indent_style()` / `indent_style()`
