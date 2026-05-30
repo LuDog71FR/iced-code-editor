@@ -14,10 +14,12 @@ categories = ["gui"]
 
 [features]
 lsp-process = ["dep:serde_json"]
+two-face = ["dep:two-face"]
 
 [dependencies]
 iced.workspace = true
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+two-face = { version = "0.5", optional = true }
 web-time = "1"
 iced_font_awesome = "0.4"
 iced_aw = "0.13"

@@ -1487,8 +1487,16 @@ impl canvas::Program<Message> for CodeEditor {
         let content_geometry =
             self.content_cache.draw(renderer, bounds.size(), |frame| {
                 // syntect initialization is relatively expensive; keep it global.
-                let syntax_set =
-                    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
+                let syntax_set = SYNTAX_SET.get_or_init(|| {
+                    #[cfg(feature = "two-face")]
+                    {
+                        two_face::syntax::extra_newlines()
+                    }
+                    #[cfg(not(feature = "two-face"))]
+                    {
+                        SyntaxSet::load_defaults_newlines()
+                    }
+                });
                 let theme_set = THEME_SET.get_or_init(ThemeSet::load_defaults);
                 let syntax_theme = theme_set
                     .themes
