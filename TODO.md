@@ -10,11 +10,6 @@ None
 
 ## Features
 
-2. **Code folding**
-
-   - Collapse/expand blocks
-   - Indentation-based or syntax-aware
-
 3. **Minimap**
 
    - Overview of entire file

@@ -33,6 +33,7 @@ Screenshot of the demo application:
 - **Focus management** for multiple editors
 - **Native Iced theme support** - Automatically adapts to all 23+ built-in Iced themes
 - **Line wrapping** to split long lines
+- **Code folding** to collapse/expand indentation-based blocks
 - **High performance** canvas-based rendering
 - **Search and replace** text
 - **Language Server Protocol** (LSP) support
@@ -41,7 +42,6 @@ Screenshot of the demo application:
 
 ## Planned features
 
-- [ ] Collapse/expand blocks
 - [ ] Minimap
 
 ## Quick Start
@@ -197,6 +197,18 @@ All editing operations (typing, backspace, delete, enter, tab, paste) apply simu
 | **Shift + F3**    | Find previous match            |
 | **Escape**        | Close search dialog            |
 
+### Code Folding
+
+These shortcuts are active only when code folding is enabled:
+
+| Shortcut     | Action                                          |
+| ------------ | ----------------------------------------------- |
+| **Ctrl + .** | Toggle fold of the block at the cursor          |
+| **Ctrl + K** | Fold all blocks                                 |
+| **Ctrl + J** | Unfold all blocks                               |
+
+You can also click the fold chevrons (▼ / ▶) in the gutter to collapse or expand a block.
+
 ### LSP Completion
 
 These shortcuts are active only when the LSP completion menu is visible:
@@ -306,6 +318,47 @@ if editor.wrap_enabled() {
 ```
 
 When enabled, wrapped lines show a continuation indicator (↪) in the line number gutter.
+
+### Enable/disable code folding
+
+Code folding is **enabled by default**. Foldable regions are detected from indentation: a line is a fold header when the following non-blank line is more deeply indented (language-agnostic, works for Rust, Python, YAML, etc.). When enabled, a fold margin with clickable chevrons (▼ expanded, ▶ collapsed) is shown in the gutter, and a `⋯` marker appears after a collapsed block header.
+
+```rust
+// Disable code folding (chevrons hidden, all lines shown)
+editor.set_folding_enabled(false);
+
+// Or use builder pattern during initialization
+let editor = CodeEditor::new("code", "rs")
+    .with_folding_enabled(false);
+
+// Check current state
+if editor.folding_enabled() {
+    println!("Code folding is active");
+}
+```
+
+Folds can also be driven programmatically (useful for your own buttons or commands):
+
+```rust
+// Toggle the fold of the block whose header is a given logical line
+editor.toggle_fold(0);
+
+// Toggle / fold / unfold the innermost block containing a line
+editor.toggle_fold_at(line);
+editor.fold_at(line);
+editor.unfold_at(line);
+
+// Fold or unfold every block at once
+editor.fold_all();
+editor.unfold_all();
+
+// Query whether a header line is collapsed
+if editor.is_folded(0) {
+    println!("Block at line 0 is collapsed");
+}
+```
+
+When folding is disabled, the collapsed state is preserved (so re-enabling restores the previously collapsed blocks) but no lines are hidden.
 
 ### Enable/disable line numbers
 

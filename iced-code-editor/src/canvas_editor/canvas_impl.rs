@@ -83,6 +83,7 @@ fn expand_tabs(text: &str, tab_width: usize) -> Cow<'_, str> {
     Cow::Owned(expanded)
 }
 
+use super::folding;
 use super::wrapping::{VisualLine, WrappingCalculator};
 use super::{ArrowDirection, CodeEditor, Message, measure_text_width};
 use iced::widget::canvas::Action;
@@ -131,40 +132,127 @@ impl CodeEditor {
         visual_line: &VisualLine,
         y: f32,
     ) {
-        if !self.line_numbers_enabled {
+        // The line-number area is the left part of the gutter; the fold margin
+        // (when folding is enabled) is the right strip adjacent to the text.
+        let number_area_width = self.line_number_gutter_width();
+
+        if self.line_numbers_enabled {
+            if visual_line.is_first_segment() {
+                // Draw line number for first segment, centered in the number area.
+                let line_num = visual_line.logical_line + 1;
+                let line_num_text = format!("{}", line_num);
+                let text_width = measure_text_width(
+                    &line_num_text,
+                    ctx.full_char_width,
+                    ctx.char_width,
+                );
+                let x_pos = (number_area_width - text_width) / 2.0;
+                frame.fill_text(canvas::Text {
+                    content: line_num_text,
+                    position: Point::new(x_pos, y + 2.0),
+                    color: self.style.line_number_color,
+                    size: ctx.font_size.into(),
+                    font: ctx.font,
+                    ..canvas::Text::default()
+                });
+            } else {
+                // Draw wrap indicator for continuation lines.
+                frame.fill_text(canvas::Text {
+                    content: "↪".to_string(),
+                    position: Point::new(number_area_width - 20.0, y + 2.0),
+                    color: self.style.line_number_color,
+                    size: ctx.font_size.into(),
+                    font: ctx.font,
+                    ..canvas::Text::default()
+                });
+            }
+        }
+
+        self.draw_fold_chevron(frame, ctx, visual_line, y, number_area_width);
+    }
+
+    /// Draws the fold chevron in the fold margin for a foldable header line.
+    ///
+    /// Draws nothing when folding is disabled, on continuation (wrapped)
+    /// segments, or on lines that are not fold headers.
+    ///
+    /// # Arguments
+    ///
+    /// * `frame` - The canvas frame to draw on
+    /// * `ctx` - Rendering context containing metrics
+    /// * `visual_line` - The visual line to render
+    /// * `y` - Y position for rendering
+    /// * `number_area_width` - Width of the line-number area (start of the fold margin)
+    fn draw_fold_chevron(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext,
+        visual_line: &VisualLine,
+        y: f32,
+        number_area_width: f32,
+    ) {
+        if !self.folding_enabled || !visual_line.is_first_segment() {
             return;
         }
 
-        if visual_line.is_first_segment() {
-            // Draw line number for first segment
-            let line_num = visual_line.logical_line + 1;
-            let line_num_text = format!("{}", line_num);
-            // Calculate actual text width and center in gutter
-            let text_width = measure_text_width(
-                &line_num_text,
-                ctx.full_char_width,
-                ctx.char_width,
-            );
-            let x_pos = (ctx.gutter_width - text_width) / 2.0;
-            frame.fill_text(canvas::Text {
-                content: line_num_text,
-                position: Point::new(x_pos, y + 2.0),
-                color: self.style.line_number_color,
-                size: ctx.font_size.into(),
-                font: ctx.font,
-                ..canvas::Text::default()
-            });
-        } else {
-            // Draw wrap indicator for continuation lines
-            frame.fill_text(canvas::Text {
-                content: "↪".to_string(),
-                position: Point::new(ctx.gutter_width - 20.0, y + 2.0),
-                color: self.style.line_number_color,
-                size: ctx.font_size.into(),
-                font: ctx.font,
-                ..canvas::Text::default()
-            });
+        let regions = self.foldable_regions();
+        if !folding::is_fold_header(&regions, visual_line.logical_line) {
+            return;
         }
+
+        // `▶` when collapsed, `▼` when expanded.
+        let chevron = if self.is_folded(visual_line.logical_line) {
+            "▶"
+        } else {
+            "▼"
+        };
+        frame.fill_text(canvas::Text {
+            content: chevron.to_string(),
+            position: Point::new(number_area_width + 1.0, y + 2.0),
+            color: self.style.line_number_color,
+            size: ctx.font_size.into(),
+            font: ctx.font,
+            ..canvas::Text::default()
+        });
+    }
+
+    /// Draws a `⋯` marker after the text of a collapsed fold header, signalling
+    /// that lines are hidden below it (VS Code-style cue).
+    ///
+    /// Draws nothing unless folding is enabled and `visual_line` is the header
+    /// of a currently collapsed region. Intended to be called inside the clipped
+    /// code area so the marker cannot bleed into the gutter.
+    fn draw_fold_collapsed_marker(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext,
+        visual_line: &VisualLine,
+        y: f32,
+    ) {
+        if !self.folding_enabled
+            || !visual_line.is_first_segment()
+            || !self.is_folded(visual_line.logical_line)
+        {
+            return;
+        }
+
+        let line_content = self.buffer.line(visual_line.logical_line);
+        let line_width = measure_text_width(
+            line_content,
+            ctx.full_char_width,
+            ctx.char_width,
+        );
+        let x = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset
+            + line_width
+            + 6.0;
+        frame.fill_text(canvas::Text {
+            content: "⋯".to_string(),
+            position: Point::new(x, y + 2.0),
+            color: self.style.line_number_color,
+            size: ctx.font_size.into(),
+            font: ctx.font,
+            ..canvas::Text::default()
+        });
     }
 
     /// Draws the background highlight for the current line.
@@ -1046,6 +1134,34 @@ impl CodeEditor {
             );
         }
 
+        // Code folding shortcuts (only when folding is enabled).
+        if self.folding_enabled {
+            // Ctrl+. : toggle the fold of the block at the cursor.
+            if modifiers.control()
+                && matches!(key, keyboard::Key::Character(c) if c.as_str() == ".")
+            {
+                return Some(
+                    Action::publish(Message::ToggleFoldAtCursor).and_capture(),
+                );
+            }
+
+            // Ctrl+K : fold all blocks.
+            if modifiers.control()
+                && !modifiers.shift()
+                && matches!(key, keyboard::Key::Character(c) if c.as_str() == "k")
+            {
+                return Some(Action::publish(Message::FoldAll).and_capture());
+            }
+
+            // Ctrl+J : unfold all blocks.
+            if modifiers.control()
+                && !modifiers.shift()
+                && matches!(key, keyboard::Key::Character(c) if c.as_str() == "j")
+            {
+                return Some(Action::publish(Message::UnfoldAll).and_capture());
+            }
+        }
+
         None
     }
 
@@ -1232,6 +1348,38 @@ impl CodeEditor {
     ///
     /// `Some(Action<Message>)` if the event was handled, `None` otherwise
     #[allow(clippy::unused_self)]
+    /// Returns the logical line of the fold header whose chevron is at `point`,
+    /// if any.
+    ///
+    /// Returns `None` when folding is disabled, when the point is outside the
+    /// fold margin, or when the targeted line is not a fold header.
+    ///
+    /// # Arguments
+    ///
+    /// * `point` - The click position in canvas coordinates
+    pub(crate) fn fold_header_at_point(&self, point: Point) -> Option<usize> {
+        if !self.folding_enabled {
+            return None;
+        }
+
+        // The fold margin is the strip between the line-number area and the text.
+        let margin_start = self.line_number_gutter_width();
+        if point.x < margin_start || point.x >= self.gutter_width() {
+            return None;
+        }
+
+        let visual_line_idx = (point.y / self.line_height) as usize;
+        let visual_lines = self.visual_lines_cached(self.viewport_width);
+        let visual_line = visual_lines.get(visual_line_idx)?;
+        if !visual_line.is_first_segment() {
+            return None;
+        }
+
+        let regions = self.foldable_regions();
+        folding::is_fold_header(&regions, visual_line.logical_line)
+            .then_some(visual_line.logical_line)
+    }
+
     fn handle_mouse_event(
         &self,
         event: &mouse::Event,
@@ -1241,6 +1389,13 @@ impl CodeEditor {
         match event {
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
                 cursor.position_in(bounds).map(|position| {
+                    // Clicking a fold chevron toggles the block instead of
+                    // moving the caret.
+                    if let Some(header) = self.fold_header_at_point(position) {
+                        return Action::publish(Message::ToggleFold(header))
+                            .and_capture();
+                    }
+
                     // Check for Ctrl (or Command on macOS) + Click
                     #[cfg(target_os = "macos")]
                     let is_jump_click = self.modifiers.get().command();
@@ -1555,6 +1710,12 @@ impl canvas::Program<Message> for CodeEditor {
                             syntax_ref,
                             syntax_set,
                             syntax_theme,
+                        );
+                        self.draw_fold_collapsed_marker(
+                            f,
+                            &ctx,
+                            visual_line,
+                            y,
                         );
                     }
                 });

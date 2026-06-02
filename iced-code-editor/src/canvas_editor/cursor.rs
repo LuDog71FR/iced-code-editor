@@ -123,17 +123,9 @@ impl CodeEditor {
     /// After moving, overlapping cursors are merged via `sort_and_merge`.
     pub(crate) fn move_cursor(&mut self, direction: ArrowDirection) {
         // Compute visual lines once — used by Up/Down movement for all cursors.
-        let wrapping_calc = WrappingCalculator::new(
-            self.wrap_enabled,
-            self.wrap_column,
-            self.full_char_width,
-            self.char_width,
-        );
-        let visual_lines = wrapping_calc.calculate_visual_lines(
-            &self.buffer,
-            self.viewport_width,
-            self.gutter_width(),
-        );
+        // Reuse the memoized layout so that lines hidden by collapsed folds are
+        // skipped during vertical navigation, exactly like in rendering.
+        let visual_lines = self.visual_lines_cached(self.viewport_width);
 
         for cursor in self.cursors.as_mut_slice() {
             if let Some(new_pos) = compute_next_position(
@@ -441,6 +433,9 @@ mod tests {
         use iced::Point;
         let mut editor = CodeEditor::new("你好", "txt");
         editor.set_line_numbers_enabled(false);
+        // Disable folding so the gutter (line numbers + fold margin) is
+        // zero-width; otherwise the fold margin shifts click coordinates.
+        editor.set_folding_enabled(false);
 
         let full_char_width = editor.full_char_width();
         let half_width = full_char_width / 2.0;

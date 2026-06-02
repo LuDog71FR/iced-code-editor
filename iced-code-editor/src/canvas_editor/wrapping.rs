@@ -6,6 +6,7 @@
 
 use crate::text_buffer::TextBuffer;
 use std::cmp::Ordering;
+use std::collections::HashSet;
 
 use super::compare_floats;
 
@@ -106,6 +107,7 @@ impl WrappingCalculator {
     /// * `text_buffer` - The text buffer to wrap
     /// * `viewport_width` - Width of the viewport in pixels (used if wrap_column is None)
     /// * `gutter_width` - Width of the line number gutter in pixels (subtracted from available width)
+    /// * `hidden` - Logical lines hidden by collapsed code folds; these produce no visual lines
     ///
     /// # Returns
     ///
@@ -115,10 +117,12 @@ impl WrappingCalculator {
         text_buffer: &TextBuffer,
         viewport_width: f32,
         gutter_width: f32,
+        hidden: &HashSet<usize>,
     ) -> Vec<VisualLine> {
         if !self.wrap_enabled {
-            // No wrapping: one visual line per logical line
+            // No wrapping: one visual line per (visible) logical line
             return (0..text_buffer.line_count())
+                .filter(|line| !hidden.contains(line))
                 .map(|line| {
                     VisualLine::new(line, 0, 0, text_buffer.line_len(line))
                 })
@@ -137,6 +141,10 @@ impl WrappingCalculator {
         let mut visual_lines = Vec::new();
 
         for logical_line in 0..text_buffer.line_count() {
+            if hidden.contains(&logical_line) {
+                continue; // Hidden by a collapsed fold: emit no visual lines.
+            }
+
             let line_content = text_buffer.line(logical_line);
 
             if line_content.is_empty() {
@@ -241,7 +249,8 @@ mod tests {
     fn test_no_wrap_when_disabled() {
         let buffer = TextBuffer::new("line 1\nline 2\nline 3");
         let calc = WrappingCalculator::new(false, None, FONT_SIZE, CHAR_WIDTH);
-        let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
+        let visual_lines =
+            calc.calculate_visual_lines(&buffer, 800.0, 60.0, &HashSet::new());
 
         assert_eq!(visual_lines.len(), 3);
         assert_eq!(visual_lines[0].logical_line, 0);
@@ -250,12 +259,42 @@ mod tests {
     }
 
     #[test]
+    fn test_hidden_lines_are_skipped() {
+        let buffer = TextBuffer::new("line 1\nline 2\nline 3\nline 4");
+        let calc = WrappingCalculator::new(false, None, FONT_SIZE, CHAR_WIDTH);
+        // Hide logical lines 1 and 2 (e.g. a collapsed fold).
+        let hidden: HashSet<usize> = [1, 2].into_iter().collect();
+        let visual_lines =
+            calc.calculate_visual_lines(&buffer, 800.0, 60.0, &hidden);
+
+        // Only lines 0 and 3 remain visible.
+        assert_eq!(visual_lines.len(), 2);
+        assert_eq!(visual_lines[0].logical_line, 0);
+        assert_eq!(visual_lines[1].logical_line, 3);
+    }
+
+    #[test]
+    fn test_hidden_lines_are_skipped_when_wrapping() {
+        let buffer = TextBuffer::new("aaaa\nbbbb\ncccc");
+        let calc =
+            WrappingCalculator::new(true, Some(80), FONT_SIZE, CHAR_WIDTH);
+        let hidden: HashSet<usize> = [1].into_iter().collect();
+        let visual_lines =
+            calc.calculate_visual_lines(&buffer, 800.0, 60.0, &hidden);
+
+        assert_eq!(visual_lines.len(), 2);
+        assert_eq!(visual_lines[0].logical_line, 0);
+        assert_eq!(visual_lines[1].logical_line, 2);
+    }
+
+    #[test]
     fn test_wrap_at_fixed_column() {
         let buffer =
             TextBuffer::new("this is a very long line that should be wrapped");
         let calc =
             WrappingCalculator::new(true, Some(10), FONT_SIZE, CHAR_WIDTH);
-        let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
+        let visual_lines =
+            calc.calculate_visual_lines(&buffer, 800.0, 60.0, &HashSet::new());
 
         // Line is 47 chars, should wrap into 5 segments (10+10+10+10+7)
         assert_eq!(visual_lines.len(), 5);
@@ -273,7 +312,8 @@ mod tests {
             TextBuffer::new("short\nthis is a very long line that wraps\nend");
         let calc =
             WrappingCalculator::new(true, Some(15), FONT_SIZE, CHAR_WIDTH);
-        let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
+        let visual_lines =
+            calc.calculate_visual_lines(&buffer, 800.0, 60.0, &HashSet::new());
 
         // First line (short) - no wrap
         assert_eq!(
@@ -305,7 +345,8 @@ mod tests {
         let buffer = TextBuffer::new("line1\n\nline3");
         let calc =
             WrappingCalculator::new(true, Some(10), FONT_SIZE, CHAR_WIDTH);
-        let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
+        let visual_lines =
+            calc.calculate_visual_lines(&buffer, 800.0, 60.0, &HashSet::new());
 
         assert_eq!(visual_lines.len(), 3);
         assert_eq!(visual_lines[1].logical_line, 1);
@@ -318,7 +359,8 @@ mod tests {
         let buffer = TextBuffer::new(&long_text);
         let calc =
             WrappingCalculator::new(true, Some(20), FONT_SIZE, CHAR_WIDTH);
-        let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
+        let visual_lines =
+            calc.calculate_visual_lines(&buffer, 800.0, 60.0, &HashSet::new());
 
         // 100 chars / 20 per line = 5 lines
         assert_eq!(visual_lines.len(), 5);
@@ -345,7 +387,8 @@ mod tests {
         let buffer = TextBuffer::new(text);
         let calc =
             WrappingCalculator::new(true, Some(10), FONT_SIZE, CHAR_WIDTH); // 84.0 px
-        let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
+        let visual_lines =
+            calc.calculate_visual_lines(&buffer, 800.0, 60.0, &HashSet::new());
 
         assert_eq!(visual_lines.len(), 1);
         assert_eq!(visual_lines[0].len(), 6);
@@ -356,7 +399,8 @@ mod tests {
         // 7th char adds 14.0, total 98.0 > 84.0. Triggers wrap before 7th char.
         let text = "你好世界你好世"; // 7 chars
         let buffer = TextBuffer::new(text);
-        let visual_lines = calc.calculate_visual_lines(&buffer, 800.0, 60.0);
+        let visual_lines =
+            calc.calculate_visual_lines(&buffer, 800.0, 60.0, &HashSet::new());
 
         assert_eq!(visual_lines.len(), 2);
         assert_eq!(visual_lines[0].len(), 6); // First 6 fit

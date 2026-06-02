@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+None
+
+## [0.3.9] - 2026-06-02
+
+### Added
+
 - feat: add optional dependency 'two-face' for additional syntaxes ([#18](https://github.com/LuDog71FR/iced-code-editor/issues/18))
+
+- feat: **Code folding** for better code navigation
+  - Collapse and expand code blocks with a single click or shortcut
+  - Collapse and expand all code blocks with shortcuts
 
 ## [0.3.8] - 2026-04-11
 

@@ -1653,6 +1653,22 @@ impl CodeEditor {
             Message::SelectNextOccurrence => {
                 self.handle_select_next_occurrence_msg()
             }
+            Message::ToggleFold(header_line) => {
+                self.toggle_fold(*header_line);
+                Task::none()
+            }
+            Message::ToggleFoldAtCursor => {
+                self.toggle_fold_at(self.cursors.primary_position().0);
+                Task::none()
+            }
+            Message::FoldAll => {
+                self.fold_all();
+                Task::none()
+            }
+            Message::UnfoldAll => {
+                self.unfold_all();
+                Task::none()
+            }
         }
     }
 }

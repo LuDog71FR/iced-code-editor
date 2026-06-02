@@ -156,6 +156,8 @@ pub enum Message {
     RunCode,
     /// Toggle line wrapping
     ToggleWrap(EditorId, bool),
+    /// Toggle code folding
+    ToggleFolding(EditorId, bool),
     /// Toggle auto-indentation
     ToggleAutoIndent(EditorId, bool),
     /// Change indentation style
@@ -640,6 +642,27 @@ greet("World")
 
         if let Some(tab) = self.get_tab(editor_id) {
             tab.editor.set_wrap_enabled(enabled);
+        }
+        Task::none()
+    }
+
+    /// Handles toggling code folding for a specific editor.
+    fn handle_toggle_folding(
+        &mut self,
+        editor_id: EditorId,
+        enabled: bool,
+    ) -> Task<Message> {
+        self.log(
+            "INFO",
+            &format!(
+                "Code folding {} in {:?} editor",
+                if enabled { "enabled" } else { "disabled" },
+                editor_id
+            ),
+        );
+
+        if let Some(tab) = self.get_tab(editor_id) {
+            tab.editor.set_folding_enabled(enabled);
         }
         Task::none()
     }
@@ -1132,6 +1155,9 @@ greet("World")
             // Editor toggles
             Message::ToggleWrap(editor_id, enabled) => {
                 self.handle_toggle_wrap(editor_id, enabled)
+            }
+            Message::ToggleFolding(editor_id, enabled) => {
+                self.handle_toggle_folding(editor_id, enabled)
             }
             Message::ToggleAutoIndent(editor_id, enabled) => {
                 self.handle_toggle_auto_indent(editor_id, enabled)

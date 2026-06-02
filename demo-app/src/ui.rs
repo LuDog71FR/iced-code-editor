@@ -412,6 +412,7 @@ pub fn view_editor_pane<'a>(
 
     // We assume these settings are global for now, but could be per-tab
     let wrap_enabled = editor.wrap_enabled();
+    let folding_enabled = editor.folding_enabled();
     let auto_indent_enabled = editor.auto_indent_enabled();
     let current_indent_style = editor.indent_style();
     let search_replace_enabled = editor.search_replace_enabled();
@@ -430,6 +431,12 @@ pub fn view_editor_pane<'a>(
     let wrap_checkbox = checkbox(wrap_enabled)
         .label("Line wrapping")
         .on_toggle(move |b| Message::ToggleWrap(editor_id, b))
+        .text_size(14);
+
+    // Code folding checkbox
+    let folding_checkbox = checkbox(folding_enabled)
+        .label("Code folding")
+        .on_toggle(move |b| Message::ToggleFolding(editor_id, b))
         .text_size(14);
 
     // Auto-indent checkbox
@@ -580,6 +587,8 @@ pub fn view_editor_pane<'a>(
                 template_picker,
                 Space::new().width(10),
                 wrap_checkbox,
+                Space::new().width(10),
+                folding_checkbox,
                 Space::new().width(10),
                 auto_indent_checkbox,
                 Space::new().width(10),
