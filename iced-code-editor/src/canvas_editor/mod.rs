@@ -3,6 +3,7 @@
 //! This module provides a custom Canvas widget that handles all text rendering
 //! and input directly, bypassing Iced's higher-level widgets for optimal speed.
 
+use iced::Color;
 use iced::advanced::text::{
     Alignment, Paragraph, Renderer as TextRenderer, Text,
 };
@@ -16,6 +17,8 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+use syntect::highlighting::HighlightState;
+use syntect::parsing::ParseState;
 use unicode_width::UnicodeWidthChar;
 
 use crate::i18n::Translations;
@@ -50,6 +53,21 @@ mod selection;
 mod update;
 mod view;
 mod wrapping;
+
+/// Hidden re-exports for the benchmark harness in `benches/`.
+///
+/// This module is compiled only with the `bench` feature and is **not** part
+/// of the public API. It exposes internal hot-path functions so the
+/// `criterion` benchmarks (which run as a separate crate) can measure them.
+#[doc(hidden)]
+#[cfg(feature = "bench")]
+pub mod bench_support {
+    pub use super::canvas_impl::highlight_line_spans;
+    pub use super::folding::compute_foldable_regions;
+    pub use super::search::find_matches;
+    pub use super::wrapping::WrappingCalculator;
+    pub use crate::text_buffer::TextBuffer;
+}
 
 /// Canvas-based text editor constants
 pub(crate) const FONT_SIZE: f32 = 14.0;
@@ -294,6 +312,21 @@ pub struct CodeEditor {
     /// rendering (where we only have `&self`), but we still want to memoize the
     /// expensive computation without forcing external mutability.
     visual_lines_cache: RefCell<Option<VisualLinesCache>>,
+    /// Sequential per-line syntax-highlight cache (see [`HighlightCache`]).
+    ///
+    /// Stored behind a `RefCell` because highlighting is performed during
+    /// rendering (where only `&self` is available) yet should be memoized.
+    /// Spans are reused across wrapped visual segments and across scroll-only
+    /// renders. On an edit the cache is truncated from the first changed line
+    /// (tracked via `pre_edit_line`) rather than fully cleared, so multi-line
+    /// constructs stay correct without re-parsing the whole file.
+    pub(crate) highlight_cache: RefCell<Option<HighlightCache>>,
+    /// Topmost logical line touched by the cursors/selections before the
+    /// current edit, captured at the top of `update()`.
+    ///
+    /// Used as a conservative lower bound for the first line an edit may
+    /// change, to truncate `highlight_cache` precisely.
+    pub(crate) pre_edit_line: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -315,6 +348,109 @@ struct VisualLinesKey {
 struct VisualLinesCache {
     key: VisualLinesKey,
     visual_lines: Rc<Vec<wrapping::VisualLine>>,
+}
+
+/// One highlighted logical line together with the syntect parser state *after*
+/// it, so highlighting can resume sequentially from any cached line.
+///
+/// Storing the post-line state is what makes multi-line constructs (block
+/// comments, multi-line strings) highlight correctly: line `N` is highlighted
+/// starting from the state left by line `N - 1`.
+struct CachedHighlightLine {
+    /// Colored token spans covering the full logical line.
+    spans: Rc<Vec<(Color, String)>>,
+    /// Syntect parse state after this line (start state for the next line).
+    parse_state: ParseState,
+    /// Syntect highlight state after this line (start state for the next line).
+    highlight_state: HighlightState,
+}
+
+/// Sequential per-line syntax-highlight cache.
+///
+/// `lines` holds a dense, valid prefix: `lines[i]` is the highlight of logical
+/// line `i`. The prefix is extended lazily as deeper lines become visible and
+/// truncated from the first edited line on each edit (see
+/// [`CodeEditor::invalidate_highlight_from`]), so an edit never forces a full
+/// re-parse from the top of the file.
+pub(crate) struct HighlightCache {
+    /// Active syntax/language identifier these lines were highlighted with.
+    syntax: String,
+    /// Dense valid prefix of highlighted lines (vector index = logical line).
+    lines: Vec<CachedHighlightLine>,
+}
+
+impl HighlightCache {
+    /// Creates an empty cache for the given syntax identifier.
+    ///
+    /// # Arguments
+    ///
+    /// * `syntax` - Active syntax/language identifier the cache is built for.
+    pub(crate) fn new(syntax: String) -> Self {
+        Self { syntax, lines: Vec::new() }
+    }
+
+    /// Returns the syntax identifier these lines were highlighted with.
+    pub(crate) fn syntax(&self) -> &str {
+        &self.syntax
+    }
+
+    /// Returns the number of highlighted logical lines (valid prefix length).
+    pub(crate) fn valid_len(&self) -> usize {
+        self.lines.len()
+    }
+
+    /// Returns the cached spans for `logical_line`, if within the valid prefix.
+    ///
+    /// # Arguments
+    ///
+    /// * `logical_line` - Index of the logical line to look up.
+    pub(crate) fn spans(
+        &self,
+        logical_line: usize,
+    ) -> Option<Rc<Vec<(Color, String)>>> {
+        self.lines.get(logical_line).map(|line| Rc::clone(&line.spans))
+    }
+
+    /// Returns the syntect state to resume highlighting the next line from.
+    ///
+    /// This is the state left after the last cached line, or `None` when the
+    /// cache is empty (highlighting then starts from the syntax's initial
+    /// state).
+    pub(crate) fn resume_state(&self) -> Option<(ParseState, HighlightState)> {
+        self.lines.last().map(|line| {
+            (line.parse_state.clone(), line.highlight_state.clone())
+        })
+    }
+
+    /// Appends one highlighted line and its post-line state to the prefix.
+    ///
+    /// # Arguments
+    ///
+    /// * `spans` - The colored token spans of the line.
+    /// * `parse_state` - Syntect parse state after the line.
+    /// * `highlight_state` - Syntect highlight state after the line.
+    pub(crate) fn push_line(
+        &mut self,
+        spans: Rc<Vec<(Color, String)>>,
+        parse_state: ParseState,
+        highlight_state: HighlightState,
+    ) {
+        self.lines.push(CachedHighlightLine {
+            spans,
+            parse_state,
+            highlight_state,
+        });
+    }
+
+    /// Truncates the valid prefix to `line`, discarding lines at index `line`
+    /// and beyond so they are re-highlighted on next access.
+    ///
+    /// # Arguments
+    ///
+    /// * `line` - First logical line to invalidate.
+    pub(crate) fn truncate(&mut self, line: usize) {
+        self.lines.truncate(line);
+    }
 }
 
 /// Messages emitted by the code editor
@@ -548,6 +684,8 @@ impl CodeEditor {
             cache_window_end_line: 0,
             buffer_revision: 0,
             visual_lines_cache: RefCell::new(None),
+            highlight_cache: RefCell::new(None),
+            pre_edit_line: 0,
         };
 
         // Perform initial character dimension calculation
@@ -1045,6 +1183,9 @@ impl CodeEditor {
         self.overlay_cache = canvas::Cache::default();
         self.buffer_revision = self.buffer_revision.wrapping_add(1);
         *self.visual_lines_cache.borrow_mut() = None;
+        // The buffer is fully replaced, so discard the whole highlight prefix.
+        self.pre_edit_line = 0;
+        self.invalidate_highlight_from(0);
         self.enqueue_lsp_change();
 
         // Scroll to top to force a redraw

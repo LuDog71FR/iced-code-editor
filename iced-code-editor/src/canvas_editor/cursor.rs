@@ -322,11 +322,18 @@ impl CodeEditor {
         Task::batch([vertical_task, h_task])
     }
 
-    /// Moves all cursors up by one page (approximately viewport height).
-    pub(crate) fn page_up(&mut self) {
-        let lines_per_page = (self.viewport_height / self.line_height) as usize;
+    /// Moves every cursor to a new line computed by `map_line`, clamping each
+    /// cursor's column to the new line's length, then merges overlapping
+    /// cursors and invalidates the overlay cache.
+    ///
+    /// Shared by [`page_up`](Self::page_up) and [`page_down`](Self::page_down).
+    ///
+    /// # Arguments
+    ///
+    /// * `map_line` - Maps a cursor's current line to its target line.
+    fn move_cursors_by_line(&mut self, map_line: impl Fn(usize) -> usize) {
         for cursor in self.cursors.as_mut_slice() {
-            let new_line = cursor.position.0.saturating_sub(lines_per_page);
+            let new_line = map_line(cursor.position.0);
             let line_len = self.buffer.line_len(new_line);
             cursor.position = (new_line, cursor.position.1.min(line_len));
         }
@@ -334,17 +341,17 @@ impl CodeEditor {
         self.overlay_cache.clear();
     }
 
+    /// Moves all cursors up by one page (approximately viewport height).
+    pub(crate) fn page_up(&mut self) {
+        let lines_per_page = (self.viewport_height / self.line_height) as usize;
+        self.move_cursors_by_line(|line| line.saturating_sub(lines_per_page));
+    }
+
     /// Moves all cursors down by one page (approximately viewport height).
     pub(crate) fn page_down(&mut self) {
         let lines_per_page = (self.viewport_height / self.line_height) as usize;
         let max_line = self.buffer.line_count().saturating_sub(1);
-        for cursor in self.cursors.as_mut_slice() {
-            let new_line = (cursor.position.0 + lines_per_page).min(max_line);
-            let line_len = self.buffer.line_len(new_line);
-            cursor.position = (new_line, cursor.position.1.min(line_len));
-        }
-        self.cursors.sort_and_merge();
-        self.overlay_cache.clear();
+        self.move_cursors_by_line(|line| (line + lines_per_page).min(max_line));
     }
 
     /// Handles mouse drag for text selection.

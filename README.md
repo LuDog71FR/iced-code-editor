@@ -508,13 +508,13 @@ overlay.set_completions(items, cursor_position);
 
 Out of the box, the following servers are supported (the binary must be on `$PATH`):
 
-| Server key              | Language     |
-| ----------------------- | ------------ |
-| `lua-language-server`   | Lua          |
-| `rust-analyzer`         | Rust         |
-| `pylsp`                 | Python       |
-| `clangd`                | C / C++      |
-| `typescript-language-server` | JS / TS |
+| Server key                   | Language |
+| ---------------------------- | -------- |
+| `rust-analyzer`              | Rust     |
+| `pyright`                    | Python   |
+| `typescript-language-server` | JS / TS  |
+| `lua-language-server`        | Lua      |
+| `gopls`                      | Go       |
 
 ### Changing font
 

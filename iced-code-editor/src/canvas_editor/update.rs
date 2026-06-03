@@ -124,9 +124,46 @@ impl CodeEditor {
         // to change on edits, so `wrapping_add` is sufficient and overflow-safe.
         self.buffer_revision = self.buffer_revision.wrapping_add(1);
         *self.visual_lines_cache.borrow_mut() = None;
+        // Truncate the syntax-highlight cache from the first line the edit may
+        // have changed. `pre_edit_line` is the topmost active line captured
+        // before the edit; the extra line of margin covers edits that merge
+        // with the preceding line (e.g. backspace at column 0).
+        self.invalidate_highlight_from(self.pre_edit_line.saturating_sub(1));
         self.content_cache.clear();
         self.overlay_cache.clear();
         self.enqueue_lsp_change();
+    }
+
+    /// Returns the topmost logical line currently touched by any cursor or its
+    /// selection anchor.
+    ///
+    /// This is captured before an edit to bound which highlight-cache lines may
+    /// change. With no cursors it defaults to line `0`.
+    pub(crate) fn min_active_line(&self) -> usize {
+        self.cursors
+            .iter()
+            .map(|cursor| match cursor.anchor {
+                Some(anchor) => cursor.position.0.min(anchor.0),
+                None => cursor.position.0,
+            })
+            .min()
+            .unwrap_or(0)
+    }
+
+    /// Truncates the syntax-highlight cache so logical lines `>= line` are
+    /// re-highlighted on next access.
+    ///
+    /// Lines before the first edited line are unaffected, so the cached prefix
+    /// is preserved and edits never trigger a full re-parse from the top of the
+    /// file. Has no effect when the cache is empty.
+    ///
+    /// # Arguments
+    ///
+    /// * `line` - First logical line to invalidate.
+    pub(crate) fn invalidate_highlight_from(&self, line: usize) {
+        if let Some(cache) = self.highlight_cache.borrow_mut().as_mut() {
+            cache.truncate(line);
+        }
     }
 
     /// Performs common cleanup operations after navigation operations.
@@ -848,6 +885,10 @@ impl CodeEditor {
         if self.history.undo(&mut self.buffer, &mut cursor_pos) {
             self.cursors.primary_mut().position = cursor_pos;
             self.clear_selection();
+            // An undone command (especially a composite like "Replace All") may
+            // touch lines anywhere in the document, so reset the highlight cache
+            // entirely rather than trusting the cursor as the change origin.
+            self.pre_edit_line = 0;
             self.finish_edit_operation();
             self.scroll_to_cursor()
         } else {
@@ -865,6 +906,9 @@ impl CodeEditor {
         if self.history.redo(&mut self.buffer, &mut cursor_pos) {
             self.cursors.primary_mut().position = cursor_pos;
             self.clear_selection();
+            // A redone command may touch lines anywhere; reset the highlight
+            // cache entirely (see `handle_undo_msg`).
+            self.pre_edit_line = 0;
             self.finish_edit_operation();
             self.scroll_to_cursor()
         } else {
@@ -1053,6 +1097,10 @@ impl CodeEditor {
             // Update matches after replacement
             self.search_state.update_matches(&self.buffer);
 
+            // The replacement starts at the matched line; invalidate highlight
+            // from there regardless of where the cursor moved next.
+            self.pre_edit_line = self.pre_edit_line.min(match_pos.line);
+
             // Move to next match if available
             if !self.search_state.matches.is_empty()
                 && let Some(next_match) = self.search_state.current_match()
@@ -1108,6 +1156,10 @@ impl CodeEditor {
             composite.execute(&mut self.buffer, &mut cursor_pos);
             self.cursors.primary_mut().position = cursor_pos;
             self.history.push(Box::new(composite));
+
+            // Replace All touches matches anywhere in the document, so reset
+            // the highlight cache entirely.
+            self.pre_edit_line = 0;
 
             // Update matches (should be empty now)
             self.search_state.update_matches(&self.buffer);
@@ -1559,6 +1611,9 @@ impl CodeEditor {
     /// # Returns
     /// A `Task<Message>` for any asynchronous operations, such as scrolling to keep the cursor visible after state updates
     pub fn update(&mut self, message: &Message) -> Task<Message> {
+        // Capture the topmost active line before any edit mutates the buffer,
+        // so `finish_edit_operation` can truncate the highlight cache precisely.
+        self.pre_edit_line = self.min_active_line();
         match message {
             // Text input operations
             Message::CharacterInput(ch) => self.handle_character_input_msg(*ch),

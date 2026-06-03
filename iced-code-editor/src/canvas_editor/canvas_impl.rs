@@ -1,5 +1,6 @@
 //! Canvas rendering implementation using Iced's `canvas::Program`.
 
+use crate::text_utils::char_range_to_byte_range;
 use iced::advanced::input_method;
 use iced::mouse;
 use iced::widget::canvas::{self, Geometry};
@@ -8,8 +9,10 @@ use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{Style, ThemeSet};
-use syntect::parsing::SyntaxSet;
+use syntect::highlighting::{
+    HighlightIterator, HighlightState, Highlighter, Style, ThemeSet,
+};
+use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
 
 /// Computes geometry (x start and width) for a text segment used in rendering or highlighting.
 ///
@@ -81,6 +84,56 @@ fn expand_tabs(text: &str, tab_width: usize) -> Cow<'_, str> {
     }
 
     Cow::Owned(expanded)
+}
+
+/// Converts a syntect highlight [`Style`] into an iced [`Color`].
+///
+/// Only the foreground color is used; alpha is left fully opaque.
+///
+/// # Arguments
+///
+/// * `style` - The syntect style whose foreground color is converted.
+fn color_from_style(style: Style) -> Color {
+    Color::from_rgb(
+        f32::from(style.foreground.r) / 255.0,
+        f32::from(style.foreground.g) / 255.0,
+        f32::from(style.foreground.b) / 255.0,
+    )
+}
+
+/// Tokenizes a full logical line into colored spans using syntect.
+///
+/// The returned spans cover the entire line in order, each pairing an iced
+/// [`Color`] with the owned token text. Each call highlights the line
+/// independently from the syntax's initial state, so it does not handle
+/// multi-line constructs; it is used for tests and benchmarks. Rendering uses
+/// the sequential [`CodeEditor::highlighted_line_cached`] instead.
+///
+/// # Arguments
+///
+/// * `line` - The full logical line content (without trailing newline).
+/// * `syntax` - The syntect syntax definition to tokenize with.
+/// * `theme` - The syntect highlighting theme providing token colors.
+/// * `syntax_set` - The syntax set the `syntax` belongs to.
+///
+/// # Returns
+///
+/// The ordered colored spans covering the entire line.
+pub fn highlight_line_spans(
+    line: &str,
+    syntax: &syntect::parsing::SyntaxReference,
+    theme: &syntect::highlighting::Theme,
+    syntax_set: &SyntaxSet,
+) -> Vec<(Color, String)> {
+    let mut highlighter = HighlightLines::new(syntax, theme);
+    let ranges = highlighter
+        .highlight_line(line, syntax_set)
+        .unwrap_or_else(|_| vec![(Style::default(), line)]);
+
+    ranges
+        .into_iter()
+        .map(|(style, text)| (color_from_style(style), text.to_string()))
+        .collect()
 }
 
 use super::folding;
@@ -280,6 +333,113 @@ impl CodeEditor {
         }
     }
 
+    /// Returns the memoized syntax-highlighted spans for a logical line.
+    ///
+    /// Highlighting is performed sequentially: lines `0..=logical_line` are
+    /// tokenized in order, each resuming from the syntect state left by the
+    /// previous line, so multi-line constructs (block comments, multi-line
+    /// strings) are colored correctly. The result is stored as a dense valid
+    /// prefix in [`HighlightCache`] and reused across wrapped visual segments
+    /// and across renders; an edit truncates the prefix from the changed line
+    /// (see [`CodeEditor::invalidate_highlight_from`]) instead of clearing it,
+    /// so deep lines are not re-parsed from the top on every keystroke. The
+    /// cache is reset only when the active syntax changes.
+    ///
+    /// # Arguments
+    ///
+    /// * `logical_line` - Index of the logical line in the buffer.
+    /// * `syntax` - The syntect syntax definition to tokenize with.
+    /// * `theme` - The syntect highlighting theme providing token colors.
+    /// * `syntax_set` - The syntax set the `syntax` belongs to.
+    ///
+    /// # Returns
+    ///
+    /// A shared handle to the line's colored token spans.
+    fn highlighted_line_cached(
+        &self,
+        logical_line: usize,
+        syntax: &syntect::parsing::SyntaxReference,
+        theme: &syntect::highlighting::Theme,
+        syntax_set: &SyntaxSet,
+    ) -> Rc<Vec<(Color, String)>> {
+        let mut guard = self.highlight_cache.borrow_mut();
+
+        // Reset the whole cache only when the active syntax changes.
+        let needs_reset =
+            guard.as_ref().is_none_or(|cache| cache.syntax() != self.syntax);
+        if needs_reset {
+            *guard = Some(super::HighlightCache::new(self.syntax.clone()));
+        }
+
+        let Some(cache) = guard.as_mut() else {
+            // Unreachable: populated just above. `unwrap`/`panic` are denied,
+            // so fall back to a single independent highlight without caching.
+            return Rc::new(highlight_line_spans(
+                self.buffer.line(logical_line),
+                syntax,
+                theme,
+                syntax_set,
+            ));
+        };
+
+        if let Some(spans) = cache.spans(logical_line) {
+            return spans;
+        }
+
+        // Extend the valid prefix sequentially up to `logical_line`, carrying
+        // the parser/highlight state forward across lines.
+        let highlighter = Highlighter::new(theme);
+        let (mut parse_state, mut highlight_state) =
+            cache.resume_state().unwrap_or_else(|| {
+                (
+                    ParseState::new(syntax),
+                    HighlightState::new(&highlighter, ScopeStack::new()),
+                )
+            });
+
+        let line_count = self.buffer.line_count();
+        let target = logical_line.min(line_count.saturating_sub(1));
+        let mut result = None;
+        for index in cache.valid_len()..=target {
+            // syntect's `_newlines` syntaxes expect a trailing '\n' for correct
+            // end-of-line context handling; the stored buffer line has none.
+            let mut line = self.buffer.line(index).to_string();
+            line.push('\n');
+
+            let ops =
+                parse_state.parse_line(&line, syntax_set).unwrap_or_default();
+            let spans: Vec<(Color, String)> = HighlightIterator::new(
+                &mut highlight_state,
+                &ops,
+                &line,
+                &highlighter,
+            )
+            .filter_map(|(style, text)| {
+                let text = text.strip_suffix('\n').unwrap_or(text);
+                if text.is_empty() {
+                    None
+                } else {
+                    Some((color_from_style(style), text.to_string()))
+                }
+            })
+            .collect();
+
+            let spans = Rc::new(spans);
+            cache.push_line(
+                Rc::clone(&spans),
+                parse_state.clone(),
+                highlight_state.clone(),
+            );
+            if index == logical_line {
+                result = Some(spans);
+            }
+        }
+
+        result
+            .or_else(|| cache.spans(logical_line))
+            .unwrap_or_else(|| Rc::new(Vec::new()))
+    }
+
     /// Draws text content with syntax highlighting or plain text fallback.
     ///
     /// # Arguments
@@ -302,35 +462,21 @@ impl CodeEditor {
         syntax_set: &SyntaxSet,
         syntax_theme: Option<&syntect::highlighting::Theme>,
     ) {
-        let full_line_content = self.buffer.line(visual_line.logical_line);
-
-        // Convert character indices to byte indices for UTF-8 string slicing
-        let start_byte = full_line_content
-            .char_indices()
-            .nth(visual_line.start_col)
-            .map_or(full_line_content.len(), |(idx, _)| idx);
-        let end_byte = full_line_content
-            .char_indices()
-            .nth(visual_line.end_col)
-            .map_or(full_line_content.len(), |(idx, _)| idx);
-        let line_segment = &full_line_content[start_byte..end_byte];
-
         if let (Some(syntax), Some(syntax_theme)) = (syntax_ref, syntax_theme) {
-            let mut highlighter = HighlightLines::new(syntax, syntax_theme);
+            // Reuse the memoized full-line spans; only the visible segment of
+            // the (possibly wrapped) line is positioned and drawn here.
+            let spans = self.highlighted_line_cached(
+                visual_line.logical_line,
+                syntax,
+                syntax_theme,
+                syntax_set,
+            );
 
-            // Highlight the full line to get correct token colors
-            let full_line_ranges = highlighter
-                .highlight_line(full_line_content, syntax_set)
-                .unwrap_or_else(|_| {
-                    vec![(Style::default(), full_line_content)]
-                });
-
-            // Extract only the ranges that fall within our segment
             let mut x_offset =
                 ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset;
             let mut char_pos = 0;
 
-            for (style, text) in full_line_ranges {
+            for (color, text) in spans.iter() {
                 let text_len = text.chars().count();
                 let text_end = char_pos + text_len;
 
@@ -347,15 +493,11 @@ impl CodeEditor {
                     let text_end_offset =
                         text_start_offset + (segment_end - segment_start);
 
-                    // Convert character offsets to byte offsets for UTF-8 slicing
-                    let start_byte = text
-                        .char_indices()
-                        .nth(text_start_offset)
-                        .map_or(text.len(), |(idx, _)| idx);
-                    let end_byte = text
-                        .char_indices()
-                        .nth(text_end_offset)
-                        .map_or(text.len(), |(idx, _)| idx);
+                    let (start_byte, end_byte) = char_range_to_byte_range(
+                        text,
+                        text_start_offset,
+                        text_end_offset,
+                    );
 
                     let segment_text = &text[start_byte..end_byte];
                     let display_text =
@@ -367,16 +509,10 @@ impl CodeEditor {
                         ctx.char_width,
                     );
 
-                    let color = Color::from_rgb(
-                        f32::from(style.foreground.r) / 255.0,
-                        f32::from(style.foreground.g) / 255.0,
-                        f32::from(style.foreground.b) / 255.0,
-                    );
-
                     frame.fill_text(canvas::Text {
                         content: display_text,
                         position: Point::new(x_offset, y + 2.0),
-                        color,
+                        color: *color,
                         size: ctx.font_size.into(),
                         font: ctx.font,
                         ..canvas::Text::default()
@@ -389,6 +525,13 @@ impl CodeEditor {
             }
         } else {
             // Fallback to plain text
+            let full_line_content = self.buffer.line(visual_line.logical_line);
+            let (start_byte, end_byte) = char_range_to_byte_range(
+                full_line_content,
+                visual_line.start_col,
+                visual_line.end_col,
+            );
+            let line_segment = &full_line_content[start_byte..end_byte];
             let display_text =
                 expand_tabs(line_segment, super::TAB_WIDTH).into_owned();
             frame.fill_text(canvas::Text {
@@ -403,6 +546,49 @@ impl CodeEditor {
                 ..canvas::Text::default()
             });
         }
+    }
+
+    /// Fills a single highlight rectangle for a column range within one visual
+    /// line.
+    ///
+    /// Computes the CJK-aware segment geometry, applies the horizontal scroll
+    /// offset, and draws the rectangle inset vertically to match the editor's
+    /// highlight styling. Shared by selection and search-match rendering.
+    ///
+    /// # Arguments
+    ///
+    /// * `frame` - The canvas frame to draw on
+    /// * `ctx` - Rendering context containing visual lines and metrics
+    /// * `visual_idx` - Index of the visual line being drawn (drives the Y position)
+    /// * `vl` - The visual line whose segment is highlighted
+    /// * `cols` - Inclusive start and exclusive end columns of the segment
+    /// * `color` - Fill color of the highlight rectangle
+    fn fill_highlight_segment(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext,
+        visual_idx: usize,
+        vl: &VisualLine,
+        cols: (usize, usize),
+        color: Color,
+    ) {
+        let y = visual_idx as f32 * ctx.line_height;
+        let line_content = self.buffer.line(vl.logical_line);
+        let (x_start, width) = calculate_segment_geometry(
+            line_content,
+            vl.start_col,
+            cols.0,
+            cols.1,
+            ctx.gutter_width + 5.0,
+            ctx.full_char_width,
+            ctx.char_width,
+        );
+        let x_start = x_start - ctx.horizontal_scroll_offset;
+        frame.fill_rectangle(
+            Point::new(x_start, y + 2.0),
+            Size::new(width, ctx.line_height - 4.0),
+            color,
+        );
     }
 
     /// Draws search match highlights for all visible matches.
@@ -484,26 +670,13 @@ impl CodeEditor {
                 {
                     if start_v == end_v {
                         // Match within same visual line
-                        let y = start_v as f32 * ctx.line_height;
                         let vl = &ctx.visual_lines[start_v];
-                        let line_content = self.buffer.line(vl.logical_line);
-
-                        // Use calculate_segment_geometry to compute match position and width
-                        let (x_start, match_width) = calculate_segment_geometry(
-                            line_content,
-                            vl.start_col,
-                            search_match.col,
-                            search_match.col + query_len,
-                            ctx.gutter_width + 5.0,
-                            ctx.full_char_width,
-                            ctx.char_width,
-                        );
-                        let x_start = x_start - ctx.horizontal_scroll_offset;
-                        let x_end = x_start + match_width;
-
-                        frame.fill_rectangle(
-                            Point::new(x_start, y + 2.0),
-                            Size::new(x_end - x_start, ctx.line_height - 4.0),
+                        self.fill_highlight_segment(
+                            frame,
+                            ctx,
+                            start_v,
+                            vl,
+                            (search_match.col, search_match.col + query_len),
                             highlight_color,
                         );
                     } else {
@@ -515,45 +688,23 @@ impl CodeEditor {
                             .skip(start_v)
                             .take(end_v - start_v + 1)
                         {
-                            let y = v_idx as f32 * ctx.line_height;
-
-                            let match_start_col = search_match.col;
-                            let match_end_col = search_match.col + query_len;
-
                             let sel_start_col = if v_idx == start_v {
-                                match_start_col
+                                search_match.col
                             } else {
                                 vl.start_col
                             };
                             let sel_end_col = if v_idx == end_v {
-                                match_end_col
+                                search_match.col + query_len
                             } else {
                                 vl.end_col
                             };
 
-                            let line_content =
-                                self.buffer.line(vl.logical_line);
-
-                            let (x_start, sel_width) =
-                                calculate_segment_geometry(
-                                    line_content,
-                                    vl.start_col,
-                                    sel_start_col,
-                                    sel_end_col,
-                                    ctx.gutter_width + 5.0,
-                                    ctx.full_char_width,
-                                    ctx.char_width,
-                                );
-                            let x_start =
-                                x_start - ctx.horizontal_scroll_offset;
-                            let x_end = x_start + sel_width;
-
-                            frame.fill_rectangle(
-                                Point::new(x_start, y + 2.0),
-                                Size::new(
-                                    x_end - x_start,
-                                    ctx.line_height - 4.0,
-                                ),
+                            self.fill_highlight_segment(
+                                frame,
+                                ctx,
+                                v_idx,
+                                vl,
+                                (sel_start_col, sel_end_col),
                                 highlight_color,
                             );
                         }
@@ -596,25 +747,13 @@ impl CodeEditor {
             if let (Some(start_v), Some(end_v)) = (start_visual, end_visual) {
                 if start_v == end_v {
                     // Selection within same visual line
-                    let y = start_v as f32 * ctx.line_height;
                     let vl = &ctx.visual_lines[start_v];
-                    let line_content = self.buffer.line(vl.logical_line);
-
-                    let (x_start, sel_width) = calculate_segment_geometry(
-                        line_content,
-                        vl.start_col,
-                        start.1,
-                        end.1,
-                        ctx.gutter_width + 5.0,
-                        ctx.full_char_width,
-                        ctx.char_width,
-                    );
-                    let x_start = x_start - ctx.horizontal_scroll_offset;
-                    let x_end = x_start + sel_width;
-
-                    frame.fill_rectangle(
-                        Point::new(x_start, y + 2.0),
-                        Size::new(x_end - x_start, ctx.line_height - 4.0),
+                    self.fill_highlight_segment(
+                        frame,
+                        ctx,
+                        start_v,
+                        vl,
+                        (start.1, end.1),
                         selection_color,
                     );
                 } else {
@@ -626,8 +765,6 @@ impl CodeEditor {
                         .skip(start_v)
                         .take(end_v - start_v + 1)
                     {
-                        let y = v_idx as f32 * ctx.line_height;
-
                         let sel_start_col = if v_idx == start_v {
                             start.1
                         } else {
@@ -636,23 +773,12 @@ impl CodeEditor {
                         let sel_end_col =
                             if v_idx == end_v { end.1 } else { vl.end_col };
 
-                        let line_content = self.buffer.line(vl.logical_line);
-
-                        let (x_start, sel_width) = calculate_segment_geometry(
-                            line_content,
-                            vl.start_col,
-                            sel_start_col,
-                            sel_end_col,
-                            ctx.gutter_width + 5.0,
-                            ctx.full_char_width,
-                            ctx.char_width,
-                        );
-                        let x_start = x_start - ctx.horizontal_scroll_offset;
-                        let x_end = x_start + sel_width;
-
-                        frame.fill_rectangle(
-                            Point::new(x_start, y + 2.0),
-                            Size::new(x_end - x_start, ctx.line_height - 4.0),
+                        self.fill_highlight_segment(
+                            frame,
+                            ctx,
+                            v_idx,
+                            vl,
+                            (sel_start_col, sel_end_col),
                             selection_color,
                         );
                     }
@@ -679,8 +805,6 @@ impl CodeEditor {
                     .skip(start_v)
                     .take(end_v - start_v + 1)
                 {
-                    let y = v_idx as f32 * ctx.line_height;
-
                     let sel_start_col =
                         if vl.logical_line == start.0 && v_idx == start_v {
                             start.1
@@ -695,23 +819,12 @@ impl CodeEditor {
                             vl.end_col
                         };
 
-                    let line_content = self.buffer.line(vl.logical_line);
-
-                    let (x_start, sel_width) = calculate_segment_geometry(
-                        line_content,
-                        vl.start_col,
-                        sel_start_col,
-                        sel_end_col,
-                        ctx.gutter_width + 5.0,
-                        ctx.full_char_width,
-                        ctx.char_width,
-                    );
-                    let x_start = x_start - ctx.horizontal_scroll_offset;
-                    let x_end = x_start + sel_width;
-
-                    frame.fill_rectangle(
-                        Point::new(x_start, y + 2.0),
-                        Size::new(x_end - x_start, ctx.line_height - 4.0),
+                    self.fill_highlight_segment(
+                        frame,
+                        ctx,
+                        v_idx,
+                        vl,
+                        (sel_start_col, sel_end_col),
                         selection_color,
                     );
                 }
@@ -2104,5 +2217,82 @@ mod tests {
 
         // Test inverted range
         assert_eq!(validate_selection_indices(content, 3, 0), None);
+    }
+
+    #[test]
+    fn test_highlight_line_spans_covers_full_line() {
+        let syntax_set = SyntaxSet::load_defaults_newlines();
+        let syntax = syntax_set.find_syntax_plain_text();
+        let theme = syntect::highlighting::Theme::default();
+
+        let line = "fn main() {}";
+        let spans = highlight_line_spans(line, syntax, &theme, &syntax_set);
+
+        assert!(!spans.is_empty(), "expected at least one span");
+        let combined: String =
+            spans.iter().map(|(_, text)| text.as_str()).collect();
+        assert_eq!(combined, line, "spans must cover the entire line");
+    }
+
+    #[test]
+    fn test_highlighted_line_cached_reuses_until_invalidated() {
+        let editor = CodeEditor::new("fn main() {}\nlet x = 1;", "rs");
+        let syntax_set = SyntaxSet::load_defaults_newlines();
+        let syntax = syntax_set.find_syntax_plain_text();
+        let theme = syntect::highlighting::Theme::default();
+
+        let first =
+            editor.highlighted_line_cached(0, syntax, &theme, &syntax_set);
+        let second =
+            editor.highlighted_line_cached(0, syntax, &theme, &syntax_set);
+        assert!(
+            Rc::ptr_eq(&first, &second),
+            "a cached line should be reused as the same Rc"
+        );
+
+        editor.invalidate_highlight_from(0);
+        let third =
+            editor.highlighted_line_cached(0, syntax, &theme, &syntax_set);
+        assert!(
+            !Rc::ptr_eq(&first, &third),
+            "invalidation should force the line to be recomputed"
+        );
+    }
+
+    #[test]
+    fn test_highlighted_line_cached_handles_multiline_comments() {
+        let syntax_set = SyntaxSet::load_defaults_newlines();
+        let syntax = syntax_set
+            .find_syntax_by_extension("rs")
+            .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
+        let theme = ThemeSet::load_defaults()
+            .themes
+            .get("base16-ocean.dark")
+            .cloned()
+            .unwrap_or_default();
+
+        // Line index 2 ("still inside") sits within a `/* ... */` block.
+        let code = "let a = 1;\n/* open\nstill inside\n*/\nlet b = 2;";
+        let editor = CodeEditor::new(code, "rs");
+
+        // Sequential highlighting resumes inside the block comment.
+        let sequential =
+            editor.highlighted_line_cached(2, syntax, &theme, &syntax_set);
+        // Independent highlighting wrongly treats the line as ordinary code.
+        let independent = highlight_line_spans(
+            editor.buffer.line(2),
+            syntax,
+            &theme,
+            &syntax_set,
+        );
+
+        let sequential_color = sequential.first().map(|(color, _)| *color);
+        let independent_color = independent.first().map(|(color, _)| *color);
+        assert!(sequential_color.is_some());
+        assert!(independent_color.is_some());
+        assert_ne!(
+            sequential_color, independent_color,
+            "a line inside a block comment must be colored as a comment"
+        );
     }
 }

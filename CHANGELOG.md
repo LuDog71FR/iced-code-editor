@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-None
+### Added
+
+- feat: Criterion benchmark suite for performance-critical paths
+
+### Changed
+
+- perf: **Faster syntax highlighting**
+  - Each line is highlighted once and cached, then reused across frames, scrolling and wrapped segments; an edit only re-highlights from the changed line onward
+  - Optimized release profile (fat LTO, single codegen unit)
+  - Removed `O(n)` character-to-byte conversions from the text rendering loop
+
+- docs: Improve DEV.md
+  - Add missing functionalities: multi-cursor, line wrapping, code folding, search & replace and auto-indentation
+  - Fix divergences between code and documentation
+
+- refactor: Consolidate UTF-8 char/byte conversion helpers into a shared `text_utils` module
+
+- refactor: Deduplicate selection/search highlight rendering and page up/down cursor movement into shared helpers
+
+### Fixed
+
+- fix: Multi-line block comments and strings are now highlighted correctly across their entire span
 
 ## [0.3.9] - 2026-06-02
 

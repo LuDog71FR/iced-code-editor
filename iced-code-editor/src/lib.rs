@@ -201,10 +201,17 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 mod canvas_editor;
 mod text_buffer;
+mod text_utils;
 
 pub mod i18n;
 pub mod theme;
 
+/// Hidden re-exports for the `criterion` benchmark harness (`benches/`).
+///
+/// Compiled only with the `bench` feature; not part of the public API.
+#[doc(hidden)]
+#[cfg(feature = "bench")]
+pub use canvas_editor::bench_support;
 pub use canvas_editor::folding::FoldRegion;
 /// LSP integration types and traits for editor clients.
 pub use canvas_editor::lsp::{

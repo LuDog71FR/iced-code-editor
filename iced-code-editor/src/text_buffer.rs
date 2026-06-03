@@ -5,6 +5,8 @@
 //! - Efficient insertions and deletions
 //! - Memory-efficient storage
 
+use crate::text_utils::{char_range_to_byte_range, char_to_byte_index};
+
 /// A line-based text buffer optimized for editor operations.
 ///
 /// Stores text as a vector of lines for fast random access needed by virtual scrolling.
@@ -67,7 +69,7 @@ impl TextBuffer {
         }
 
         let line_str = &mut self.lines[line];
-        let byte_pos = Self::char_to_byte_index(line_str, column);
+        let byte_pos = char_to_byte_index(line_str, column);
         line_str.insert(byte_pos, ch);
     }
 
@@ -83,7 +85,7 @@ impl TextBuffer {
         }
 
         let line_str = self.lines[line].clone();
-        let byte_pos = Self::char_to_byte_index(&line_str, column);
+        let byte_pos = char_to_byte_index(&line_str, column);
 
         let left = line_str[..byte_pos].to_string();
         let right = line_str[byte_pos..].to_string();
@@ -107,10 +109,9 @@ impl TextBuffer {
             // Delete character in current line
             if line < self.lines.len() {
                 let line_str = &mut self.lines[line];
-                let byte_pos = Self::char_to_byte_index(line_str, column);
+                let byte_pos = char_to_byte_index(line_str, column);
                 if byte_pos > 0 {
-                    let char_start =
-                        Self::char_to_byte_index(line_str, column - 1);
+                    let char_start = char_to_byte_index(line_str, column - 1);
                     line_str.drain(char_start..byte_pos);
                 }
             }
@@ -141,8 +142,8 @@ impl TextBuffer {
 
         if column < char_count {
             // Delete character at cursor
-            let byte_pos = Self::char_to_byte_index(line_str, column);
-            let next_byte_pos = Self::char_to_byte_index(line_str, column + 1);
+            let byte_pos = char_to_byte_index(line_str, column);
+            let next_byte_pos = char_to_byte_index(line_str, column + 1);
             line_str.drain(byte_pos..next_byte_pos);
         } else if line + 1 < self.lines.len() {
             // Merge with next line
@@ -171,24 +172,10 @@ impl TextBuffer {
         }
 
         let line_str = &mut self.lines[line];
-        let start_byte = Self::char_to_byte_index(line_str, col_start);
-        let end_byte = Self::char_to_byte_index(line_str, col_start + length);
+        let (start_byte, end_byte) =
+            char_range_to_byte_range(line_str, col_start, col_start + length);
 
         line_str.replace_range(start_byte..end_byte, new_text);
-    }
-
-    /// Converts a character index to a byte index in a string.
-    ///
-    /// # Arguments
-    ///
-    /// * `s` - The string
-    /// * `char_index` - Character index
-    ///
-    /// # Returns
-    ///
-    /// The byte index
-    fn char_to_byte_index(s: &str, char_index: usize) -> usize {
-        s.char_indices().nth(char_index).map_or(s.len(), |(idx, _)| idx)
     }
 
     /// Returns the entire buffer content as a single string.

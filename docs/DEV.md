@@ -15,6 +15,11 @@
 4. [Key Implementation Details](#key-implementation-details)
    - [Syntax Highlighting](#syntax-highlighting)
    - [Virtual Scrolling](#virtual-scrolling)
+   - [Multi-Cursor Editing](#multi-cursor-editing)
+   - [Line Wrapping (Visual Lines)](#line-wrapping-visual-lines)
+   - [Code Folding](#code-folding)
+   - [Search and Replace](#search-and-replace)
+   - [Auto-Indentation](#auto-indentation)
    - [Cursor Blinking](#cursor-blinking)
    - [Focus Management](#focus-management)
    - [Selection Rendering](#selection-rendering)
@@ -37,6 +42,7 @@
    - [Unit Tests](#unit-tests)
    - [Integration Tests](#integration-tests)
    - [Running Tests](#running-tests)
+   - [Benchmarks](#benchmarks)
 8. [Common Pitfalls](#common-pitfalls)
    - [UTF-8 Character Boundaries](#1-utf-8-character-boundaries)
    - [Cache Invalidation](#2-cache-invalidation)
@@ -70,16 +76,28 @@ iced-code-editor/
 ├── lib.rs                    # Public API and documentation
 ├── text_buffer.rs            # Text storage and manipulation
 ├── theme.rs                  # Styling and theming system
+├── i18n.rs                   # Internationalization (rust-i18n)
 └── canvas_editor/            # Core editor implementation
-    ├── mod.rs                # Main editor struct and constants
+    ├── mod.rs                # Main editor struct, builder API, constants
     ├── canvas_impl.rs        # Canvas rendering (Iced Canvas trait)
     ├── clipboard.rs          # Clipboard operations
     ├── command.rs            # Command pattern for undo/redo
     ├── cursor.rs             # Cursor movement logic
+    ├── cursor_set.rs         # Multi-cursor collection (Cursor / CursorSet)
+    ├── folding.rs            # Code folding (foldable region detection)
     ├── history.rs            # Command history management
+    ├── ime_requester.rs      # IME bridge widget (CJK input)
+    ├── search.rs             # Search/replace state and matching
+    ├── search_dialog.rs      # Search/replace dialog UI
     ├── selection.rs          # Text selection logic
     ├── update.rs             # Message handling (Elm Architecture)
-    └── view.rs               # UI view construction
+    ├── view.rs               # UI view construction
+    ├── wrapping.rs           # Line wrapping (logical ↔ visual lines)
+    ├── lsp.rs                # LspClient trait + LSP data types
+    └── lsp_process/          # LSP subprocess client (feature: lsp-process)
+        ├── mod.rs            # LspProcessClient (stdio JSON-RPC)
+        ├── config.rs         # Per-server configuration
+        └── overlay.rs        # Hover / completion overlay UI
 ```
 
 ### Core Components
@@ -90,16 +108,26 @@ The main widget struct that holds all editor state:
 
 ```rust
 pub struct CodeEditor {
-    buffer: TextBuffer,              // Text content
-    cursor: (usize, usize),          // Cursor position (line, col)
-    scroll_offset: f32,              // Vertical scroll position
-    style: Style,                    // Visual theme
-    syntax: String,                  // Language for highlighting
-    selection_start: Option<...>,   // Selection anchors
-    history: CommandHistory,         // Undo/redo system
-    content_cache: canvas::Cache,    // Content rendering optimization
-    overlay_cache: canvas::Cache,    // Overlay rendering optimization
-    // ... other fields
+    buffer: TextBuffer,                  // Text content
+    cursors: cursor_set::CursorSet,      // Multi-cursor set (primary + extras)
+    style: Style,                        // Visual theme
+    syntax: String,                      // Language for highlighting
+    history: CommandHistory,             // Undo/redo system
+    content_cache: canvas::Cache,        // Text/gutter layer (stable)
+    overlay_cache: canvas::Cache,        // Cursor/selection/search layer
+    viewport_scroll: f32,                // Vertical scroll (pixels)
+    horizontal_scroll_offset: f32,       // Horizontal scroll (no-wrap mode)
+    wrap_enabled: bool,                  // Line wrapping toggle
+    wrap_column: Option<usize>,          // Fixed wrap column (or viewport)
+    folding_enabled: bool,               // Code folding toggle
+    collapsed_folds: HashSet<usize>,     // Collapsed region headers
+    auto_indent_enabled: bool,           // Auto-indent on newline
+    indent_style: IndentStyle,           // Spaces(n) or Tab
+    search_state: search::SearchState,   // Search/replace state
+    lsp_client: Option<Box<dyn LspClient>>, // Optional LSP connection
+    highlight_cache: RefCell<Option<HighlightCache>>, // Sequential span cache
+    visual_lines_cache: RefCell<Option<VisualLinesCache>>, // Wrapping cache
+    // ... revisions, viewport metrics, font metrics, IME state, etc.
 }
 ```
 
@@ -108,6 +136,8 @@ pub struct CodeEditor {
 - Single source of truth for editor state
 - No external dependencies on text buffer format
 - All state transitions happen through message handling
+- Derived layout (wrapping, highlighting) is memoized in `RefCell` caches keyed
+  by monotonic revision counters (`buffer_revision`, `fold_revision`)
 
 #### 2. **TextBuffer** (`text_buffer.rs`)
 
@@ -291,12 +321,22 @@ impl canvas::Program<Message> for CodeEditor {
 - **Syntax highlighting**: Direct integration with syntect
 - **Custom scrolling**: Fine-grained control over viewport
 
-**Cache optimization:**
+**Two-layer cache optimization:**
+
+Rendering is split across **two** `canvas::Cache` layers so that frequent visual
+changes do not invalidate the expensive text geometry:
+
+- **`content_cache`** — syntax-highlighted glyphs and the line-number gutter.
+  Intentionally kept stable across cursor/selection movement, so mouse-drag
+  selection stays smooth. Cleared only when the buffer, syntax, theme, or layout
+  (wrap/fold) changes.
+- **`overlay_cache`** — cursor and current-line highlight, selection rectangles,
+  search-match highlights and IME preedit decorations. Cleared on every cursor
+  blink, selection drag and search update.
 
 ```rust
-self.content_cache.clear();
-self.overlay_cache.clear();
-// Canvas automatically caches unchanged frames
+self.content_cache.clear();  // buffer / layout changed
+self.overlay_cache.clear();  // cursor / selection / search changed
 ```
 
 ### 5. Interior Mutability for History
@@ -323,26 +363,31 @@ pub struct CommandHistory {
 
 ### Syntax Highlighting
 
-**Integration:** Uses `syntect` crate for syntax highlighting
+**Integration:** Uses the `syntect` crate. The optional `two-face` dependency adds
+extra Sublime syntax/theme definitions beyond syntect's defaults.
+
+Highlighting is **not** recomputed naïvely per frame. Instead, each logical line is
+tokenized once and memoized as a dense per-line prefix that also stores the syntect
+parser/highlight state left *after* the line, so multi-line constructs (block
+comments, multi-line strings) resume correctly:
 
 ```rust
-// In canvas_impl.rs
-let syntax = syntax_set.find_syntax_by_extension(&self.syntax);
-let highlighter = HighlightLines::new(syntax, &theme_set.themes["base16-ocean.dark"]);
-
-for line in visible_lines {
-    let regions = highlighter.highlight_line(line, &syntax_set)?;
-    for (style, text) in regions {
-        // Draw text with style.foreground color
-    }
-}
+// canvas_impl.rs — resumes from the cached state of line N-1
+let spans = self.highlighted_line_cached(logical_line, syntax, theme, syntax_set);
 ```
 
-**Optimizations:**
+**Key points:**
 
-- Only highlight visible lines
-- Cache highlighted regions (future enhancement)
-- Lazy loading of syntax definitions
+- A line is tokenized once and reused across wrapped visual segments and across
+  scroll-only renders.
+- On an edit, the cache is *truncated* from the first changed line (tracked via
+  `pre_edit_line`) rather than fully cleared, so typing re-highlights only from the
+  edited line down.
+- `highlight_line_spans()` (independent, single-line) is retained for tests and
+  benchmarks.
+
+See [Syntax Highlighting Optimization](#2-syntax-highlighting-optimization) for the
+full cache and invalidation strategy.
 
 ### Virtual Scrolling
 
@@ -363,6 +408,155 @@ for line_idx in first_visible_line..last_visible_line {
 - Constant rendering cost regardless of file size
 - Smooth scrolling even for large files
 - Memory efficient
+
+### Multi-Cursor Editing
+
+**Location:** `canvas_editor/cursor_set.rs`
+
+The editor supports multiple simultaneous cursors. State lives in a `CursorSet`,
+an ordered, deduplicated collection that always contains at least one cursor — the
+**primary** cursor, which the viewport follows and which receives IME input.
+
+```rust
+pub struct Cursor {
+    pub position: (usize, usize),       // (line, col)
+    pub anchor: Option<(usize, usize)>, // selection start (None = no selection)
+}
+
+pub struct CursorSet {
+    cursors: Vec<Cursor>,  // kept sorted in document order
+    primary_idx: usize,    // index of the primary cursor
+}
+```
+
+**Invariants and behaviour:**
+
+- Cursors are kept sorted in document order after any mutation that may reorder them.
+- `sort_and_merge()` collapses cursors that share a position or whose selections
+  overlap, so duplicate/overlapping cursors can never coexist. The primary index is
+  tracked through the merge so it keeps pointing at the same logical cursor.
+- Each cursor carries its own selection (`anchor` → `position`); a per-cursor
+  `selection_range()` returns the normalised `(start, end)` pair.
+
+**Editor integration:**
+
+- `set_single(pos)` collapses back to one cursor (normal click / arrow movement).
+- `add_cursor(pos)` / `add_cursor_with_selection(c)` add a secondary cursor and make
+  it primary (e.g. Alt+Click, "add cursor at next match").
+- `remove_all_but_primary()` restores single-cursor mode (Esc).
+- Text commands are applied at every cursor; `get_selection_range()` in
+  `selection.rs` delegates to the primary cursor (see [Selection Direction](#4-selection-direction)).
+
+### Line Wrapping (Visual Lines)
+
+**Location:** `canvas_editor/wrapping.rs`
+
+When wrapping is enabled, a single **logical line** (as stored in the buffer) may be
+displayed as several **visual lines**. All rendering, scrolling and cursor math
+operate on visual lines; the buffer remains unwrapped.
+
+```rust
+pub struct VisualLine {
+    pub logical_line: usize,   // source line in the buffer
+    pub segment_index: usize,  // 0 = first segment, 1+ = wrapped continuation
+    pub start_col: usize,      // inclusive start column in the logical line
+    pub end_col: usize,        // exclusive end column
+}
+```
+
+`WrappingCalculator` converts the buffer into a `Vec<VisualLine>`:
+
+- **Viewport wrapping** (`wrap_column = None`): wraps at the available pixel width
+  (viewport width minus the gutter), using the CJK-aware character widths.
+- **Fixed-column wrapping** (`wrap_column = Some(n)`): wraps at `n` characters.
+- **Folding-aware**: logical lines hidden by collapsed folds produce no visual lines
+  (the `hidden` set is passed in — see [Code Folding](#code-folding)).
+- `logical_to_visual()` maps a buffer position to its visual line for cursor placement.
+
+The result is memoized in `visual_lines_cache`, keyed by buffer revision, viewport
+and gutter width, wrap settings, fold revision and font metrics, so wrapping is only
+recomputed when one of those inputs changes.
+
+### Code Folding
+
+**Location:** `canvas_editor/folding.rs` (logic), `canvas_editor/mod.rs` (state)
+
+Folding lets the user collapse indented blocks. Detection is **indentation-based**
+and therefore language-agnostic: a line is a fold header when the next non-blank line
+is more deeply indented (the same fallback strategy VS Code uses).
+
+```rust
+pub struct FoldRegion {
+    pub start_line: usize, // header line — stays visible when collapsed
+    pub end_line: usize,   // last line of the region — hidden when collapsed
+}
+
+pub fn compute_foldable_regions(buffer: &TextBuffer) -> Vec<FoldRegion>;
+pub fn hidden_lines(regions: &[FoldRegion], collapsed: &HashSet<usize>) -> HashSet<usize>;
+```
+
+**State and flow:**
+
+- `collapsed_folds: HashSet<usize>` stores the header lines that are currently
+  collapsed; `toggle_fold(header_line)` / `toggle_fold_at(line)` flip them.
+- `fold_revision` is bumped on every fold change so the visual-lines cache is
+  invalidated.
+- `foldable_regions_cache` memoizes detection keyed by `buffer_revision`.
+- At render time, `hidden_lines()` produces the set of hidden logical lines, which is
+  fed to the `WrappingCalculator` so collapsed lines simply disappear from layout.
+- Trailing blank lines are trimmed from a region so a collapsed block does not swallow
+  the gap before the next block; nested blocks each yield independent regions.
+
+### Search and Replace
+
+**Location:** `canvas_editor/search.rs` (state/matching), `canvas_editor/search_dialog.rs` (UI)
+
+A built-in find/replace dialog, gated by `search_replace_enabled`.
+
+```rust
+pub struct SearchState {
+    pub query: String,
+    pub replace_with: String,
+    pub case_sensitive: bool,
+    pub is_open: bool,
+    pub is_replace_mode: bool,          // search-only vs search+replace
+    pub matches: Vec<SearchMatch>,      // all matches in the buffer
+    pub current_match_index: Option<usize>,
+    pub focused_field: SearchFocusedField, // Tab navigation
+    // input IDs ...
+}
+```
+
+**Behaviour:**
+
+- `find_matches()` scans the buffer and returns every `SearchMatch { line, col }`
+  (columns are UTF-8 character offsets). Re-run on query change or case toggle.
+- `next_match()` / `previous_match()` cycle through results; `select_match_near_cursor()`
+  jumps to the match closest to the caret when the dialog opens.
+- Matches are highlighted in the `overlay_cache` layer; only the visible match range
+  is drawn (`get_visible_match_range()`).
+- All dialog labels and placeholders are localized through the i18n layer.
+
+### Auto-Indentation
+
+**Location:** `canvas_editor/mod.rs`, `canvas_editor/update.rs`
+
+When `auto_indent_enabled` is set, pressing Enter copies the leading whitespace of the
+current line onto the new line. The inserted whitespace itself follows the configured
+indentation style:
+
+```rust
+pub enum IndentStyle {
+    Spaces(u8), // insert `n` space characters
+    Tab,        // insert a single '\t'
+}
+
+// Standard presets offered to the UI:
+IndentStyle::ALL == [Spaces(2), Spaces(4), Spaces(8), Tab];
+```
+
+`set_indent_style()` selects the active style and `set_auto_indent_enabled()` toggles
+the behaviour. Tab width for display/folding is governed by the `TAB_WIDTH` constant.
 
 ### Cursor Blinking
 
@@ -448,25 +642,27 @@ if focused_id != self.editor_id {
 
 ### Selection Rendering
 
-**Normalization:** Selections are normalized before rendering
+**Normalization:** Selections are normalized before rendering. With multi-cursor
+support, the anchor/position pair lives on each `Cursor`; `get_selection_range()`
+delegates to the primary cursor, which normalises via `selection_range()` in
+`cursor_set.rs` (see [Selection Direction](#4-selection-direction)).
 
 ```rust
-fn get_selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
-    let (start, end) = (self.selection_start?, self.selection_end?);
-
-    // Ensure start comes before end
-    if start.0 < end.0 || (start.0 == end.0 && start.1 < end.1) {
-        Some((start, end))
-    } else {
-        Some((end, start))  // Swap if reversed
+// cursor_set.rs — start is guaranteed to be before end in document order
+pub fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
+    let anchor = self.anchor?;
+    if anchor == self.position {
+        return None;
     }
+    Some(normalise(anchor, self.position))
 }
 ```
 
 **Rendering:**
 
-- Single-line: Simple rectangle
-- Multi-line: Three rectangles (first line, middle lines, last line)
+- Every cursor with an active selection is rendered.
+- Single-line selection: a single rectangle.
+- Multi-line selection: three rectangles (first line, middle block, last line).
 
 ### Scroll-to-Cursor
 
@@ -474,7 +670,7 @@ fn get_selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
 
 ```rust
 pub fn scroll_to_cursor(&self) -> Task<Message> {
-    let cursor_y = self.cursor.0 as f32 * LINE_HEIGHT;
+    let cursor_y = self.cursors.primary_position().0 as f32 * LINE_HEIGHT;
 
     if cursor_y < viewport_top + margin {
         // Scroll up
@@ -498,7 +694,8 @@ The editor uses `rust-i18n` with YAML translation files for multi-language suppo
 
 ```rust
 pub enum Language {
-    English, French, Spanish,
+    English, French, Spanish, German, Italian,
+    PortugueseBR, PortuguesePT, ChineseSimplified,
 }
 
 pub struct Translations {
@@ -536,11 +733,13 @@ settings:
 - **Owned strings**: Returns `String` (not `&str`) - `rust_i18n::t!()` returns `Cow<'_, str>`, we call `.into_owned()` to avoid lifetime issues
 - **Initialization**: `rust_i18n::i18n!("locales", fallback = "en")` macro called in `lib.rs`
 
+**Currently shipped locales:** `en`, `fr`, `es`, `de`, `it`, `pt-BR`, `pt-PT`, `zh-CN`.
+
 **Adding a new language:**
 
-1. Create `locales/de.yml` with translation keys
-2. Add `German` to `Language` enum
-3. Update `to_locale()` to return `"de"`
+1. Create `locales/ja.yml` with translation keys
+2. Add `Japanese` to the `Language` enum
+3. Update `to_locale()` to return `"ja"`
 4. Add tests
 
 **See also:** [docs/i18n.md](https://github.com/LuDog71FR/iced-code-editor/blob/main/docs/i18n.md) for detailed documentation.
@@ -881,13 +1080,34 @@ Iced automatically caches canvas frames. We clear the cache only when content ch
 
 ### 2. Syntax Highlighting Optimization
 
-**Current:** Highlight all visible lines on every frame
+**Current:** Highlighting is sequential and memoized as a dense per-line prefix.
+
+`CodeEditor.highlight_cache` (a `RefCell<Option<HighlightCache>>`) stores, for each logical line, its colored spans **and** the syntect parser/highlight state left *after* that line. To highlight line `N`, `highlighted_line_cached()` resumes from the state of line `N - 1`, so multi-line constructs (block comments, multi-line strings) are colored correctly:
+
+```rust
+// Lines 0..=logical_line are tokenized in order, resuming state across lines;
+// the prefix is reused on later calls.
+let spans = self.highlighted_line_cached(logical_line, syntax, theme, syntax_set);
+```
+
+**Invalidation (incremental):**
+
+- On an edit, the prefix is **truncated** from the first changed line rather than fully cleared. The first changed line is bounded by `pre_edit_line`, captured at the top of `update()` from the topmost active cursor/selection (with a one-line margin for merges). Lines before it keep their cached spans and states.
+- Operations whose changes are not anchored to a single line — undo/redo and Replace All — reset the prefix entirely (`pre_edit_line = 0`); these are rare and not on the typing path.
+- The cache is also reset when the active syntax changes; `reset()` clears it on content replacement.
+
+**Consequences:**
+
+- A line is tokenized once and reused across wrapped visual segments and across renders; scroll-only renders reuse the prefix.
+- Typing re-highlights only from the edited line down, not from the top of the file.
+- Character→byte conversions in the draw loop use `char_range_to_byte_range()` (single pass) instead of repeated `char_indices().nth()` (`O(n)` per boundary).
+- `highlight_line_spans()` (independent, single-line) is retained for tests and benchmarks.
 
 **Future improvements:**
 
-- Cache highlighted regions per line
-- Incremental re-highlighting on edits
-- Background parsing for large files
+- Background parsing for large files.
+- Bounded/checkpointed state cache to cap memory when scrolling very large files (states are currently stored per highlighted line).
+- Faster regex backend (`fancy-regex` → `oniguruma`), at the cost of a C dependency.
 
 ### 3. Text Buffer Performance
 
@@ -1005,6 +1225,31 @@ cargo test test_insert_char
 cargo tarpaulin --out Html
 ```
 
+### Benchmarks
+
+Performance-critical hot paths are benchmarked with [criterion](https://github.com/bheisler/criterion.rs). The benchmarks live in `iced-code-editor/benches/editor_benchmarks.rs` and measure the work performed per edit / per scroll on a synthetic 10,000-line source file:
+
+| Benchmark | Function under test |
+|---|---|
+| `highlight_line_spans` | Tokenizing one line into colored spans |
+| `calculate_visual_lines_10k` | Line wrapping (`WrappingCalculator`) |
+| `compute_foldable_regions_10k` | Fold-region detection |
+| `find_matches_10k` | Search across the buffer |
+
+**Feature gate:** These functions are internal, so they are exposed to the benchmark crate through the hidden `bench_support` module (`canvas_editor/mod.rs`, re-exported from `lib.rs`). Both the module and the `[[bench]]` target are gated behind the `bench` feature (`required-features = ["bench"]`), so the benchmarks are invisible to normal builds and to the public API.
+
+**Running:**
+
+```bash
+# The bench feature is mandatory — required-features won't enable it automatically
+cargo bench -p iced-code-editor --features bench
+
+# Run a single benchmark by name
+cargo bench -p iced-code-editor --features bench -- highlight_line_spans
+```
+
+criterion stores results under `target/criterion/` and automatically reports the delta against the previous run, so the workflow is: benchmark once to establish a baseline, make a change, then benchmark again to see the regression or improvement. When `gnuplot` is unavailable, criterion falls back to the bundled `plotters` backend for the HTML reports.
+
 ## Common Pitfalls
 
 ### 1. UTF-8 Character Boundaries
@@ -1028,21 +1273,31 @@ fn char_to_byte_index(s: &str, char_index: usize) -> usize {
 **Solution:** Clear cache on every state change
 
 ```rust
-self.cursor = new_position;
+self.cursors.set_single(new_position);
 self.overlay_cache.clear();
 ```
 
 ### 3. Command History Grouping
 
-**Problem:** Forgetting to end groups causes memory leaks
+**Problem:** Forgetting to end groups leaves consecutive operations merged into a single undo step (broken undo boundaries)
 
-**Solution:** Always pair `begin_group()` with `end_group()`
+**Solution:** Always pair the start and end of a group. The grouping logic is encapsulated in two helpers in `update.rs` that guard on the `is_grouping` flag:
 
 ```rust
-// On navigation, deletion, etc.
-if self.is_grouping {
-    self.history.end_group();
-    self.is_grouping = false;
+// Begin grouping on the first edit of a typing run
+fn ensure_grouping_started(&mut self, label: &str) {
+    if !self.is_grouping {
+        self.history.begin_group(label);
+        self.is_grouping = true;
+    }
+}
+
+// End grouping on navigation, deletion, or a new operation type
+fn end_grouping_if_active(&mut self) {
+    if self.is_grouping {
+        self.history.end_group();
+        self.is_grouping = false;
+    }
 }
 ```
 
@@ -1050,11 +1305,24 @@ if self.is_grouping {
 
 **Problem:** User can drag selection backwards
 
-**Solution:** Always normalize selection ranges
+**Solution:** Always normalize selection ranges. With multi-cursor support, `get_selection_range()` delegates to the primary cursor, which normalizes via `normalise()` in `cursor_set.rs`:
 
 ```rust
-let (start, end) = self.get_selection_range()?;
-// start is guaranteed to be before end
+// selection.rs
+pub(crate) fn get_selection_range(
+    &self,
+) -> Option<((usize, usize), (usize, usize))> {
+    self.cursors.primary().selection_range()
+}
+
+// cursor_set.rs — start is guaranteed to be before end
+pub fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
+    let anchor = self.anchor?;
+    if anchor == self.position {
+        return None;
+    }
+    Some(normalise(anchor, self.position))
+}
 ```
 
 ## Future Enhancements

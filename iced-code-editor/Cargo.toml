@@ -15,6 +15,8 @@ categories = ["gui"]
 [features]
 lsp-process = ["dep:serde_json"]
 two-face = ["dep:two-face"]
+# Exposes internal hot-path functions for the criterion benchmark harness.
+bench = []
 
 [dependencies]
 iced.workspace = true
@@ -26,6 +28,14 @@ iced_aw = "0.13"
 rust-i18n = "3"
 unicode-width = "0.2.2"
 serde_json = { version = "1", optional = true }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "editor_benchmarks"
+harness = false
+required-features = ["bench"]
 
 [package.metadata.docs.rs]
 all-features = true

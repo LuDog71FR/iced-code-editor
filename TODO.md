@@ -18,5 +18,4 @@ None
 ## Performance Improvements
 
 1. **Rope data structure** for better large-file performance
-2. **Incremental syntax highlighting** to avoid re-highlighting entire file
-3. **Web Worker for highlighting** (when targeting WASM)
+2. **Web Worker for highlighting** (when targeting WASM)
