@@ -42,6 +42,12 @@ Screenshot of the demo application:
 
 ## Planned features
 
+- [ ] Toggle comment
+- [ ] Auto-closing brackets/quotes
+- [ ] Move / duplicate line
+- [ ] Diagnostics display
+- [ ] Find references / Rename symbol
+- [ ] Command palette
 - [ ] Minimap
 
 ## Quick Start
