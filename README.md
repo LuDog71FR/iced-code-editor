@@ -308,6 +308,84 @@ These shortcuts are active only when the LSP completion menu is visible:
 
 ## Usage Examples
 
+### Custom context menu
+
+Custom context-menu actions are identified by stable strings chosen by your
+application. Custom entries appear before the built-in editing actions:
+
+```rust
+use iced_code_editor::{CodeEditor, ContextMenuEntry};
+
+let editor = CodeEditor::new("fn main() {}", "rust")
+    .with_custom_context_menu_entries(vec![
+        ContextMenuEntry::item(
+            "app.format_document",
+            "Format document",
+        )
+        .with_shortcut("Ctrl+Shift+F"),
+        ContextMenuEntry::separator(),
+        ContextMenuEntry::item("app.rename_symbol", "Rename symbol")
+            .with_enabled(false),
+    ])
+    .with_default_context_menu_enabled(true);
+```
+
+The editor automatically adds a separator between the custom and built-in
+groups. Pass `false` to `with_default_context_menu_enabled` to replace the
+built-in menu completely. At runtime, use
+`set_custom_context_menu_entries` and
+`set_default_context_menu_enabled` to update the same configuration.
+
+Handle custom actions in the outer application before forwarding other editor
+messages to `CodeEditor::update`:
+
+```rust
+match event {
+    EditorMessage::CustomContextMenuAction(id) => {
+        match id.as_str() {
+            "app.format_document" => format_document(),
+            "app.rename_symbol" => rename_symbol(),
+            unknown => {
+                eprintln!(
+                    "Ignoring unknown context-menu action: {unknown}"
+                );
+            }
+        }
+        Task::none()
+    }
+    other => editor.update(&other).map(Message::EditorEvent),
+}
+```
+
+Unknown IDs should be ignored or logged explicitly. The editor emits custom
+action IDs unchanged and does not interpret or execute them internally.
+
+The built-in labels follow the language configured with `set_language`.
+Custom-entry labels are supplied by the host application, so localize those
+strings before passing them to the editor.
+
+Applications with a real filesystem path can opt into the built-in reveal
+request:
+
+```rust
+editor.set_reveal_in_file_manager_enabled(file_path.is_some());
+
+match event {
+    EditorMessage::RevealInFileManager => {
+        reveal_file(file_path.as_deref());
+        Task::none()
+    }
+    other => editor.update(&other).map(Message::EditorEvent),
+}
+```
+
+The menu label is platform-specific: **Reveal in Finder** on macOS,
+**Reveal in File Explorer** on Windows, and **Open Containing Folder** on
+other desktop platforms. The editor only emits the request; the host is
+responsible for invoking the operating system and reporting failures. The demo
+enables this item for tabs backed by a desktop path and keeps it hidden for
+untitled tabs and WebAssembly.
+
 ### Changing Themes
 
 The editor uses **TokyoNightStorm** as the default theme. It automatically adapts to any Iced theme. All 23+ built-in Iced themes are supported:

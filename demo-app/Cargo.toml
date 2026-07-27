@@ -10,6 +10,7 @@ iced-code-editor = { path = "../iced-code-editor", features = ["lsp-process"] }
 iced_aw = "0.13.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+opener = { version = "0.8.5", features = ["reveal"] }
 rfd = "0.17"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

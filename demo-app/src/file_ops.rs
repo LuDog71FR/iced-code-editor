@@ -103,3 +103,64 @@ pub async fn read_file(path: PathBuf) -> Result<(PathBuf, String), String> {
         .map_err(|e| format!("Unable to read file: {}", e))?;
     Ok((path, content))
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+fn reveal_file_with<E, F>(
+    path: &std::path::Path,
+    reveal: F,
+) -> Result<(), String>
+where
+    E: std::fmt::Display,
+    F: FnOnce(&std::path::Path) -> Result<(), E>,
+{
+    reveal(path).map_err(|error| {
+        format!("Unable to reveal {}: {error}", path.display())
+    })
+}
+
+/// Reveals a file in the platform file manager.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn reveal_in_file_manager(path: PathBuf) -> Result<PathBuf, String> {
+    reveal_file_with(&path, |candidate| opener::reveal(candidate))?;
+    Ok(path)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[test]
+    fn test_reveal_adapter_forwards_path() {
+        let path = PathBuf::from("/tmp/iced-code-editor/reveal.lua");
+        let received = RefCell::new(None);
+
+        let result = reveal_file_with(&path, |candidate: &std::path::Path| {
+            *received.borrow_mut() = Some(candidate.to_path_buf());
+            Ok::<_, std::io::Error>(())
+        });
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(received.into_inner(), Some(path));
+    }
+
+    #[test]
+    fn test_reveal_adapter_reports_errors() {
+        let path = PathBuf::from("/tmp/iced-code-editor/missing.lua");
+
+        let result = reveal_file_with(&path, |_| {
+            Err::<(), _>(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "test failure",
+            ))
+        });
+
+        assert_eq!(
+            result,
+            Err(
+                "Unable to reveal /tmp/iced-code-editor/missing.lua: test failure"
+                    .to_string()
+            )
+        );
+    }
+}

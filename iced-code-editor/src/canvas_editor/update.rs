@@ -3,15 +3,21 @@
 use iced::Task;
 use iced::widget::operation::{focus, select_all};
 
+use crate::text_utils::char_to_byte_index;
+
 use super::command::{
     Command, CompositeCommand, DeleteCharCommand, DeleteForwardCommand,
-    DuplicateLinesCommand, InsertCharCommand, InsertNewlineCommand,
-    MoveLinesCommand, ReplaceTextCommand, ToggleCommentCommand,
-    line_comment_token,
+    DeleteRangeCommand, DuplicateLinesCommand, InsertCharCommand,
+    InsertNewlineCommand, InsertTextCommand, MoveLinesCommand,
+    ReplaceTextCommand, ToggleCommentCommand, line_comment_token,
+};
+use super::vim::{
+    VimAction, VimInsertPosition, VimMotion, VimOperator, VimPastePosition,
+    VimRegister, VimRegisterKind,
 };
 use super::{
     ArrowDirection, CURSOR_BLINK_INTERVAL, CodeEditor, ImePreedit, IndentStyle,
-    Message, cursor_set,
+    LspEditSnapshot, Message, VimMode, cursor_set, lsp,
 };
 
 // =========================================================================
@@ -124,8 +130,10 @@ impl CodeEditor {
         self.refresh_search_matches_if_needed();
         // The exact revision value is not semantically meaningful; it only needs
         // to change on edits, so `wrapping_add` is sufficient and overflow-safe.
+        let previous_revision = self.buffer_revision;
         self.buffer_revision = self.buffer_revision.wrapping_add(1);
-        *self.visual_lines_cache.borrow_mut() = None;
+        self.refresh_visual_lines_after_edit(previous_revision);
+        self.refresh_max_content_width_after_edit(previous_revision);
         // Truncate the syntax-highlight cache from the first line the edit may
         // have changed. `pre_edit_line` is the topmost active line captured
         // before the edit; the extra line of margin covers edits that merge
@@ -133,7 +141,7 @@ impl CodeEditor {
         self.invalidate_highlight_from(self.pre_edit_line.saturating_sub(1));
         self.content_cache.clear();
         self.overlay_cache.clear();
-        self.enqueue_lsp_change();
+        self.enqueue_incremental_lsp_change();
     }
 
     /// Returns the topmost logical line currently touched by any cursor or its
@@ -150,6 +158,94 @@ impl CodeEditor {
             })
             .min()
             .unwrap_or(0)
+    }
+
+    /// Returns the bottommost logical line touched by a cursor or selection.
+    fn max_active_line(&self) -> usize {
+        self.cursors
+            .iter()
+            .map(|cursor| match cursor.anchor {
+                Some(anchor) => cursor.position.0.max(anchor.0),
+                None => cursor.position.0,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Captures a conservative old-document line range for an incremental LSP
+    /// replacement. Non-editing messages do not allocate or retain a snapshot.
+    fn capture_lsp_edit_snapshot(&mut self, message: &Message) {
+        if self.lsp_document.is_none() {
+            self.lsp_edit_snapshot = None;
+            return;
+        }
+
+        let is_local_edit = matches!(
+            message,
+            Message::CharacterInput(_)
+                | Message::Tab
+                | Message::Enter
+                | Message::Backspace
+                | Message::Delete
+                | Message::DeleteSelection
+                | Message::Paste(_)
+                | Message::ImeCommit(_)
+                | Message::MoveLineUp
+                | Message::MoveLineDown
+                | Message::DuplicateLineUp
+                | Message::DuplicateLineDown
+                | Message::ToggleComment
+        );
+        let is_global_edit = matches!(
+            message,
+            Message::Undo | Message::Redo | Message::ReplaceAll
+        );
+        let is_replace_next = matches!(message, Message::ReplaceNext);
+        if !is_local_edit && !is_global_edit && !is_replace_next {
+            self.lsp_edit_snapshot = None;
+            return;
+        }
+
+        let line_count = self.buffer.line_count();
+        let (mut first_line, mut last_line) = if is_global_edit {
+            (0, line_count.saturating_sub(1))
+        } else {
+            (self.pre_edit_line, self.pre_edit_last_line)
+        };
+        if is_replace_next
+            && let Some(search_match) = self.search_state.current_match()
+        {
+            first_line = first_line.min(search_match.line);
+            last_line = last_line.max(search_match.line);
+        }
+
+        let start_line =
+            if is_global_edit { 0 } else { first_line.saturating_sub(1) };
+        let old_end_exclusive = if is_global_edit {
+            line_count
+        } else {
+            last_line.saturating_add(2).min(line_count)
+        };
+        let old_end = if old_end_exclusive < line_count {
+            lsp::LspPosition {
+                line: u32::try_from(old_end_exclusive).unwrap_or(u32::MAX),
+                character: 0,
+            }
+        } else {
+            let last_line = line_count.saturating_sub(1);
+            lsp::LspPosition {
+                line: u32::try_from(last_line).unwrap_or(u32::MAX),
+                character: u32::try_from(self.buffer.line_len(last_line))
+                    .unwrap_or(u32::MAX),
+            }
+        };
+
+        self.lsp_edit_snapshot = Some(LspEditSnapshot {
+            start_line,
+            old_end_exclusive,
+            old_line_count: line_count,
+            old_end,
+        });
     }
 
     /// Truncates the syntax-highlight cache so logical lines `>= line` are
@@ -176,6 +272,7 @@ impl CodeEditor {
     /// buffer content, so keeping the content cache intact avoids unnecessary
     /// re-rendering of syntax-highlighted text.
     fn finish_navigation_operation(&mut self) {
+        self.sync_search_match_from_primary_cursor();
         self.reset_cursor_blink();
         self.overlay_cache.clear();
     }
@@ -205,6 +302,12 @@ impl CodeEditor {
             self.history.end_group();
             self.is_grouping = false;
         }
+    }
+
+    fn keep_vim_insert_group(&self) -> bool {
+        self.vim_enabled
+            && self.vim_state.mode() == VimMode::Insert
+            && self.is_grouping
     }
 
     /// Deletes all active selections across every cursor and performs cleanup.
@@ -249,6 +352,13 @@ impl CodeEditor {
         // Start grouping if not already grouping (for smart undo)
         self.ensure_grouping_started("Typing");
 
+        // Typing replaces active selections, matching paste and IME commit
+        // behavior. Keep the deletion and insertion in the same history group
+        // so a single undo restores the replaced text.
+        if self.cursors.iter().any(|cursor| cursor.has_selection()) {
+            self.delete_selection();
+        }
+
         // Multi-cursor: build a sorted index list (descending document order)
         // so that edits at higher positions don't invalidate lower positions.
         let mut order: Vec<usize> = (0..self.cursors.len()).collect();
@@ -259,13 +369,10 @@ impl CodeEditor {
         });
 
         for &idx in &order {
-            let cursor = &self.cursors.as_slice()[idx];
-            // Insert at the selection start when the cursor has an active selection,
-            // otherwise insert at the cursor position.
-            let pos = match cursor.anchor {
-                Some(anchor) if anchor < cursor.position => anchor,
-                _ => cursor.position,
-            };
+            // Any active selection was deleted above, which also moves the
+            // cursor to the original selection start and clears its anchor.
+            // The current cursor position is therefore the insertion point.
+            let pos = self.cursors.as_slice()[idx].position;
             let mut cmd = InsertCharCommand::new(pos.0, pos.1, ch, pos);
             let mut cursor_pos = pos;
             cmd.execute(&mut self.buffer, &mut cursor_pos);
@@ -403,8 +510,28 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible
     fn handle_enter(&mut self) -> Task<Message> {
-        // End grouping on enter
-        self.end_grouping_if_active();
+        // Standard editing treats Enter as a boundary. In Vim Insert mode the
+        // newline belongs to the same insertion session and is closed by Esc.
+        let keep_vim_group = self.keep_vim_insert_group();
+        if !keep_vim_group {
+            self.end_grouping_if_active();
+        }
+
+        // A mouse click leaves a zero-length anchor in place so a following
+        // drag can extend the selection. Enter must clear that anchor before
+        // moving the caret to the new line; otherwise the inserted newline
+        // becomes selected and the next typed character deletes it.
+        //
+        // For a real selection, Enter replaces the selected text with a
+        // newline. Group both commands so one undo restores the selection.
+        let replaces_selection =
+            self.cursors.iter().any(|cursor| cursor.has_selection());
+        if replaces_selection {
+            self.ensure_grouping_started("Enter");
+            self.delete_selection();
+        } else {
+            self.clear_selection();
+        }
 
         // Multi-cursor: process in descending document order
         let mut order: Vec<usize> = (0..self.cursors.len()).collect();
@@ -442,6 +569,10 @@ impl CodeEditor {
                 EditType::InsertNewline { indent_len },
             );
             self.history.push(Box::new(cmd));
+        }
+
+        if replaces_selection && !keep_vim_group {
+            self.end_grouping_if_active();
         }
 
         self.finish_edit_operation();
@@ -616,7 +747,9 @@ impl CodeEditor {
     /// A `Task<Message>` that scrolls to keep the cursor visible if selection was deleted
     fn handle_backspace(&mut self) -> Task<Message> {
         // End grouping on backspace (separate from typing)
-        self.end_grouping_if_active();
+        if !self.keep_vim_insert_group() {
+            self.end_grouping_if_active();
+        }
 
         // If any cursor has a selection, delete all selections first
         if self.delete_selection_if_present() {
@@ -672,7 +805,9 @@ impl CodeEditor {
     /// A `Task<Message>` that scrolls to keep the cursor visible if selection was deleted
     fn handle_delete(&mut self) -> Task<Message> {
         // End grouping on delete
-        self.end_grouping_if_active();
+        if !self.keep_vim_insert_group() {
+            self.end_grouping_if_active();
+        }
 
         // If any cursor has a selection, delete all selections first
         if self.delete_selection_if_present() {
@@ -740,6 +875,591 @@ impl CodeEditor {
     // =========================================================================
     // Navigation Handlers
     // =========================================================================
+
+    fn vim_accepts_insert_input(&self) -> bool {
+        !self.vim_enabled || self.vim_state.mode() == VimMode::Insert
+    }
+
+    fn handle_vim_key_msg(&mut self, key: char) -> Task<Message> {
+        if !self.vim_enabled {
+            return Task::none();
+        }
+
+        let previous_mode = self.vim_state.mode();
+        let action = self.vim_state.parse_key(key);
+        match action {
+            Some(VimAction::Mode(mode)) => {
+                self.handle_vim_mode(mode, previous_mode)
+            }
+            Some(VimAction::Motion { motion, count }) => {
+                self.handle_vim_motion(motion, count)
+            }
+            Some(VimAction::Insert { position, count }) => {
+                self.handle_vim_insert(position, count)
+            }
+            Some(VimAction::Operator { operator, motion, count }) => {
+                self.handle_vim_motion_operator(operator, motion, count)
+            }
+            Some(VimAction::LineOperator { operator, count }) => {
+                let start_line = self.cursors.primary_position().0;
+                let end_line = start_line
+                    .saturating_add(count.saturating_sub(1))
+                    .min(self.buffer.line_count().saturating_sub(1));
+                self.handle_vim_line_operator(
+                    operator, start_line, end_line, false,
+                )
+            }
+            Some(VimAction::VisualOperator(operator)) => {
+                self.handle_vim_visual_operator(operator)
+            }
+            Some(VimAction::DeleteCharacters { count }) => {
+                self.handle_vim_delete_characters(count)
+            }
+            Some(VimAction::Paste { position, count }) => {
+                self.handle_vim_paste(position, count)
+            }
+            Some(VimAction::Undo { count }) => {
+                self.handle_vim_history(false, count)
+            }
+            Some(VimAction::Redo { count }) => {
+                self.handle_vim_history(true, count)
+            }
+            Some(VimAction::RepeatSearch { reverse }) => {
+                self.handle_vim_repeat_search(reverse)
+            }
+            Some(VimAction::SubmitSearch(query)) => {
+                self.handle_vim_search(&query)
+            }
+            Some(VimAction::SubmitGotoLine(line)) => {
+                self.handle_goto_position(line.saturating_sub(1), 0)
+            }
+            Some(VimAction::WriteFile { exit_vim }) => {
+                if exit_vim {
+                    self.set_vim_enabled(false);
+                }
+                Task::done(Message::WriteRequested)
+            }
+            Some(VimAction::ExitVimMode) => {
+                self.set_vim_enabled(false);
+                Task::none()
+            }
+            Some(VimAction::CommandLineChanged) => {
+                self.overlay_cache.clear();
+                Task::none()
+            }
+            None => Task::none(),
+        }
+    }
+
+    fn handle_vim_search(&mut self, query: &str) -> Task<Message> {
+        if !self.search_replace_enabled || query.is_empty() {
+            return Task::none();
+        }
+
+        self.search_state.close();
+        self.search_state.set_query(query.to_owned(), &self.buffer);
+        if self.search_state.matches.is_empty() {
+            self.overlay_cache.clear();
+            return Task::none();
+        }
+
+        let cursor = self.cursors.primary_position();
+        let next_index = self
+            .search_state
+            .matches
+            .partition_point(|item| (item.line, item.col) <= cursor);
+        self.search_state.current_match_index =
+            Some(if next_index == self.search_state.matches.len() {
+                0
+            } else {
+                next_index
+            });
+
+        if let Some(search_match) = self.search_state.current_match() {
+            self.cursors.set_single((search_match.line, search_match.col));
+        }
+        self.finish_navigation_operation();
+        self.scroll_to_cursor()
+    }
+
+    fn handle_vim_repeat_search(&mut self, reverse: bool) -> Task<Message> {
+        let Some(last_search) = self.vim_state.last_search().map(str::to_owned)
+        else {
+            return Task::none();
+        };
+        if self.search_state.query != last_search {
+            self.search_state.set_query(last_search, &self.buffer);
+            self.search_state
+                .select_match_near_cursor(self.cursors.primary_position());
+        }
+        if self.search_state.matches.is_empty() {
+            return Task::none();
+        }
+
+        if reverse {
+            self.search_state.previous_match();
+        } else {
+            self.search_state.next_match();
+        }
+        if let Some(search_match) = self.search_state.current_match() {
+            self.cursors.set_single((search_match.line, search_match.col));
+        }
+        self.finish_navigation_operation();
+        self.scroll_to_cursor()
+    }
+
+    fn handle_vim_delete_characters(&mut self, count: usize) -> Task<Message> {
+        let start = self.vim_normal_position(self.cursors.primary_position());
+        let line_len = self.buffer.line_len(start.0);
+        let end = (start.0, start.1.saturating_add(count).min(line_len));
+        self.handle_vim_character_operator(
+            VimOperator::Delete,
+            start,
+            end,
+            false,
+        )
+    }
+
+    fn handle_vim_motion_operator(
+        &mut self,
+        operator: VimOperator,
+        motion: VimMotion,
+        count: usize,
+    ) -> Task<Message> {
+        let start = self.vim_normal_position(self.cursors.primary_position());
+        if matches!(
+            motion,
+            VimMotion::Up
+                | VimMotion::Down
+                | VimMotion::DocumentStart
+                | VimMotion::DocumentEnd
+        ) {
+            let target = self.vim_motion_target(start, motion, count);
+            return self.handle_vim_line_operator(
+                operator,
+                start.0.min(target.0),
+                start.0.max(target.0),
+                false,
+            );
+        }
+
+        let target = self.vim_motion_target(start, motion, count);
+        let (range_start, range_end) = match motion {
+            VimMotion::Right => (
+                start,
+                (
+                    start.0,
+                    start
+                        .1
+                        .saturating_add(count)
+                        .min(self.buffer.line_len(start.0)),
+                ),
+            ),
+            VimMotion::Left => {
+                ((start.0, start.1.saturating_sub(count)), start)
+            }
+            VimMotion::WordEnd | VimMotion::LineEnd => {
+                let end = if motion == VimMotion::LineEnd {
+                    (start.0, self.buffer.line_len(start.0))
+                } else {
+                    (
+                        target.0,
+                        target
+                            .1
+                            .saturating_add(1)
+                            .min(self.buffer.line_len(target.0)),
+                    )
+                };
+                (start.min(end), start.max(end))
+            }
+            VimMotion::WordForward => {
+                let end = if target > start {
+                    target
+                } else {
+                    (start.0, self.buffer.line_len(start.0))
+                };
+                (start.min(end), start.max(end))
+            }
+            VimMotion::WordBackward
+            | VimMotion::LineStart
+            | VimMotion::FirstNonBlank => {
+                (start.min(target), start.max(target))
+            }
+            VimMotion::Up
+            | VimMotion::Down
+            | VimMotion::DocumentStart
+            | VimMotion::DocumentEnd => return Task::none(),
+        };
+
+        self.handle_vim_character_operator(
+            operator,
+            range_start,
+            range_end,
+            false,
+        )
+    }
+
+    fn handle_vim_visual_operator(
+        &mut self,
+        operator: VimOperator,
+    ) -> Task<Message> {
+        if self.vim_state.mode() == VimMode::VisualLine {
+            let (anchor, active) =
+                self.vim_state.visual_positions().unwrap_or_else(|| {
+                    let position = self.cursors.primary_position();
+                    (position, position)
+                });
+            self.handle_vim_line_operator(
+                operator,
+                anchor.0.min(active.0),
+                anchor.0.max(active.0),
+                true,
+            )
+        } else {
+            let Some((start, end)) = self.cursors.primary().selection_range()
+            else {
+                return Task::none();
+            };
+            self.handle_vim_character_operator(operator, start, end, true)
+        }
+    }
+
+    fn handle_vim_character_operator(
+        &mut self,
+        operator: VimOperator,
+        start: (usize, usize),
+        end: (usize, usize),
+        from_visual: bool,
+    ) -> Task<Message> {
+        if start == end {
+            return Task::none();
+        }
+        let register = VimRegister {
+            text: self.extract_text_range(start, end),
+            kind: VimRegisterKind::Characterwise,
+        };
+        self.apply_vim_operator(operator, start, end, register, from_visual)
+    }
+
+    fn handle_vim_line_operator(
+        &mut self,
+        operator: VimOperator,
+        start_line: usize,
+        end_line: usize,
+        from_visual: bool,
+    ) -> Task<Message> {
+        let last_line = self.buffer.line_count().saturating_sub(1);
+        let start_line = start_line.min(last_line);
+        let end_line = end_line.min(last_line).max(start_line);
+        let mut text = String::new();
+        for line in start_line..=end_line {
+            text.push_str(self.buffer.line(line));
+            text.push('\n');
+        }
+
+        let (start, end) = if end_line < last_line {
+            ((start_line, 0), (end_line + 1, 0))
+        } else if start_line > 0 {
+            (
+                (start_line - 1, self.buffer.line_len(start_line - 1)),
+                (end_line, self.buffer.line_len(end_line)),
+            )
+        } else {
+            ((0, 0), (end_line, self.buffer.line_len(end_line)))
+        };
+        self.apply_vim_operator(
+            operator,
+            start,
+            end,
+            VimRegister { text, kind: VimRegisterKind::Linewise },
+            from_visual,
+        )
+    }
+
+    fn apply_vim_operator(
+        &mut self,
+        operator: VimOperator,
+        start: (usize, usize),
+        end: (usize, usize),
+        register: VimRegister,
+        from_visual: bool,
+    ) -> Task<Message> {
+        self.vim_state.register = register;
+
+        if operator == VimOperator::Yank {
+            if from_visual {
+                self.cursors.set_single(self.vim_normal_position(start));
+            } else {
+                let position =
+                    self.vim_normal_position(self.cursors.primary_position());
+                self.cursors.set_single(position);
+            }
+            self.vim_state.enter_clean_normal_mode();
+            self.finish_navigation_operation();
+            return self.scroll_to_cursor();
+        }
+
+        self.end_grouping_if_active();
+        if operator == VimOperator::Change {
+            self.ensure_grouping_started("Vim change");
+        }
+
+        self.pre_edit_line = start.0.min(end.0);
+        self.pre_edit_last_line = start.0.max(end.0);
+        self.capture_lsp_edit_snapshot(&Message::DeleteSelection);
+
+        let cursor_before = self.cursors.primary_position();
+        let mut command =
+            DeleteRangeCommand::new(&self.buffer, start, end, cursor_before);
+        let mut cursor_after = cursor_before;
+        command.execute(&mut self.buffer, &mut cursor_after);
+        self.history.push(Box::new(command));
+        self.cursors.set_single(self.vim_normal_position(cursor_after));
+
+        if operator == VimOperator::Change {
+            self.vim_state.enter_insert_mode();
+        } else {
+            self.vim_state.enter_clean_normal_mode();
+        }
+        self.finish_edit_operation();
+        self.scroll_to_cursor()
+    }
+
+    fn handle_vim_paste(
+        &mut self,
+        position: VimPastePosition,
+        count: usize,
+    ) -> Task<Message> {
+        let register = self.vim_state.register.clone();
+        if register.text.is_empty() {
+            return Task::none();
+        }
+        self.end_grouping_if_active();
+
+        let current = self.vim_normal_position(self.cursors.primary_position());
+        let (insert_at, text, cursor_after) = match register.kind {
+            VimRegisterKind::Characterwise => {
+                let insert_at = match position {
+                    VimPastePosition::BeforeCursor => current,
+                    VimPastePosition::AfterCursor => (
+                        current.0,
+                        current
+                            .1
+                            .saturating_add(usize::from(
+                                self.buffer.line_len(current.0) > 0,
+                            ))
+                            .min(self.buffer.line_len(current.0)),
+                    ),
+                };
+                (insert_at, register.text.repeat(count.max(1)), insert_at)
+            }
+            VimRegisterKind::Linewise => {
+                let repeated = register.text.repeat(count.max(1));
+                match position {
+                    VimPastePosition::BeforeCursor => {
+                        ((current.0, 0), repeated, (current.0, 0))
+                    }
+                    VimPastePosition::AfterCursor
+                        if current.0 + 1 < self.buffer.line_count() =>
+                    {
+                        ((current.0 + 1, 0), repeated, (current.0 + 1, 0))
+                    }
+                    VimPastePosition::AfterCursor => {
+                        let text = format!(
+                            "\n{}",
+                            repeated.strip_suffix('\n').unwrap_or(&repeated)
+                        );
+                        (
+                            (current.0, self.buffer.line_len(current.0)),
+                            text,
+                            (current.0 + 1, 0),
+                        )
+                    }
+                }
+            }
+        };
+
+        self.pre_edit_line = insert_at.0;
+        self.pre_edit_last_line = insert_at.0;
+        self.capture_lsp_edit_snapshot(&Message::Paste(text.clone()));
+        let mut command =
+            InsertTextCommand::new(insert_at.0, insert_at.1, text, current)
+                .with_cursor_after(cursor_after);
+        let mut command_cursor = current;
+        command.execute(&mut self.buffer, &mut command_cursor);
+        self.history.push(Box::new(command));
+        self.cursors.set_single(self.vim_normal_position(command_cursor));
+        self.vim_state.enter_clean_normal_mode();
+        self.finish_edit_operation();
+        self.scroll_to_cursor()
+    }
+
+    fn handle_vim_history(
+        &mut self,
+        redo: bool,
+        count: usize,
+    ) -> Task<Message> {
+        self.end_grouping_if_active();
+        self.pre_edit_line = 0;
+        self.pre_edit_last_line = usize::MAX;
+        self.capture_lsp_edit_snapshot(if redo {
+            &Message::Redo
+        } else {
+            &Message::Undo
+        });
+
+        let mut cursor = self.cursors.primary_position();
+        let mut changed = false;
+        for _ in 0..count.max(1) {
+            let applied = if redo {
+                self.history.redo(&mut self.buffer, &mut cursor)
+            } else {
+                self.history.undo(&mut self.buffer, &mut cursor)
+            };
+            if !applied {
+                break;
+            }
+            changed = true;
+        }
+        if !changed {
+            return Task::none();
+        }
+
+        self.cursors.set_single(self.vim_normal_position(cursor));
+        self.vim_state.enter_clean_normal_mode();
+        self.finish_edit_operation();
+        self.scroll_to_cursor()
+    }
+
+    fn handle_vim_mode(
+        &mut self,
+        mode: VimMode,
+        previous_mode: VimMode,
+    ) -> Task<Message> {
+        self.end_grouping_if_active();
+        match mode {
+            VimMode::Normal => {
+                let mut active = self
+                    .vim_state
+                    .visual_positions()
+                    .map(|(_, active)| active)
+                    .unwrap_or_else(|| self.cursors.primary_position());
+                if previous_mode == VimMode::Insert {
+                    active.1 = active.1.saturating_sub(1);
+                }
+                self.vim_state.clear_visual();
+                self.cursors.set_single(self.vim_normal_position(active));
+            }
+            VimMode::Visual | VimMode::VisualLine => {
+                let position =
+                    self.vim_normal_position(self.cursors.primary_position());
+                self.vim_state.begin_visual(position);
+                self.apply_vim_visual_selection(
+                    position,
+                    position,
+                    mode == VimMode::VisualLine,
+                );
+            }
+            VimMode::Insert => {}
+        }
+        self.finish_navigation_operation();
+        self.scroll_to_cursor()
+    }
+
+    fn handle_vim_motion(
+        &mut self,
+        motion: VimMotion,
+        count: usize,
+    ) -> Task<Message> {
+        self.end_grouping_if_active();
+        match self.vim_state.mode() {
+            VimMode::Visual | VimMode::VisualLine => {
+                let (anchor, active) =
+                    self.vim_state.visual_positions().unwrap_or_else(|| {
+                        let position = self.vim_normal_position(
+                            self.cursors.primary_position(),
+                        );
+                        (position, position)
+                    });
+                let target = self.vim_motion_target(active, motion, count);
+                self.vim_state.set_visual_active(target);
+                self.apply_vim_visual_selection(
+                    anchor,
+                    target,
+                    self.vim_state.mode() == VimMode::VisualLine,
+                );
+            }
+            VimMode::Normal => {
+                let target = self.vim_motion_target(
+                    self.cursors.primary_position(),
+                    motion,
+                    count,
+                );
+                self.cursors.set_single(target);
+                self.overlay_cache.clear();
+            }
+            VimMode::Insert => return Task::none(),
+        }
+        self.finish_navigation_operation();
+        self.scroll_to_cursor()
+    }
+
+    fn handle_vim_insert(
+        &mut self,
+        position: VimInsertPosition,
+        count: usize,
+    ) -> Task<Message> {
+        self.end_grouping_if_active();
+        let current = self
+            .vim_state
+            .visual_positions()
+            .map(|(_, active)| active)
+            .unwrap_or_else(|| self.cursors.primary_position());
+        self.vim_state.clear_visual();
+        let current = self.vim_normal_position(current);
+        self.cursors.set_single(current);
+        self.ensure_grouping_started("Vim insert");
+
+        match position {
+            VimInsertPosition::BeforeCursor => {}
+            VimInsertPosition::AfterCursor => {
+                let line_len = self.buffer.line_len(current.0);
+                self.cursors.primary_mut().position.1 =
+                    current.1.saturating_add(1).min(line_len);
+            }
+            VimInsertPosition::FirstNonBlank => {
+                self.cursors.primary_mut().position.1 = self
+                    .buffer
+                    .line(current.0)
+                    .chars()
+                    .position(|ch| !ch.is_whitespace())
+                    .unwrap_or(0);
+            }
+            VimInsertPosition::EndOfLine => {
+                self.cursors.primary_mut().position.1 =
+                    self.buffer.line_len(current.0);
+            }
+            VimInsertPosition::NewLineBelow => {
+                self.cursors.primary_mut().position.1 =
+                    self.buffer.line_len(current.0);
+                for _ in 0..count.max(1) {
+                    let _ = self.update(&Message::Enter);
+                }
+            }
+            VimInsertPosition::NewLineAbove => {
+                self.cursors.primary_mut().position.1 = 0;
+                let line = current.0;
+                for _ in 0..count.max(1) {
+                    let _ = self.update(&Message::Enter);
+                    self.cursors.set_single((line, 0));
+                }
+            }
+        }
+
+        self.overlay_cache.clear();
+        self.reset_cursor_blink();
+        self.scroll_to_cursor()
+    }
 
     /// Handles arrow key navigation.
     ///
@@ -920,6 +1640,22 @@ impl CodeEditor {
     // Mouse and Selection Handlers
     // =========================================================================
 
+    /// Synchronises the active search result with a manual primary-cursor
+    /// position or selection.
+    fn sync_search_match_from_primary_cursor(&mut self) {
+        if !self.search_matches_visible() || self.search_state.query.is_empty()
+        {
+            return;
+        }
+
+        let primary = self.cursors.primary();
+        let cursor = primary.position;
+        let selection = primary.selection_range();
+        if self.search_state.select_match_at_cursor(cursor, selection) {
+            self.overlay_cache.clear();
+        }
+    }
+
     /// Handles mouse click operations.
     ///
     /// Sets focus, ends command grouping, positions cursor, starts selection tracking.
@@ -951,6 +1687,7 @@ impl CodeEditor {
         self.clear_selection();
         self.is_dragging = true;
         self.cursors.primary_mut().set_anchor();
+        self.sync_search_match_from_primary_cursor();
 
         // Show cursor when focused
         self.show_cursor = true;
@@ -987,12 +1724,97 @@ impl CodeEditor {
     /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
     fn handle_mouse_release_msg(&mut self) -> Task<Message> {
         self.is_dragging = false;
+        if self.vim_enabled {
+            if self.cursors.primary().has_selection() {
+                let anchor = self.cursors.primary().anchor.unwrap_or_default();
+                let position = self.cursors.primary_position();
+                let active = if position >= anchor && position.1 > 0 {
+                    (position.0, position.1 - 1)
+                } else {
+                    position
+                };
+                let anchor = self.vim_normal_position(anchor);
+                let active = self.vim_normal_position(active);
+                self.vim_state.set_mode_from_mouse(VimMode::Visual);
+                self.vim_state.begin_visual(anchor);
+                self.vim_state.set_visual_active(active);
+            } else {
+                let position =
+                    self.vim_normal_position(self.cursors.primary_position());
+                self.cursors.set_single(position);
+            }
+            self.overlay_cache.clear();
+        }
+        self.sync_search_match_from_primary_cursor();
+        Task::none()
+    }
+
+    /// Handles a right-click before the context menu is displayed.
+    ///
+    /// A click inside any existing selection preserves it so Cut and Copy act
+    /// on the selected text. A click elsewhere collapses the selection and
+    /// moves the caret to the clicked position.
+    fn handle_context_menu_requested_msg(
+        &mut self,
+        point: iced::Point,
+    ) -> Task<Message> {
+        self.request_focus();
+        self.has_canvas_focus = true;
+        self.focus_locked = false;
+        self.show_cursor = true;
+        self.is_dragging = false;
+        self.end_grouping_if_active();
+
+        if let Some(position) = self.calculate_cursor_from_point(point) {
+            let inside_selection = self.cursors.iter().any(|cursor| {
+                cursor.selection_range().is_some_and(|(start, end)| {
+                    (start..=end).contains(&position)
+                })
+            });
+
+            if !inside_selection {
+                self.cursors.set_single(position);
+                self.overlay_cache.clear();
+            }
+        }
+
+        self.reset_cursor_blink();
         Task::none()
     }
 
     // =========================================================================
     // Clipboard Handlers
     // =========================================================================
+
+    /// Cuts all selected ranges to the clipboard as a single undoable edit.
+    fn handle_cut_msg(&mut self) -> Task<Message> {
+        if !self.cursors.iter().any(|cursor| cursor.has_selection()) {
+            return Task::none();
+        }
+
+        self.end_grouping_if_active();
+        self.ensure_grouping_started("Cut");
+        let clipboard_task = self.copy_selection();
+        self.delete_selection();
+        self.end_grouping_if_active();
+        self.finish_edit_operation();
+
+        Task::batch([clipboard_task, self.scroll_to_cursor()])
+    }
+
+    /// Selects the complete document.
+    fn handle_select_all_msg(&mut self) -> Task<Message> {
+        self.end_grouping_if_active();
+
+        let last_line = self.buffer.line_count().saturating_sub(1);
+        let end = (last_line, self.buffer.line_len(last_line));
+        self.cursors.set_single(end);
+        self.cursors.primary_mut().anchor = Some((0, 0));
+        self.overlay_cache.clear();
+        self.reset_cursor_blink();
+
+        self.scroll_to_cursor()
+    }
 
     /// Handles paste operations.
     ///
@@ -1045,6 +1867,7 @@ impl CodeEditor {
             // touch lines anywhere in the document, so reset the highlight cache
             // entirely rather than trusting the cursor as the change origin.
             self.pre_edit_line = 0;
+            self.pre_edit_last_line = usize::MAX;
             self.finish_edit_operation();
             self.scroll_to_cursor()
         } else {
@@ -1065,6 +1888,7 @@ impl CodeEditor {
             // A redone command may touch lines anywhere; reset the highlight
             // cache entirely (see `handle_undo_msg`).
             self.pre_edit_line = 0;
+            self.pre_edit_last_line = usize::MAX;
             self.finish_edit_operation();
             self.scroll_to_cursor()
         } else {
@@ -1082,7 +1906,13 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` that focuses and selects all in the search input
     fn handle_open_search_msg(&mut self) -> Task<Message> {
+        self.goto_line_state.close();
         self.search_state.open_search();
+        if !self.search_state.query.is_empty() {
+            self.search_state.update_matches(&self.buffer);
+            self.search_state
+                .select_match_near_cursor(self.cursors.primary_position());
+        }
         self.overlay_cache.clear();
 
         // Focus the search input and select all text if any
@@ -1098,7 +1928,13 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` that focuses and selects all in the search input
     fn handle_open_search_replace_msg(&mut self) -> Task<Message> {
+        self.goto_line_state.close();
         self.search_state.open_replace();
+        if !self.search_state.query.is_empty() {
+            self.search_state.update_matches(&self.buffer);
+            self.search_state
+                .select_match_near_cursor(self.cursors.primary_position());
+        }
         self.overlay_cache.clear();
 
         // Focus the search input and select all text if any
@@ -1123,6 +1959,52 @@ impl CodeEditor {
         self.search_state.close();
         self.overlay_cache.clear();
         Task::none()
+    }
+
+    /// Opens the go-to-line input and selects the current one-based line.
+    fn handle_open_goto_line_msg(&mut self) -> Task<Message> {
+        self.search_state.close();
+        self.goto_line_state.open(self.cursors.primary_position().0);
+        self.overlay_cache.clear();
+
+        Task::batch([
+            focus(self.goto_line_state.input_id.clone()),
+            select_all(self.goto_line_state.input_id.clone()),
+        ])
+    }
+
+    /// Closes the go-to-line input without moving the cursor.
+    fn handle_close_goto_line_msg(&mut self) -> Task<Message> {
+        self.goto_line_state.close();
+        self.overlay_cache.clear();
+        Task::none()
+    }
+
+    /// Updates the one-based line number entered by the user.
+    fn handle_goto_line_changed_msg(&mut self, query: &str) -> Task<Message> {
+        self.goto_line_state.query = query.to_string();
+        Task::none()
+    }
+
+    /// Moves to the submitted one-based line and closes the input.
+    fn handle_submit_goto_line_msg(&mut self) -> Task<Message> {
+        let Some(one_based_line) = self.goto_line_state.target_line() else {
+            return Task::none();
+        };
+
+        let target_line = one_based_line
+            .saturating_sub(1)
+            .min(self.buffer.line_count().saturating_sub(1));
+        while self.hidden_lines_set().contains(&target_line) {
+            let collapsed_count = self.collapsed_folds.len();
+            self.unfold_at(target_line);
+            if self.collapsed_folds.len() == collapsed_count {
+                break;
+            }
+        }
+
+        self.goto_line_state.close();
+        self.handle_goto_position(target_line, 0)
     }
 
     /// Handles search query text changes.
@@ -1250,14 +2132,16 @@ impl CodeEditor {
             self.cursors.primary_mut().position = cursor_pos;
             self.history.push(Box::new(cmd));
 
-            // Update matches after replacement
-            self.search_state.update_matches(&self.buffer);
-
             // The replacement starts at the matched line; invalidate highlight
             // from there regardless of where the cursor moved next.
             self.pre_edit_line = self.pre_edit_line.min(match_pos.line);
+            self.pre_edit_last_line =
+                self.pre_edit_last_line.max(match_pos.line);
 
-            // Move to next match if available
+            self.clear_selection();
+            self.finish_edit_operation();
+
+            // Move to the closest remaining match after the replacement.
             if !self.search_state.matches.is_empty()
                 && let Some(next_match) = self.search_state.current_match()
             {
@@ -1265,8 +2149,6 @@ impl CodeEditor {
                     (next_match.line, next_match.col);
             }
 
-            self.clear_selection();
-            self.finish_edit_operation();
             return self.scroll_to_cursor();
         }
         Task::none()
@@ -1316,9 +2198,8 @@ impl CodeEditor {
             // Replace All touches matches anywhere in the document, so reset
             // the highlight cache entirely.
             self.pre_edit_line = 0;
+            self.pre_edit_last_line = usize::MAX;
 
-            // Update matches (should be empty now)
-            self.search_state.update_matches(&self.buffer);
             self.clear_selection();
             self.finish_edit_operation();
             self.scroll_to_cursor()
@@ -1456,7 +2337,7 @@ impl CodeEditor {
     fn handle_ime_commit_msg(&mut self, text: &str) -> Task<Message> {
         self.ime_preedit = None;
 
-        if text.is_empty() {
+        if text.is_empty() || !self.vim_accepts_insert_input() {
             self.overlay_cache.clear();
             return Task::none();
         }
@@ -1624,6 +2505,9 @@ impl CodeEditor {
     ///
     /// `Task::none()` — no async work needed
     fn handle_alt_click_msg(&mut self, point: iced::Point) -> Task<Message> {
+        if self.vim_enabled {
+            return Task::none();
+        }
         if let Some(pos) = self.calculate_cursor_from_point(point) {
             self.cursors.add_cursor(pos);
             self.overlay_cache.clear();
@@ -1639,6 +2523,9 @@ impl CodeEditor {
     ///
     /// `Task::none()`
     fn handle_add_cursor_above_msg(&mut self) -> Task<Message> {
+        if self.vim_enabled {
+            return Task::none();
+        }
         let (line, col) = self.cursors.primary_position();
         if line == 0 {
             return Task::none();
@@ -1658,6 +2545,9 @@ impl CodeEditor {
     ///
     /// `Task::none()`
     fn handle_add_cursor_below_msg(&mut self) -> Task<Message> {
+        if self.vim_enabled {
+            return Task::none();
+        }
         let (line, col) = self.cursors.primary_position();
         let last_line = self.buffer.line_count().saturating_sub(1);
         if line >= last_line {
@@ -1679,6 +2569,9 @@ impl CodeEditor {
     ///
     /// `Task::none()`
     fn handle_select_next_occurrence_msg(&mut self) -> Task<Message> {
+        if self.vim_enabled {
+            return Task::none();
+        }
         // Determine the search text: selected text on primary cursor, or word under cursor
         let search_text = if let Some(text) = self.get_selected_text() {
             text
@@ -1718,18 +2611,17 @@ impl CodeEditor {
         // Search forward from search_start for the next occurrence
         let (start_line, start_col) = search_start;
         let line_count = self.buffer.line_count();
+        let search_char_len = search_text.chars().count();
 
         for line_offset in 0..=line_count {
             let line_idx = (start_line + line_offset) % line_count;
-            let line_str = self.buffer.line(line_idx).to_string();
-            let chars: Vec<char> = line_str.chars().collect();
+            let line_str = self.buffer.line(line_idx);
 
             // On the first iteration, start after start_col; on wrap-around, start from 0
             let search_col = if line_offset == 0 { start_col } else { 0 };
 
             // Build substring from search_col onward (char-indexed)
-            let prefix_bytes: usize =
-                chars.iter().take(search_col).map(|c| c.len_utf8()).sum();
+            let prefix_bytes = char_to_byte_index(line_str, search_col);
             let haystack = &line_str[prefix_bytes..];
 
             // The search_text is also char-based; find it as a substring
@@ -1737,7 +2629,7 @@ impl CodeEditor {
                 // Convert byte_offset back to char offset
                 let char_start =
                     search_col + haystack[..byte_offset].chars().count();
-                let char_end = char_start + search_text.chars().count();
+                let char_end = char_start + search_char_len;
 
                 // Build cursor with selection for the found occurrence
                 let found_cursor = cursor_set::Cursor {
@@ -1770,15 +2662,35 @@ impl CodeEditor {
         // Capture the topmost active line before any edit mutates the buffer,
         // so `finish_edit_operation` can truncate the highlight cache precisely.
         self.pre_edit_line = self.min_active_line();
+        self.pre_edit_last_line = self.max_active_line();
+        self.capture_lsp_edit_snapshot(message);
         match message {
             // Text input operations
-            Message::CharacterInput(ch) => self.handle_character_input_msg(*ch),
-            Message::Tab => self.handle_tab(),
-            Message::Enter => self.handle_enter(),
+            Message::CharacterInput(ch) if self.vim_accepts_insert_input() => {
+                self.handle_character_input_msg(*ch)
+            }
+            Message::CharacterInput(_) => Task::none(),
+            Message::VimKey(ch) => self.handle_vim_key_msg(*ch),
+            Message::ToggleVimMode => {
+                self.set_vim_enabled(!self.vim_enabled);
+                Task::none()
+            }
+            Message::Tab if self.vim_accepts_insert_input() => {
+                self.handle_tab()
+            }
+            Message::Enter if self.vim_accepts_insert_input() => {
+                self.handle_enter()
+            }
+            Message::Tab | Message::Enter => Task::none(),
 
             // Deletion operations
-            Message::Backspace => self.handle_backspace(),
-            Message::Delete => self.handle_delete(),
+            Message::Backspace if self.vim_accepts_insert_input() => {
+                self.handle_backspace()
+            }
+            Message::Delete if self.vim_accepts_insert_input() => {
+                self.handle_delete()
+            }
+            Message::Backspace | Message::Delete => Task::none(),
             Message::DeleteSelection => self.handle_delete_selection(),
 
             // Navigation operations
@@ -1792,6 +2704,12 @@ impl CodeEditor {
             Message::GotoPosition(line, col) => {
                 self.handle_goto_position(*line, *col)
             }
+            Message::OpenGotoLine => self.handle_open_goto_line_msg(),
+            Message::CloseGotoLine => self.handle_close_goto_line_msg(),
+            Message::GotoLineChanged(query) => {
+                self.handle_goto_line_changed_msg(query)
+            }
+            Message::SubmitGotoLine => self.handle_submit_goto_line_msg(),
             Message::PageUp => self.handle_page_up(),
             Message::PageDown => self.handle_page_down(),
 
@@ -1800,10 +2718,18 @@ impl CodeEditor {
             Message::MouseDrag(point) => self.handle_mouse_drag_msg(*point),
             Message::MouseHover(point) => self.handle_mouse_drag_msg(*point),
             Message::MouseRelease => self.handle_mouse_release_msg(),
+            Message::ContextMenuRequested(point) => {
+                self.handle_context_menu_requested_msg(*point)
+            }
+            Message::WriteRequested
+            | Message::CustomContextMenuAction(_)
+            | Message::RevealInFileManager => Task::none(),
 
             // Clipboard operations
+            Message::Cut => self.handle_cut_msg(),
             Message::Copy => self.copy_selection(),
             Message::Paste(text) => self.handle_paste_msg(text),
+            Message::SelectAll => self.handle_select_all_msg(),
 
             // History operations
             Message::Undo => self.handle_undo_msg(),
@@ -1838,9 +2764,16 @@ impl CodeEditor {
             // Focus and IME operations
             Message::CanvasFocusGained => self.handle_canvas_focus_gained_msg(),
             Message::CanvasFocusLost => self.handle_canvas_focus_lost_msg(),
-            Message::ImeOpened => self.handle_ime_opened_msg(),
+            Message::ImeOpened if self.vim_accepts_insert_input() => {
+                self.handle_ime_opened_msg()
+            }
+            Message::ImeOpened => Task::none(),
             Message::ImePreedit(content, selection) => {
-                self.handle_ime_preedit_msg(content, selection)
+                if self.vim_accepts_insert_input() {
+                    self.handle_ime_preedit_msg(content, selection)
+                } else {
+                    Task::none()
+                }
             }
             Message::ImeCommit(text) => self.handle_ime_commit_msg(text),
             Message::ImeClosed => self.handle_ime_closed_msg(),
@@ -1894,7 +2827,456 @@ impl CodeEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::canvas_editor::ArrowDirection;
+    use crate::canvas_editor::{ArrowDirection, VimMode};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn vim_keys(editor: &mut CodeEditor, keys: &str) {
+        for key in keys.chars() {
+            let _ = editor.update(&Message::VimKey(key));
+        }
+    }
+
+    fn focus_editor(editor: &mut CodeEditor) {
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+    }
+
+    fn assert_vim_delete(
+        content: &str,
+        cursor: (usize, usize),
+        keys: &str,
+        expected: &str,
+        register: &str,
+    ) {
+        let mut editor = CodeEditor::new(content, "txt").with_vim_enabled(true);
+        editor.cursors.set_single(cursor);
+        vim_keys(&mut editor, keys);
+        assert_eq!(editor.content(), expected, "keys: {keys}");
+        assert_eq!(editor.vim_state.register.text, register, "keys: {keys}");
+    }
+
+    #[derive(Default)]
+    struct VimTestLspClient {
+        changes: Rc<RefCell<Vec<Vec<lsp::LspTextChange>>>>,
+    }
+
+    impl lsp::LspClient for VimTestLspClient {
+        fn did_change(
+            &mut self,
+            _document: &lsp::LspDocument,
+            changes: &[lsp::LspTextChange],
+        ) {
+            self.changes.borrow_mut().push(changes.to_vec());
+        }
+    }
+
+    #[test]
+    fn test_vim_navigation_normal_key_does_not_insert() {
+        let mut editor = CodeEditor::new("abc", "txt").with_vim_enabled(true);
+
+        vim_keys(&mut editor, "l");
+
+        assert_eq!(editor.content(), "abc");
+        assert_eq!(editor.cursors.primary_position(), (0, 1));
+
+        let mut standard = CodeEditor::new("abc", "txt");
+        focus_editor(&mut standard);
+        let _ = standard.update(&Message::CharacterInput('l'));
+        assert_eq!(standard.content(), "labc");
+    }
+
+    #[test]
+    fn test_vim_navigation_insert_and_escape_round_trip() {
+        let mut editor = CodeEditor::new("abc", "txt").with_vim_enabled(true);
+        focus_editor(&mut editor);
+
+        vim_keys(&mut editor, "i");
+        assert_eq!(editor.vim_mode(), Some(VimMode::Insert));
+        let _ = editor.update(&Message::CharacterInput('X'));
+        assert_eq!(editor.content(), "Xabc");
+
+        let _ = editor.update(&Message::VimKey('\u{1b}'));
+        assert_eq!(editor.vim_mode(), Some(VimMode::Normal));
+        vim_keys(&mut editor, "l");
+        assert_eq!(editor.content(), "Xabc");
+        assert_eq!(editor.cursors.primary_position(), (0, 1));
+    }
+
+    #[test]
+    fn test_vim_navigation_counted_word_and_line_motions() {
+        let mut editor =
+            CodeEditor::new("one two\nthree four\nfive six", "txt")
+                .with_vim_enabled(true);
+
+        vim_keys(&mut editor, "2w");
+        assert_eq!(editor.cursors.primary_position(), (1, 0));
+        vim_keys(&mut editor, "e");
+        assert_eq!(editor.cursors.primary_position(), (1, 4));
+        vim_keys(&mut editor, "b");
+        assert_eq!(editor.cursors.primary_position(), (1, 0));
+        vim_keys(&mut editor, "G");
+        assert_eq!(editor.cursors.primary_position(), (2, 0));
+        vim_keys(&mut editor, "gg");
+        assert_eq!(editor.cursors.primary_position(), (0, 0));
+        vim_keys(&mut editor, "2j");
+        assert_eq!(editor.cursors.primary_position(), (2, 0));
+        vim_keys(&mut editor, "k$");
+        assert_eq!(editor.cursors.primary_position(), (1, 9));
+        vim_keys(&mut editor, "0");
+        assert_eq!(editor.cursors.primary_position(), (1, 0));
+
+        let mut folded = CodeEditor::new(
+            "fn main() {\n    let x = 1;\n    if x > 0 {\n        print();\n    }\n}",
+            "rs",
+        )
+        .with_vim_enabled(true);
+        folded.toggle_fold(0);
+        vim_keys(&mut folded, "j");
+        assert_eq!(folded.cursors.primary_position(), (5, 0));
+    }
+
+    #[test]
+    fn test_vim_navigation_visual_and_visual_line_ranges() {
+        let mut editor = CodeEditor::new("abcd\nefgh\nijkl\nmnop", "txt")
+            .with_vim_enabled(true);
+        editor.cursors.set_single((0, 1));
+
+        vim_keys(&mut editor, "vl");
+        assert_eq!(editor.vim_mode(), Some(VimMode::Visual));
+        assert_eq!(
+            editor.cursors.primary().selection_range(),
+            Some(((0, 1), (0, 3)))
+        );
+
+        let _ = editor.update(&Message::VimKey('\u{1b}'));
+        assert_eq!(editor.vim_mode(), Some(VimMode::Normal));
+        assert!(editor.cursors.primary().anchor.is_none());
+
+        editor.cursors.set_single((1, 2));
+        vim_keys(&mut editor, "Vj");
+        assert_eq!(editor.vim_mode(), Some(VimMode::VisualLine));
+        assert_eq!(
+            editor.cursors.primary().selection_range(),
+            Some(((1, 0), (3, 0)))
+        );
+    }
+
+    #[test]
+    fn test_vim_navigation_unicode_and_empty_line_bounds() {
+        let mut editor =
+            CodeEditor::new("你🙂好\n\nz", "txt").with_vim_enabled(true);
+
+        vim_keys(&mut editor, "lll");
+        assert_eq!(editor.cursors.primary_position(), (0, 2));
+        vim_keys(&mut editor, "j");
+        assert_eq!(editor.cursors.primary_position(), (1, 0));
+        vim_keys(&mut editor, "j");
+        assert_eq!(editor.cursors.primary_position(), (2, 0));
+        vim_keys(&mut editor, "k");
+        assert_eq!(editor.cursors.primary_position(), (1, 0));
+        vim_keys(&mut editor, "k$");
+        assert_eq!(editor.cursors.primary_position(), (0, 2));
+        vim_keys(&mut editor, "0");
+        assert_eq!(editor.cursors.primary_position(), (0, 0));
+    }
+
+    #[test]
+    fn test_vim_navigation_ime_only_commits_in_insert() {
+        let mut editor = CodeEditor::new("abc", "txt").with_vim_enabled(true);
+
+        let _ = editor.update(&Message::ImeCommit("中".to_owned()));
+        assert_eq!(editor.content(), "abc");
+
+        vim_keys(&mut editor, "i");
+        let _ = editor.update(&Message::ImeCommit("中".to_owned()));
+        assert_eq!(editor.content(), "中abc");
+
+        let mut standard = CodeEditor::new("abc", "txt");
+        let _ = standard.update(&Message::ImeCommit("中".to_owned()));
+        assert_eq!(standard.content(), "中abc");
+    }
+
+    #[test]
+    fn test_vim_navigation_collapses_and_blocks_extra_cursors() {
+        let mut editor = CodeEditor::new("same\nsame\nsame", "txt");
+        editor.cursors.add_cursor((1, 0));
+        assert_eq!(editor.cursors.len(), 2);
+
+        editor.set_vim_enabled(true);
+        assert_eq!(editor.cursors.len(), 1);
+
+        let _ = editor.update(&Message::AddCursorBelow);
+        let _ = editor.update(&Message::SelectNextOccurrence);
+        let _ = editor.update(&Message::SelectNextOccurrence);
+        let _ = editor.update(&Message::AltClick(iced::Point::new(
+            editor.gutter_width() + 5.0,
+            editor.line_height,
+        )));
+        assert_eq!(editor.cursors.len(), 1);
+    }
+
+    #[test]
+    fn test_vim_editing_x_and_count() {
+        let mut editor =
+            CodeEditor::new("abcdef", "txt").with_vim_enabled(true);
+
+        vim_keys(&mut editor, "x");
+        assert_eq!(editor.content(), "bcdef");
+        assert_eq!(editor.vim_state.register.text, "a");
+        assert_eq!(
+            editor.vim_state.register.kind,
+            super::super::vim::VimRegisterKind::Characterwise
+        );
+
+        vim_keys(&mut editor, "2x");
+        assert_eq!(editor.content(), "def");
+        assert_eq!(editor.vim_state.register.text, "bc");
+        assert_eq!(editor.cursors.primary_position(), (0, 0));
+    }
+
+    #[test]
+    fn test_vim_editing_delete_change_yank_motions() {
+        let mut deleted =
+            CodeEditor::new("one two three", "txt").with_vim_enabled(true);
+        vim_keys(&mut deleted, "dw");
+        assert_eq!(deleted.content(), "two three");
+        assert_eq!(deleted.vim_state.register.text, "one ");
+
+        let mut yanked =
+            CodeEditor::new("one two", "txt").with_vim_enabled(true);
+        vim_keys(&mut yanked, "yw");
+        assert_eq!(yanked.content(), "one two");
+        assert_eq!(yanked.vim_state.register.text, "one ");
+
+        let mut changed =
+            CodeEditor::new("one two", "txt").with_vim_enabled(true);
+        focus_editor(&mut changed);
+        vim_keys(&mut changed, "ce");
+        assert_eq!(changed.content(), " two");
+        assert_eq!(changed.vim_state.register.text, "one");
+        assert_eq!(changed.vim_mode(), Some(VimMode::Insert));
+        let _ = changed.update(&Message::CharacterInput('X'));
+        vim_keys(&mut changed, "\u{1b}");
+        assert_eq!(changed.content(), "X two");
+
+        assert_vim_delete("abc", (0, 2), "dh", "ac", "b");
+        assert_vim_delete("abc", (0, 1), "dl", "ac", "b");
+        assert_vim_delete("abc def", (0, 6), "db", "abc f", "de");
+        assert_vim_delete("abcdef", (0, 3), "d0", "def", "abc");
+        assert_vim_delete("  abc", (0, 4), "d^", "  c", "ab");
+        assert_vim_delete("abcde", (0, 2), "d$", "ab", "cde");
+        assert_vim_delete(
+            "one\ntwo\nthree\nfour",
+            (2, 0),
+            "dgg",
+            "four",
+            "one\ntwo\nthree\n",
+        );
+        assert_vim_delete(
+            "one\ntwo\nthree\nfour",
+            (1, 0),
+            "dG",
+            "one",
+            "two\nthree\nfour\n",
+        );
+    }
+
+    #[test]
+    fn test_vim_editing_doubled_line_operators() {
+        let mut deleted =
+            CodeEditor::new("one\ntwo\nthree", "txt").with_vim_enabled(true);
+        vim_keys(&mut deleted, "dd");
+        assert_eq!(deleted.content(), "two\nthree");
+        assert_eq!(deleted.vim_state.register.text, "one\n");
+        assert_eq!(
+            deleted.vim_state.register.kind,
+            super::super::vim::VimRegisterKind::Linewise
+        );
+
+        let mut yanked =
+            CodeEditor::new("one\ntwo\nthree", "txt").with_vim_enabled(true);
+        yanked.cursors.set_single((1, 1));
+        vim_keys(&mut yanked, "yy");
+        assert_eq!(yanked.content(), "one\ntwo\nthree");
+        assert_eq!(yanked.vim_state.register.text, "two\n");
+        assert_eq!(
+            yanked.vim_state.register.kind,
+            super::super::vim::VimRegisterKind::Linewise
+        );
+
+        let mut changed =
+            CodeEditor::new("one\ntwo\nthree", "txt").with_vim_enabled(true);
+        changed.cursors.set_single((1, 1));
+        vim_keys(&mut changed, "cc");
+        assert_eq!(changed.content(), "one\nthree");
+        assert_eq!(changed.vim_state.register.text, "two\n");
+        assert_eq!(changed.vim_mode(), Some(VimMode::Insert));
+
+        assert_vim_delete(
+            "one\ntwo\nthree\nfour",
+            (1, 0),
+            "dk",
+            "three\nfour",
+            "one\ntwo\n",
+        );
+        assert_vim_delete(
+            "one\ntwo\nthree\nfour",
+            (1, 0),
+            "dj",
+            "one\nfour",
+            "two\nthree\n",
+        );
+        assert_vim_delete(
+            "one\ntwo\nthree",
+            (0, 0),
+            "2dd",
+            "three",
+            "one\ntwo\n",
+        );
+    }
+
+    #[test]
+    fn test_vim_editing_visual_operators() {
+        let mut deleted =
+            CodeEditor::new("abcd\nefgh", "txt").with_vim_enabled(true);
+        deleted.cursors.set_single((0, 1));
+        vim_keys(&mut deleted, "vld");
+        assert_eq!(deleted.content(), "ad\nefgh");
+        assert_eq!(deleted.vim_state.register.text, "bc");
+        assert_eq!(
+            deleted.vim_state.register.kind,
+            super::super::vim::VimRegisterKind::Characterwise
+        );
+        assert_eq!(deleted.vim_mode(), Some(VimMode::Normal));
+
+        let mut yanked =
+            CodeEditor::new("one\ntwo\nthree", "txt").with_vim_enabled(true);
+        yanked.cursors.set_single((1, 1));
+        vim_keys(&mut yanked, "Vjy");
+        assert_eq!(yanked.content(), "one\ntwo\nthree");
+        assert_eq!(yanked.vim_state.register.text, "two\nthree\n");
+        assert_eq!(
+            yanked.vim_state.register.kind,
+            super::super::vim::VimRegisterKind::Linewise
+        );
+        assert_eq!(yanked.vim_mode(), Some(VimMode::Normal));
+
+        let mut changed = CodeEditor::new("abcd", "txt").with_vim_enabled(true);
+        focus_editor(&mut changed);
+        changed.cursors.set_single((0, 1));
+        vim_keys(&mut changed, "vlc");
+        let _ = changed.update(&Message::CharacterInput('X'));
+        vim_keys(&mut changed, "\u{1b}");
+        assert_eq!(changed.content(), "aXd");
+        assert_eq!(changed.vim_state.register.text, "bc");
+        assert_eq!(changed.history.undo_count(), 1);
+    }
+
+    #[test]
+    fn test_vim_editing_characterwise_and_linewise_paste() {
+        let mut characterwise =
+            CodeEditor::new("abc", "txt").with_vim_enabled(true);
+        vim_keys(&mut characterwise, "yl2lp");
+        assert_eq!(characterwise.content(), "abca");
+        assert_eq!(characterwise.cursors.primary_position(), (0, 3));
+
+        let mut characterwise_before =
+            CodeEditor::new("abc", "txt").with_vim_enabled(true);
+        vim_keys(&mut characterwise_before, "yl2lP");
+        assert_eq!(characterwise_before.content(), "abac");
+        assert_eq!(characterwise_before.cursors.primary_position(), (0, 2));
+
+        let mut linewise =
+            CodeEditor::new("one\ntwo", "txt").with_vim_enabled(true);
+        vim_keys(&mut linewise, "yyp");
+        assert_eq!(linewise.content(), "one\none\ntwo");
+        assert_eq!(linewise.cursors.primary_position(), (1, 0));
+
+        let mut linewise_before =
+            CodeEditor::new("one\ntwo", "txt").with_vim_enabled(true);
+        linewise_before.cursors.set_single((1, 0));
+        vim_keys(&mut linewise_before, "yyP");
+        assert_eq!(linewise_before.content(), "one\ntwo\ntwo");
+        assert_eq!(linewise_before.cursors.primary_position(), (1, 0));
+    }
+
+    #[test]
+    fn test_vim_editing_operator_counts_multiply() {
+        let mut editor =
+            CodeEditor::new("one two three four five six seven", "txt")
+                .with_vim_enabled(true);
+
+        vim_keys(&mut editor, "2d3w");
+
+        assert_eq!(editor.content(), "seven");
+        assert_eq!(
+            editor.vim_state.register.text,
+            "one two three four five six "
+        );
+    }
+
+    #[test]
+    fn test_vim_editing_undo_redo_is_one_command() {
+        let original = "one two three";
+        let mut editor =
+            CodeEditor::new(original, "txt").with_vim_enabled(true);
+        focus_editor(&mut editor);
+
+        vim_keys(&mut editor, "cw");
+        let _ = editor.update(&Message::CharacterInput('X'));
+        let _ = editor.update(&Message::CharacterInput('Y'));
+        vim_keys(&mut editor, "\u{1b}");
+        assert_eq!(editor.content(), "XYtwo three");
+        assert_eq!(editor.history.undo_count(), 1);
+
+        vim_keys(&mut editor, "u");
+        assert_eq!(editor.content(), original);
+        assert_eq!(editor.history.redo_count(), 1);
+
+        vim_keys(&mut editor, "\u{12}");
+        assert_eq!(editor.content(), "XYtwo three");
+        assert_eq!(editor.history.undo_count(), 1);
+
+        let mut opened = CodeEditor::new("one", "txt").with_vim_enabled(true);
+        focus_editor(&mut opened);
+        vim_keys(&mut opened, "o");
+        let _ = opened.update(&Message::CharacterInput('X'));
+        vim_keys(&mut opened, "\u{1b}");
+        assert_eq!(opened.content(), "one\nX");
+        assert_eq!(opened.history.undo_count(), 1);
+        vim_keys(&mut opened, "u");
+        assert_eq!(opened.content(), "one");
+    }
+
+    #[test]
+    fn test_vim_editing_emits_incremental_lsp_change() {
+        let changes = Rc::new(RefCell::new(Vec::new()));
+        let client = VimTestLspClient { changes: Rc::clone(&changes) };
+        let content = (0..10)
+            .map(|line| format!("line{line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut editor = CodeEditor::new(&content, "rs").with_vim_enabled(true);
+        editor.attach_lsp(
+            Box::new(client),
+            lsp::LspDocument::new("file:///vim.rs", "rust"),
+        );
+        editor.cursors.set_single((5, 2));
+
+        vim_keys(&mut editor, "x");
+
+        let changes = changes.borrow();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].len(), 1);
+        let change = &changes[0][0];
+        assert_eq!(change.range.start.line, 4);
+        assert_eq!(change.range.start.character, 0);
+        assert_eq!(change.range.end.line, 7);
+        assert_eq!(change.range.end.character, 0);
+        assert_eq!(change.text, "line4\nlie5\nline6\n");
+    }
 
     #[test]
     fn test_horizontal_scroll_initial_state() {
@@ -2030,9 +3412,40 @@ mod tests {
         editor.cursors.primary_mut().position = (0, 5);
 
         let _ = editor.update(&Message::CharacterInput('X'));
-        // Current behavior: character is inserted at cursor, selection is NOT automatically deleted
-        // This is expected behavior - user must delete selection first (Backspace/Delete) or use Paste
-        assert_eq!(editor.buffer.line(0), "Xhello world");
+        assert_eq!(editor.buffer.line(0), "X world");
+        assert_eq!(editor.cursors.primary_position(), (0, 1));
+        assert!(!editor.cursors.primary().has_selection());
+    }
+
+    #[test]
+    fn test_typing_digit_with_reversed_selection_replaces_selection() {
+        let mut editor = CodeEditor::new("hello world", "py");
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+
+        editor.cursors.primary_mut().anchor = Some((0, 5));
+        editor.cursors.primary_mut().position = (0, 0);
+
+        let _ = editor.update(&Message::CharacterInput('7'));
+        assert_eq!(editor.buffer.line(0), "7 world");
+        assert_eq!(editor.cursors.primary_position(), (0, 1));
+        assert!(!editor.cursors.primary().has_selection());
+    }
+
+    #[test]
+    fn test_typing_with_selection_undoes_as_single_edit() {
+        let mut editor = CodeEditor::new("hello world", "py");
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 5);
+
+        let _ = editor.update(&Message::CharacterInput('X'));
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "hello world");
     }
 
     #[test]
@@ -2484,6 +3897,128 @@ mod tests {
     }
 
     #[test]
+    fn test_edit_refreshes_only_affected_search_matches() {
+        let mut editor = CodeEditor::new("foo\nfoo\nfoo", "rs");
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+        editor.search_state.open_search();
+        editor.search_state.set_query("foo".to_owned(), &editor.buffer);
+        editor.cursors.primary_mut().position = (1, 1);
+
+        let _ = editor.update(&Message::CharacterInput('x'));
+
+        let match_lines: Vec<usize> =
+            editor.search_state.matches.iter().map(|item| item.line).collect();
+        assert_eq!(match_lines, vec![0, 2]);
+    }
+
+    #[test]
+    fn test_manual_search_match_selection_updates_current_index() {
+        let mut editor =
+            CodeEditor::new("foo bar foo baz foo\nno result", "txt");
+        editor.search_state.open_search();
+        editor.search_state.set_query("foo".to_owned(), &editor.buffer);
+        assert_eq!(editor.search_state.current_match_index, Some(0));
+
+        let text_start = editor.gutter_width() + 5.0;
+        let char_width = editor.char_width;
+        let line_y = editor.line_height / 2.0;
+        let point_at_col = |col: usize| {
+            iced::Point::new(text_start + char_width * col as f32, line_y)
+        };
+
+        let _ = editor.update(&Message::MouseClick(point_at_col(8)));
+        let _ = editor.update(&Message::MouseDrag(point_at_col(11)));
+        let _ = editor.update(&Message::MouseRelease);
+
+        assert_eq!(
+            editor.cursors.primary().selection_range(),
+            Some(((0, 8), (0, 11)))
+        );
+        assert_eq!(editor.search_state.current_match_index, Some(1));
+
+        let no_match_line = iced::Point::new(
+            text_start + char_width * 4.0,
+            editor.line_height * 1.5,
+        );
+        let _ = editor.update(&Message::MouseClick(no_match_line));
+        let _ = editor.update(&Message::MouseRelease);
+        assert_eq!(editor.search_state.current_match_index, Some(1));
+
+        let _ = editor.update(&Message::FindNext);
+        assert_eq!(editor.search_state.current_match_index, Some(2));
+        let _ = editor.update(&Message::FindPrevious);
+        assert_eq!(editor.search_state.current_match_index, Some(1));
+    }
+
+    #[test]
+    fn test_manual_line_selection_updates_current_search_index() {
+        let mut editor =
+            CodeEditor::new("foo\nprefix foo suffix\nlast foo", "txt");
+        editor.search_state.open_search();
+        editor.search_state.set_query("foo".to_owned(), &editor.buffer);
+        assert_eq!(editor.search_state.current_match_index, Some(0));
+
+        let line_start = iced::Point::new(
+            editor.gutter_width() + 5.0,
+            editor.line_height * 1.5,
+        );
+        let _ = editor.update(&Message::MouseClick(line_start));
+        let _ = editor.update(&Message::MouseRelease);
+
+        assert_eq!(editor.cursors.primary_position(), (1, 0));
+        assert_eq!(editor.search_state.current_match_index, Some(1));
+
+        let _ = editor.update(&Message::FindNext);
+        assert_eq!(editor.search_state.current_match_index, Some(2));
+
+        let mut keyboard_editor =
+            CodeEditor::new("foo\nprefix foo suffix\nlast foo", "txt");
+        keyboard_editor.search_state.open_search();
+        keyboard_editor
+            .search_state
+            .set_query("foo".to_owned(), &keyboard_editor.buffer);
+
+        let _ = keyboard_editor
+            .update(&Message::ArrowKey(ArrowDirection::Down, false));
+
+        assert_eq!(keyboard_editor.cursors.primary_position(), (1, 0));
+        assert_eq!(keyboard_editor.search_state.current_match_index, Some(1));
+    }
+
+    #[test]
+    fn test_incremental_visual_lines_match_full_recalculation_after_newline() {
+        use std::collections::HashSet;
+
+        let mut editor = CodeEditor::new("zero\nabcdefgh\nlast", "rs")
+            .with_wrap_column(Some(4));
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+        editor.cursors.primary_mut().position = (1, 4);
+
+        let _ = editor.visual_lines_cached(800.0);
+        let _ = editor.update(&Message::Enter);
+        let incremental = editor.visual_lines_cached(800.0);
+
+        let calculator = super::super::wrapping::WrappingCalculator::new(
+            editor.wrap_enabled,
+            editor.wrap_column,
+            editor.full_char_width,
+            editor.char_width,
+        );
+        let expected = calculator.calculate_visual_lines(
+            &editor.buffer,
+            800.0,
+            editor.gutter_width(),
+            &HashSet::new(),
+        );
+
+        assert_eq!(incremental.as_ref(), &expected);
+    }
+
+    #[test]
     fn test_multiple_undo_redo() {
         let mut editor = CodeEditor::new("a", "py");
         // Ensure editor has focus for character input
@@ -2620,6 +4155,56 @@ mod tests {
     }
 
     #[test]
+    fn test_context_click_inside_selection_preserves_selection() {
+        let mut editor = CodeEditor::new("hello world", "py");
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 5);
+        let point = iced::Point::new(
+            editor.gutter_width() + 5.0 + editor.char_width * 2.0,
+            editor.line_height / 2.0,
+        );
+
+        let _ = editor.update(&Message::ContextMenuRequested(point));
+
+        assert_eq!(
+            editor.cursors.primary().selection_range(),
+            Some(((0, 0), (0, 5)))
+        );
+    }
+
+    #[test]
+    fn test_context_click_outside_selection_moves_caret() {
+        let mut editor = CodeEditor::new("hello world", "py");
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 5);
+        let point = iced::Point::new(
+            editor.gutter_width() + 5.0 + editor.char_width * 8.0,
+            editor.line_height / 2.0,
+        );
+
+        let _ = editor.update(&Message::ContextMenuRequested(point));
+
+        assert_eq!(editor.cursors.primary_position(), (0, 8));
+        assert!(!editor.cursors.primary().has_selection());
+    }
+
+    #[test]
+    fn test_context_menu_cut_and_select_all() {
+        let mut editor = CodeEditor::new("hello world", "py");
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 5);
+
+        let _ = editor.update(&Message::Cut);
+        assert_eq!(editor.content(), " world");
+
+        let _ = editor.update(&Message::SelectAll);
+        assert_eq!(editor.get_selected_text(), Some(" world".to_string()));
+
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.content(), "hello world");
+    }
+
+    #[test]
     fn test_enter_no_indent() {
         let mut editor = CodeEditor::new("hello", "rs");
         editor.cursors.primary_mut().position = (0, 5);
@@ -2627,6 +4212,45 @@ mod tests {
         assert_eq!(editor.buffer.line(0), "hello");
         assert_eq!(editor.buffer.line(1), "");
         assert_eq!(editor.cursors.primary_position(), (1, 0));
+    }
+
+    #[test]
+    fn test_typing_after_enter_does_not_delete_newline_from_click_anchor() {
+        let mut editor = CodeEditor::new("hello", "rs");
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+
+        // A regular click starts drag tracking with a zero-length anchor.
+        editor.cursors.primary_mut().position = (0, 5);
+        editor.cursors.primary_mut().anchor = Some((0, 5));
+
+        let _ = editor.update(&Message::Enter);
+        let _ = editor.update(&Message::CharacterInput('X'));
+
+        assert_eq!(editor.buffer.line_count(), 2);
+        assert_eq!(editor.buffer.line(0), "hello");
+        assert_eq!(editor.buffer.line(1), "X");
+        assert_eq!(editor.cursors.primary_position(), (1, 1));
+        assert!(!editor.cursors.primary().has_selection());
+    }
+
+    #[test]
+    fn test_enter_replaces_selection_and_undo_restores_text() {
+        let mut editor = CodeEditor::new("hello world", "rs");
+        editor.set_auto_indent_enabled(false);
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 5);
+
+        let _ = editor.update(&Message::Enter);
+
+        assert_eq!(editor.buffer.line(0), "");
+        assert_eq!(editor.buffer.line(1), " world");
+        assert_eq!(editor.cursors.primary_position(), (1, 0));
+        assert!(!editor.cursors.primary().has_selection());
+
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.content(), "hello world");
     }
 
     #[test]
@@ -2816,5 +4440,70 @@ mod tests {
         let _ = editor.update(&Message::Undo);
         assert_eq!(editor.buffer.line(0), "    let x = 1;");
         assert_eq!(editor.cursors.primary_position(), (0, 8));
+    }
+
+    #[test]
+    fn test_open_goto_line_prefills_current_one_based_line() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree", "rs");
+        editor.cursors.primary_mut().position = (1, 2);
+        editor.search_state.open_search();
+
+        let _ = editor.update(&Message::OpenGotoLine);
+
+        assert!(editor.goto_line_state.is_open);
+        assert_eq!(editor.goto_line_state.query, "2");
+        assert!(!editor.search_state.is_open);
+    }
+
+    #[test]
+    fn test_submit_goto_line_moves_to_one_based_line_and_closes_dialog() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree", "rs");
+        let _ = editor.update(&Message::OpenGotoLine);
+        let _ = editor.update(&Message::GotoLineChanged("3".to_string()));
+
+        let _ = editor.update(&Message::SubmitGotoLine);
+
+        assert_eq!(editor.cursors.primary_position(), (2, 0));
+        assert!(!editor.goto_line_state.is_open);
+    }
+
+    #[test]
+    fn test_submit_goto_line_clamps_to_last_line() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree", "rs");
+        let _ = editor.update(&Message::OpenGotoLine);
+        let _ = editor.update(&Message::GotoLineChanged("99".to_string()));
+
+        let _ = editor.update(&Message::SubmitGotoLine);
+
+        assert_eq!(editor.cursors.primary_position(), (2, 0));
+        assert!(!editor.goto_line_state.is_open);
+    }
+
+    #[test]
+    fn test_submit_goto_line_reveals_folded_target() {
+        let mut editor =
+            CodeEditor::new("root\n    child\n        nested\ntail", "rs");
+        editor.fold_all();
+        assert!(editor.hidden_lines_set().contains(&1));
+        let _ = editor.update(&Message::OpenGotoLine);
+        let _ = editor.update(&Message::GotoLineChanged("2".to_string()));
+
+        let _ = editor.update(&Message::SubmitGotoLine);
+
+        assert_eq!(editor.cursors.primary_position(), (1, 0));
+        assert!(!editor.hidden_lines_set().contains(&1));
+    }
+
+    #[test]
+    fn test_submit_goto_line_keeps_dialog_open_for_invalid_input() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree", "rs");
+        editor.cursors.primary_mut().position = (1, 1);
+        let _ = editor.update(&Message::OpenGotoLine);
+        let _ = editor.update(&Message::GotoLineChanged("invalid".to_string()));
+
+        let _ = editor.update(&Message::SubmitGotoLine);
+
+        assert_eq!(editor.cursors.primary_position(), (1, 1));
+        assert!(editor.goto_line_state.is_open);
     }
 }

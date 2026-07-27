@@ -14,7 +14,9 @@ use iced_code_editor::LspOverlayState;
 #[cfg(not(target_arch = "wasm32"))]
 use iced_code_editor::LspPosition;
 use iced_code_editor::Message as EditorMessage;
-use iced_code_editor::{CodeEditor, IndentStyle, Language, theme};
+use iced_code_editor::{
+    CodeEditor, ContextMenuEntry, IndentStyle, Language, theme,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -133,7 +135,10 @@ pub enum Message {
     /// Save file as
     SaveFileAs,
     /// File saved
-    FileSaved(Result<PathBuf, String>),
+    FileSaved(EditorId, Result<PathBuf, String>),
+    /// File revealed in the platform file manager
+    #[cfg(not(target_arch = "wasm32"))]
+    FileRevealed(Result<PathBuf, String>),
     /// Cursor blink tick
     Tick,
     /// Window-level events
@@ -168,6 +173,8 @@ pub enum Message {
     ToggleLineNumbers(EditorId, bool),
     /// Toggle visible whitespace rendering
     ToggleShowWhitespace(EditorId, bool),
+    /// Toggle Vim behavior
+    ToggleVim(EditorId, bool),
     /// Toggle LSP support
     ToggleLsp(EditorId, bool),
     /// Test text input changed
@@ -209,7 +216,7 @@ greet("World")
             FontOption::MONOSPACE
         };
 
-        let mut editor = CodeEditor::new(default_content, "lua");
+        let mut editor = Self::new_editor(default_content);
         let font = current_font.font();
         editor.set_font(font);
 
@@ -296,6 +303,22 @@ greet("World")
         self.log_messages.push(format!("[{}] {}", level, message));
     }
 
+    /// Creates an editor with the demo context-menu entries.
+    fn new_editor(content: &str) -> CodeEditor {
+        CodeEditor::new(content, "lua")
+            .with_custom_context_menu_entries(vec![
+                ContextMenuEntry::item(
+                    "app.format_document",
+                    "Format document",
+                )
+                .with_shortcut("Ctrl+Shift+F"),
+                ContextMenuEntry::separator(),
+                ContextMenuEntry::item("app.rename_symbol", "Rename symbol")
+                    .with_enabled(false),
+            ])
+            .with_default_context_menu_enabled(true)
+    }
+
     pub fn get_active_tab(&mut self) -> Option<&mut EditorTab> {
         let id = self.active_tab_id;
         self.tabs.iter_mut().find(|t| t.id == id)
@@ -315,19 +338,67 @@ greet("World")
         self.get_tab(id).map(|tab| &mut tab.editor)
     }
 
-    /// Returns a mutable reference to the active editor and its associated file path.
-    fn get_active_editor_and_file(
-        &mut self,
-    ) -> Option<(&mut CodeEditor, &mut Option<PathBuf>)> {
-        self.get_active_tab().map(|tab| (&mut tab.editor, &mut tab.file_path))
-    }
-
     /// Returns a mutable reference to the specified editor and its associated file path.
     fn get_editor_and_file(
         &mut self,
         id: EditorId,
     ) -> Option<(&mut CodeEditor, &mut Option<PathBuf>)> {
         self.get_tab(id).map(|tab| (&mut tab.editor, &mut tab.file_path))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reveal_path_for_editor(
+        &self,
+        editor_id: EditorId,
+    ) -> Result<PathBuf, String> {
+        let tab = self.tabs.iter().find(|tab| tab.id == editor_id).ok_or_else(
+            || "Editor tab not found for reveal request".to_string(),
+        )?;
+
+        tab.file_path.clone().ok_or_else(|| {
+            "This tab does not have a file path to reveal".to_string()
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn handle_reveal_in_file_manager(
+        &mut self,
+        editor_id: EditorId,
+    ) -> Task<Message> {
+        match self.reveal_path_for_editor(editor_id) {
+            Ok(path) => {
+                self.log(
+                    "INFO",
+                    &format!("Revealing in file manager: {}", path.display()),
+                );
+                Task::perform(
+                    file_ops::reveal_in_file_manager(path),
+                    Message::FileRevealed,
+                )
+            }
+            Err(error) => self.handle_file_revealed(Err(error)),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn handle_file_revealed(
+        &mut self,
+        result: Result<PathBuf, String>,
+    ) -> Task<Message> {
+        match result {
+            Ok(path) => {
+                self.log(
+                    "INFO",
+                    &format!("Revealed in file manager: {}", path.display()),
+                );
+                self.error_message = None;
+            }
+            Err(error) => {
+                self.log("ERROR", &error);
+                self.error_message = Some(error);
+            }
+        }
+        Task::none()
     }
 
     /// Handles the file open request by displaying a file picker dialog.
@@ -378,7 +449,7 @@ greet("World")
                     let new_id = EditorId(self.next_tab_id);
                     self.next_tab_id += 1;
 
-                    let mut editor = CodeEditor::new(&content, "lua"); // Default language, will update
+                    let mut editor = Self::new_editor(&content); // Default language, will update
                     let font = self.current_font.font();
                     editor.set_font(font);
                     editor.set_font_size(
@@ -389,6 +460,9 @@ greet("World")
                     editor
                         .set_theme(theme::from_iced_theme(&self.current_theme));
                     editor.set_language(self.current_language);
+                    editor.set_reveal_in_file_manager_enabled(!cfg!(
+                        target_arch = "wasm32"
+                    ));
 
                     let tab = EditorTab {
                         id: new_id,
@@ -426,6 +500,9 @@ greet("World")
                 let task = editor.reset(&content);
                 editor.set_theme(style);
                 editor.mark_saved();
+                editor.set_reveal_in_file_manager_enabled(!cfg!(
+                    target_arch = "wasm32"
+                ));
                 #[cfg(not(target_arch = "wasm32"))]
                 let path_for_lsp = path.clone();
                 *current_file = Some(path);
@@ -453,62 +530,64 @@ greet("World")
     }
 
     /// Handles saving the current file to disk.
-    fn handle_file_save(&mut self) -> Task<Message> {
+    fn handle_file_save(&mut self, editor_id: EditorId) -> Task<Message> {
         let tab_snapshot = self
             .tabs
             .iter()
-            .find(|t| t.id == self.active_tab_id)
+            .find(|t| t.id == editor_id)
             .map(|tab| (tab.file_path.clone(), tab.editor.content()));
         let Some((file_path, content)) = tab_snapshot else {
-            self.log("ERROR", "No active tab to save");
+            self.log("ERROR", "Editor tab not found for save");
             return Task::none();
         };
 
         if let Some(path) = file_path {
             self.log("INFO", &format!("Saving to: {}", path.display()));
-            Task::perform(
-                file_ops::save_file(path, content),
-                Message::FileSaved,
-            )
+            Task::perform(file_ops::save_file(path, content), move |result| {
+                Message::FileSaved(editor_id, result)
+            })
         } else {
-            self.update(Message::SaveFileAs)
+            self.handle_file_save_as(editor_id)
         }
     }
 
     /// Handles the "Save As" operation by displaying a file save dialog.
-    fn handle_file_save_as(&mut self) -> Task<Message> {
+    fn handle_file_save_as(&mut self, editor_id: EditorId) -> Task<Message> {
         self.log("INFO", "Opening save dialog...");
-        let Some(editor) = self.get_active_editor() else {
-            self.log("ERROR", "No active tab to save as");
+        let Some(tab) = self.tabs.iter().find(|tab| tab.id == editor_id) else {
+            self.log("ERROR", "Editor tab not found for save as");
             return Task::none();
         };
-        let content = editor.content();
-        Task::perform(
-            file_ops::save_file_as_dialog(content),
-            Message::FileSaved,
-        )
+        let content = tab.editor.content();
+        Task::perform(file_ops::save_file_as_dialog(content), move |result| {
+            Message::FileSaved(editor_id, result)
+        })
     }
 
     /// Handles the result of a file save operation.
     fn handle_file_saved(
         &mut self,
+        editor_id: EditorId,
         result: Result<PathBuf, String>,
     ) -> Task<Message> {
         match result {
             Ok(path) => {
                 self.log("INFO", &format!("Saved: {}", path.display()));
                 let Some((editor, current_file)) =
-                    self.get_active_editor_and_file()
+                    self.get_editor_and_file(editor_id)
                 else {
-                    self.log("ERROR", "Active tab missing on save");
+                    self.log("ERROR", "Editor tab missing on save");
                     self.error_message =
-                        Some("Active tab missing on save".to_string());
+                        Some("Editor tab missing on save".to_string());
                     return Task::none();
                 };
                 *current_file = Some(path);
                 editor.mark_saved();
+                editor.set_reveal_in_file_manager_enabled(!cfg!(
+                    target_arch = "wasm32"
+                ));
 
-                if let Some(tab) = self.get_active_tab() {
+                if let Some(tab) = self.get_tab(editor_id) {
                     tab.is_dirty = false;
                 }
 
@@ -723,6 +802,18 @@ greet("World")
         Task::none()
     }
 
+    /// Handles toggling Vim behavior for a specific editor.
+    fn handle_toggle_vim(
+        &mut self,
+        editor_id: EditorId,
+        enabled: bool,
+    ) -> Task<Message> {
+        if let Some(tab) = self.get_tab(editor_id) {
+            tab.editor.set_vim_enabled(enabled);
+        }
+        Task::none()
+    }
+
     /// Handles toggling LSP support for a specific editor.
     fn handle_toggle_lsp(
         &mut self,
@@ -762,6 +853,37 @@ greet("World")
         editor_id: EditorId,
         event: &EditorMessage,
     ) -> Task<Message> {
+        if let EditorMessage::CustomContextMenuAction(id) = event {
+            match id.as_str() {
+                "app.format_document" => {
+                    self.log("INFO", "Format document requested");
+                }
+                "app.rename_symbol" => {
+                    self.log("INFO", "Rename symbol requested");
+                }
+                unknown => {
+                    self.log(
+                        "WARN",
+                        &format!(
+                            "Ignoring unknown context-menu action: {unknown}"
+                        ),
+                    );
+                }
+            }
+            return Task::none();
+        }
+
+        if matches!(event, EditorMessage::RevealInFileManager) {
+            #[cfg(not(target_arch = "wasm32"))]
+            return self.handle_reveal_in_file_manager(editor_id);
+            #[cfg(target_arch = "wasm32")]
+            return Task::none();
+        }
+
+        if matches!(event, EditorMessage::WriteRequested) {
+            return self.handle_file_save(editor_id);
+        }
+
         #[cfg(not(target_arch = "wasm32"))]
         {
             // Intercept Escape to close completion menu
@@ -922,6 +1044,7 @@ greet("World")
 
         let task = editor.reset(template.content());
         editor.set_theme(style);
+        editor.set_reveal_in_file_manager_enabled(false);
         *current_file = None;
 
         if let Some(tab) = self.get_tab(editor_id) {
@@ -1037,7 +1160,7 @@ greet("World")
                     let new_id = EditorId(self.next_tab_id);
                     self.next_tab_id += 1;
 
-                    let mut editor = CodeEditor::new(&content, "lua");
+                    let mut editor = Self::new_editor(&content);
                     let font = self.current_font.font();
                     editor.set_font(font);
                     editor.set_font_size(
@@ -1048,6 +1171,7 @@ greet("World")
                     editor
                         .set_theme(theme::from_iced_theme(&self.current_theme));
                     editor.set_language(self.current_language);
+                    editor.set_reveal_in_file_manager_enabled(true);
 
                     let tab = EditorTab {
                         id: new_id,
@@ -1072,6 +1196,7 @@ greet("World")
                     return Task::none();
                 };
                 *current_file = Some(path.clone());
+                editor.set_reveal_in_file_manager_enabled(true);
                 let t1 = editor
                     .reset(&content)
                     .map(move |e| Message::EditorEvent(target_tab_id, e));
@@ -1147,9 +1272,13 @@ greet("World")
             // File operations
             Message::OpenFile => self.handle_file_open(),
             Message::FileOpened(result) => self.handle_file_opened(result),
-            Message::SaveFile => self.handle_file_save(),
-            Message::SaveFileAs => self.handle_file_save_as(),
-            Message::FileSaved(result) => self.handle_file_saved(result),
+            Message::SaveFile => self.handle_file_save(self.active_tab_id),
+            Message::SaveFileAs => self.handle_file_save_as(self.active_tab_id),
+            Message::FileSaved(editor_id, result) => {
+                self.handle_file_saved(editor_id, result)
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::FileRevealed(result) => self.handle_file_revealed(result),
             // Editor configuration
             Message::FontChanged(font_option) => {
                 self.handle_font_changed(font_option)
@@ -1187,6 +1316,9 @@ greet("World")
             }
             Message::ToggleShowWhitespace(editor_id, enabled) => {
                 self.handle_toggle_show_whitespace(editor_id, enabled)
+            }
+            Message::ToggleVim(editor_id, enabled) => {
+                self.handle_toggle_vim(editor_id, enabled)
             }
             Message::ToggleLsp(editor_id, enabled) => {
                 self.handle_toggle_lsp(editor_id, enabled)
@@ -1367,6 +1499,7 @@ greet("World")
                         let default_content = "";
                         let _ = tab.editor.reset(default_content);
                         tab.file_path = None;
+                        tab.editor.set_reveal_in_file_manager_enabled(false);
                         tab.is_dirty = false;
                     }
                     self.check_tabs_overflow();
@@ -1381,7 +1514,7 @@ greet("World")
                 let new_id = EditorId(self.next_tab_id);
                 self.next_tab_id += 1;
 
-                let mut editor = CodeEditor::new("", "lua");
+                let mut editor = Self::new_editor("");
                 let font = self.current_font.font();
                 editor.set_font(font);
                 editor.set_font_size(
@@ -1420,5 +1553,83 @@ greet("World")
     /// Returns the current theme for the application.
     pub fn theme(&self) -> Theme {
         self.current_theme.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_reveal_request_forwards_tab_path() {
+        let (mut app, _) = DemoApp::new();
+        let path = PathBuf::from("/tmp/iced-code-editor/reveal.lua");
+
+        let _ = app.handle_file_opened(Ok((
+            path.clone(),
+            "print('reveal')".to_string(),
+        )));
+
+        assert_eq!(app.reveal_path_for_editor(app.active_tab_id), Ok(path));
+        assert!(
+            app.get_active_editor().is_some_and(|editor| {
+                editor.reveal_in_file_manager_enabled()
+            })
+        );
+    }
+
+    #[test]
+    fn test_untitled_tab_does_not_enable_reveal() {
+        let (mut app, _) = DemoApp::new();
+
+        assert_eq!(
+            app.reveal_path_for_editor(app.active_tab_id),
+            Err("This tab does not have a file path to reveal".to_string())
+        );
+        assert!(
+            app.get_active_editor()
+                .is_some_and(|editor| !editor.reveal_in_file_manager_enabled())
+        );
+    }
+
+    #[test]
+    fn test_reveal_error_is_reported() {
+        let (mut app, _) = DemoApp::new();
+        let error = "Unable to reveal /tmp/missing.lua: test failure";
+
+        let _ = app.handle_file_revealed(Err(error.to_string()));
+        let expected_log = format!("[ERROR] {error}");
+
+        assert_eq!(app.error_message.as_deref(), Some(error));
+        assert_eq!(
+            app.log_messages.last().map(String::as_str),
+            Some(expected_log.as_str())
+        );
+    }
+
+    #[test]
+    fn test_save_result_updates_originating_tab() {
+        let (mut app, _) = DemoApp::new();
+        let saved_editor_id = app.active_tab_id;
+        let _ = app.update(Message::NewTab);
+        let active_editor_id = app.active_tab_id;
+        let path = PathBuf::from("/tmp/iced-code-editor/vim-write.lua");
+
+        let _ = app.handle_file_saved(saved_editor_id, Ok(path.clone()));
+
+        assert_eq!(
+            app.tabs
+                .iter()
+                .find(|tab| tab.id == saved_editor_id)
+                .and_then(|tab| tab.file_path.as_ref()),
+            Some(&path)
+        );
+        assert_eq!(
+            app.tabs
+                .iter()
+                .find(|tab| tab.id == active_editor_id)
+                .and_then(|tab| tab.file_path.as_ref()),
+            None
+        );
     }
 }
