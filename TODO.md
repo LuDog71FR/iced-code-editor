@@ -32,7 +32,6 @@ None
 12. **Bracket pair colorization** (rainbow brackets)
 13. **Inline color preview** (swatches for `#rrggbb`)
 14. **Minimap** (overview of entire file & clickable navigation)
-15. **Vim mode**
 
 ## Performance Improvements
 
