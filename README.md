@@ -42,6 +42,7 @@ Screenshot of the demo application:
 - **Move and duplicate lines** with keyboard shortcuts
 - **Toggle comment** on the current line or selection (`Ctrl+/`)
 - **Visible whitespace rendering** — spaces shown as `·`, tabs as `→`
+- **Optional Vim mode** with Normal, Insert, Visual, and Visual Line modes
 
 ## Planned features
 
@@ -140,6 +141,81 @@ fn main() -> iced::Result {
 }
 ```
 
+## Vim Mode
+
+Vim behavior is disabled by default and configured independently for each
+`CodeEditor` instance. Enabling it enters Normal mode and collapses any
+multi-cursor state to the primary cursor:
+
+```rust
+use iced_code_editor::{CodeEditor, VimMode};
+
+let mut editor =
+    CodeEditor::new("fn main() {}", "rs").with_vim_enabled(true);
+assert!(editor.vim_enabled());
+assert_eq!(editor.vim_mode(), Some(VimMode::Normal));
+
+editor.set_vim_enabled(false);
+assert_eq!(editor.vim_mode(), None);
+```
+
+With the editor focused, press `Ctrl+Alt+V` (or `Command+Alt+V` on macOS)
+to switch between Vim and standard editing. Enabling Vim always starts in
+Normal mode. The regular `Ctrl`/`Command+V` system-paste shortcut is unchanged.
+
+The MVP supports these keys:
+
+| Context | Keys | Behavior |
+| ------- | ---- | -------- |
+| Normal/Visual motion | `h`, `j`, `k`, `l` | Move left, down, up, or right |
+| Normal/Visual motion | `w`, `b`, `e` | Move to the next word, previous word, or word end |
+| Normal/Visual motion | `0`, `^`, `$` | Move to line start, first non-blank, or line end |
+| Normal/Visual motion | `gg`, `G` | Move to document start or end when no count is given |
+| Normal/Visual motion | `[count]gg`, `[count]G` | Jump to the 1-based logical line, e.g. `5G` or `5gg` jumps to line 5 |
+| Enter Insert | `i`, `a`, `I`, `A` | Insert before/after the cursor, at first non-blank, or at line end |
+| Enter Insert | `o`, `O` | Open line(s) below or above |
+| Select | `v`, `V` | Enter character-wise Visual or Visual Line mode |
+| Operators | `d{motion}`, `c{motion}`, `y{motion}` | Delete, change, or yank through any supported motion |
+| Line operators | `[count]dd`, `[count]cc`, `[count]yy` | Delete, change, or yank consecutive lines, e.g. `5yy` yanks five lines |
+| Visual operators | `d`, `c`, `y` | Apply the operator to the Visual selection |
+| Direct edits | `x`, `p`, `P` | Delete characters; paste after or before from the unnamed register |
+| History | `u`, `Ctrl+R` | Undo or redo |
+| Search | `/pattern`, then `Enter` | Search forward from the cursor and wrap at the end |
+| Search repeat | `n`, `N` | Repeat the last search forward or backward |
+| Go to line | `:N`, then `Enter` | Jump to 1-based logical line `N`, clamped to the document |
+| Save | `:w`, then `Enter` | Request that the host save the current document |
+| Exit Vim mode | `:q`, then `Enter` | Disable Vim behavior for the current editor |
+| Save and exit Vim mode | `:wq`, then `Enter` | Request a save and disable Vim behavior |
+| Command line | `Backspace`, `Escape` | Edit or cancel the active `/` or `:` input |
+| Mode exit | `Escape` | Return to Normal mode and clear pending prefixes/selections |
+| Count prefix | `1`–`9`, then `0` | Repeat motions, line operators, `x`, paste, undo, or opened lines; operator and motion counts multiply |
+
+When Vim mode is enabled, a fixed status line below the editor shows the
+current mode. While entering `/pattern` or `:N`, it shows the command and
+current input; otherwise it shows pending Normal-mode keys such as `5d` or
+`3g`. The status line remains visible while the document scrolls.
+
+`j` and `k` move by visible display lines, so they follow wrapped lines and
+skip folded content. Vim mode is intentionally single-cursor; attempts to add
+extra cursors are ignored while it is enabled.
+
+Vim `d`, `c`, `y`, `x`, `p`, and `P` use an unnamed register stored inside
+that editor instance. It distinguishes character-wise and line-wise content
+and does not access the system clipboard. Platform `Ctrl`/`Command` clipboard
+shortcuts (`C`, `X`, and `V`) keep their existing system-clipboard behavior
+and take priority over Vim parsing.
+
+Because the editor does not own a file path or perform disk I/O, `:w`, `:wq`,
+and `Ctrl`/`Command+S` emit `Message::WriteRequested`. Hosts should intercept
+that message and save the corresponding document. The demo app binds all
+three inputs to its existing Save/Save As flow.
+
+This is a focused MVP, not full Vim compatibility. Apart from the supported
+`:N` line jump and `:q`/`:w`/`:wq` commands, it does not implement Ex
+commands. It also does not implement regex search, search history, text
+objects, macros, named registers, marks, `.` repeat, or configurable key
+mappings.
+
 ## Keyboard Shortcuts
 
 The editor supports a comprehensive set of keyboard shortcuts:
@@ -231,6 +307,84 @@ These shortcuts are active only when the LSP completion menu is visible:
 | **Arrow Left** / **Arrow Right**  | Clear completion menu               |
 
 ## Usage Examples
+
+### Custom context menu
+
+Custom context-menu actions are identified by stable strings chosen by your
+application. Custom entries appear before the built-in editing actions:
+
+```rust
+use iced_code_editor::{CodeEditor, ContextMenuEntry};
+
+let editor = CodeEditor::new("fn main() {}", "rust")
+    .with_custom_context_menu_entries(vec![
+        ContextMenuEntry::item(
+            "app.format_document",
+            "Format document",
+        )
+        .with_shortcut("Ctrl+Shift+F"),
+        ContextMenuEntry::separator(),
+        ContextMenuEntry::item("app.rename_symbol", "Rename symbol")
+            .with_enabled(false),
+    ])
+    .with_default_context_menu_enabled(true);
+```
+
+The editor automatically adds a separator between the custom and built-in
+groups. Pass `false` to `with_default_context_menu_enabled` to replace the
+built-in menu completely. At runtime, use
+`set_custom_context_menu_entries` and
+`set_default_context_menu_enabled` to update the same configuration.
+
+Handle custom actions in the outer application before forwarding other editor
+messages to `CodeEditor::update`:
+
+```rust
+match event {
+    EditorMessage::CustomContextMenuAction(id) => {
+        match id.as_str() {
+            "app.format_document" => format_document(),
+            "app.rename_symbol" => rename_symbol(),
+            unknown => {
+                eprintln!(
+                    "Ignoring unknown context-menu action: {unknown}"
+                );
+            }
+        }
+        Task::none()
+    }
+    other => editor.update(&other).map(Message::EditorEvent),
+}
+```
+
+Unknown IDs should be ignored or logged explicitly. The editor emits custom
+action IDs unchanged and does not interpret or execute them internally.
+
+The built-in labels follow the language configured with `set_language`.
+Custom-entry labels are supplied by the host application, so localize those
+strings before passing them to the editor.
+
+Applications with a real filesystem path can opt into the built-in reveal
+request:
+
+```rust
+editor.set_reveal_in_file_manager_enabled(file_path.is_some());
+
+match event {
+    EditorMessage::RevealInFileManager => {
+        reveal_file(file_path.as_deref());
+        Task::none()
+    }
+    other => editor.update(&other).map(Message::EditorEvent),
+}
+```
+
+The menu label is platform-specific: **Reveal in Finder** on macOS,
+**Reveal in File Explorer** on Windows, and **Open Containing Folder** on
+other desktop platforms. The editor only emits the request; the host is
+responsible for invoking the operating system and reporting failures. The demo
+enables this item for tabs backed by a desktop path and keeps it hidden for
+untitled tabs and WebAssembly.
 
 ### Changing Themes
 

@@ -187,7 +187,9 @@ pub fn highlight_line_spans(
 
 use super::folding;
 use super::wrapping::{VisualLine, WrappingCalculator};
-use super::{ArrowDirection, CodeEditor, Message, measure_text_width};
+use super::{
+    ArrowDirection, CodeEditor, Message, measure_char_width, measure_text_width,
+};
 use iced::widget::canvas::Action;
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
@@ -297,8 +299,8 @@ impl CodeEditor {
             return;
         }
 
-        let regions = self.foldable_regions();
-        if !folding::is_fold_header(&regions, visual_line.logical_line) {
+        if !folding::is_line_fold_header(&self.buffer, visual_line.logical_line)
+        {
             return;
         }
 
@@ -448,45 +450,63 @@ impl CodeEditor {
 
         let line_count = self.buffer.line_count();
         let target = logical_line.min(line_count.saturating_sub(1));
+        let missing_lines =
+            target.saturating_add(1).saturating_sub(cache.valid_len());
+        let lines_to_parse =
+            missing_lines.min(self.highlight_lines_remaining.get());
+        let parse_end = cache
+            .valid_len()
+            .saturating_add(lines_to_parse)
+            .saturating_sub(1)
+            .min(target);
         let mut result = None;
-        for index in cache.valid_len()..=target {
-            // syntect's `_newlines` syntaxes expect a trailing '\n' for correct
-            // end-of-line context handling; the stored buffer line has none.
-            let mut line = self.buffer.line(index).to_string();
-            line.push('\n');
+        if lines_to_parse > 0 {
+            for index in cache.valid_len()..=parse_end {
+                // syntect's `_newlines` syntaxes expect a trailing '\n' for correct
+                // end-of-line context handling; the stored buffer line has none.
+                let mut line = self.buffer.line(index).to_string();
+                line.push('\n');
 
-            let ops =
-                parse_state.parse_line(&line, syntax_set).unwrap_or_default();
-            let spans: Vec<(Color, String)> = HighlightIterator::new(
-                &mut highlight_state,
-                &ops,
-                &line,
-                &highlighter,
-            )
-            .filter_map(|(style, text)| {
-                let text = text.strip_suffix('\n').unwrap_or(text);
-                if text.is_empty() {
-                    None
-                } else {
-                    Some((color_from_style(style), text.to_string()))
+                let ops = parse_state
+                    .parse_line(&line, syntax_set)
+                    .unwrap_or_default();
+                let spans: Vec<(Color, String)> = HighlightIterator::new(
+                    &mut highlight_state,
+                    &ops,
+                    &line,
+                    &highlighter,
+                )
+                .filter_map(|(style, text)| {
+                    let text = text.strip_suffix('\n').unwrap_or(text);
+                    if text.is_empty() {
+                        None
+                    } else {
+                        Some((color_from_style(style), text.to_string()))
+                    }
+                })
+                .collect();
+
+                let spans = Rc::new(spans);
+                cache.push_line(
+                    Rc::clone(&spans),
+                    parse_state.clone(),
+                    highlight_state.clone(),
+                );
+                if index == logical_line {
+                    result = Some(spans);
                 }
-            })
-            .collect();
-
-            let spans = Rc::new(spans);
-            cache.push_line(
-                Rc::clone(&spans),
-                parse_state.clone(),
-                highlight_state.clone(),
-            );
-            if index == logical_line {
-                result = Some(spans);
             }
         }
+        self.highlight_lines_remaining.set(
+            self.highlight_lines_remaining.get().saturating_sub(lines_to_parse),
+        );
 
-        result
-            .or_else(|| cache.spans(logical_line))
-            .unwrap_or_else(|| Rc::new(Vec::new()))
+        result.or_else(|| cache.spans(logical_line)).unwrap_or_else(|| {
+            Rc::new(vec![(
+                self.style.text_color,
+                self.buffer.line(logical_line).to_string(),
+            )])
+        })
     }
 
     /// Draws text content with syntax highlighting or plain text fallback.
@@ -706,7 +726,8 @@ impl CodeEditor {
         start_visual_idx: usize,
         end_visual_idx: usize,
     ) {
-        if !self.search_state.is_open || self.search_state.query.is_empty() {
+        if !self.search_matches_visible() || self.search_state.query.is_empty()
+        {
             return;
         }
 
@@ -1100,17 +1121,55 @@ impl CodeEditor {
         } else if self.show_cursor && self.cursor_visible && self.has_focus() {
             // [Branch B] Normal caret rendering mode
             // ---------------------------------------------------------------------
-            // Draw a caret for every cursor in the set.
-            // The primary cursor is drawn exactly like secondary ones — the viewport
-            // follows the primary, but visually all carets look the same.
+            // Vim mode is single-cursor and Visual selections use an inclusive
+            // active position that differs from the editor's half-open cursor.
+            // Standard editing continues to render every cursor in the set.
             // ---------------------------------------------------------------------
-            for cursor in self.cursors.iter() {
-                self.draw_single_caret(frame, ctx, cursor.position);
+            if self.vim_enabled {
+                let position = self
+                    .vim_state
+                    .visual_positions()
+                    .map(|(_, active)| active)
+                    .unwrap_or_else(|| self.cursors.primary_position());
+                self.draw_single_caret(frame, ctx, position);
+            } else {
+                for cursor in self.cursors.iter() {
+                    self.draw_single_caret(frame, ctx, cursor.position);
+                }
             }
         }
     }
 
-    /// Draws a single 2px vertical caret at the given logical (line, col) position.
+    /// Returns the cursor size for a logical position using current font metrics.
+    ///
+    /// Standard editing and Vim Insert mode use the existing 2px bar. Vim
+    /// Normal and Visual modes use the width of the character under the cursor;
+    /// an empty line or end-of-line position uses one narrow character width.
+    fn cursor_size_for_position(&self, position: (usize, usize)) -> Size {
+        let uses_block =
+            self.vim_enabled && self.vim_state.mode() != super::VimMode::Insert;
+        let width = if uses_block {
+            self.buffer
+                .line(position.0)
+                .chars()
+                .nth(position.1)
+                .map(|ch| {
+                    measure_char_width(
+                        ch,
+                        self.full_char_width,
+                        self.char_width,
+                    )
+                })
+                .filter(|width| *width > 0.0)
+                .unwrap_or(self.char_width)
+        } else {
+            2.0
+        };
+
+        Size::new(width, (self.line_height - 4.0).max(1.0))
+    }
+
+    /// Draws one cursor at the given logical (line, col) position.
     ///
     /// # Arguments
     ///
@@ -1145,11 +1204,16 @@ impl CodeEditor {
             let cursor_x = cursor_x_content - ctx.horizontal_scroll_offset;
             let cursor_y = cursor_visual as f32 * ctx.line_height;
 
-            // Draw standard caret (2px vertical bar)
+            let cursor_size = self.cursor_size_for_position(position);
+            let mut cursor_color = self.style.text_color;
+            if cursor_size.width > 2.0 {
+                cursor_color.a *= 0.55;
+            }
+
             frame.fill_rectangle(
                 Point::new(cursor_x, cursor_y + 2.0),
-                Size::new(2.0, ctx.line_height - 4.0),
-                self.style.text_color,
+                cursor_size,
+                cursor_color,
             );
         }
     }
@@ -1187,6 +1251,32 @@ impl CodeEditor {
         modified_key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
     ) -> Option<Action<Message>> {
+        // `command()` maps to Command on macOS and Control elsewhere. Keep
+        // accepting Control on macOS for backwards compatibility.
+        let command_pressed = modifiers.command() || modifiers.control();
+
+        // Toggle Vim behavior without conflicting with the platform paste
+        // shortcut (Ctrl/Cmd+V).
+        if command_pressed
+            && modifiers.alt()
+            && !modifiers.shift()
+            && matches!(key, keyboard::Key::Character(v) if v.as_str() == "v")
+        {
+            return Some(Action::publish(Message::ToggleVimMode).and_capture());
+        }
+
+        // Handle Ctrl/Cmd+S through the same host-owned save request as Vim
+        // `:w`.
+        if command_pressed
+            && !modifiers.alt()
+            && !modifiers.shift()
+            && matches!(key, keyboard::Key::Character(s) if s.as_str() == "s")
+        {
+            return Some(
+                Action::publish(Message::WriteRequested).and_capture(),
+            );
+        }
+
         // Shift+Tab: focus navigation backward (Tab alone inserts indentation)
         if matches!(key, keyboard::Key::Named(keyboard::key::Named::Tab))
             && modifiers.shift()
@@ -1198,7 +1288,7 @@ impl CodeEditor {
         }
 
         // Handle Ctrl+C / Ctrl+Insert (copy)
-        if (modifiers.control()
+        if (command_pressed
             && matches!(key, keyboard::Key::Character(c) if c.as_str() == "c"))
             || (modifiers.control()
                 && matches!(
@@ -1209,22 +1299,50 @@ impl CodeEditor {
             return Some(Action::publish(Message::Copy).and_capture());
         }
 
-        // Handle Ctrl+Z (undo)
-        if modifiers.control()
+        // Handle Ctrl/Cmd+X (cut)
+        if command_pressed
+            && matches!(key, keyboard::Key::Character(x) if x.as_str() == "x")
+        {
+            return Some(Action::publish(Message::Cut).and_capture());
+        }
+
+        // Handle Ctrl/Cmd+A (select all)
+        if command_pressed
+            && matches!(key, keyboard::Key::Character(a) if a.as_str() == "a")
+        {
+            return Some(Action::publish(Message::SelectAll).and_capture());
+        }
+
+        // Handle Ctrl/Cmd+Z (undo). Shift+Cmd+Z is redo on macOS.
+        if command_pressed
+            && !modifiers.shift()
             && matches!(key, keyboard::Key::Character(z) if z.as_str() == "z")
         {
             return Some(Action::publish(Message::Undo).and_capture());
         }
 
-        // Handle Ctrl+Y (redo)
-        if modifiers.control()
-            && matches!(key, keyboard::Key::Character(y) if y.as_str() == "y")
+        // Handle Ctrl/Cmd+Y and Shift+Cmd+Z (redo)
+        if command_pressed
+            && (matches!(key, keyboard::Key::Character(y) if y.as_str() == "y")
+                || (modifiers.shift()
+                    && matches!(key, keyboard::Key::Character(z) if z.as_str() == "z")))
+        {
+            return Some(Action::publish(Message::Redo).and_capture());
+        }
+
+        // Vim's redo binding is Ctrl+R in Normal mode. Keep the existing
+        // platform redo shortcuts above available in every editor mode.
+        if self.vim_enabled
+            && self.vim_state.mode() == super::VimMode::Normal
+            && modifiers.control()
+            && !modifiers.shift()
+            && matches!(key, keyboard::Key::Character(r) if r.as_str() == "r")
         {
             return Some(Action::publish(Message::Redo).and_capture());
         }
 
         // Handle Ctrl+F (open search)
-        if modifiers.control()
+        if command_pressed
             && matches!(key, keyboard::Key::Character(f) if f.as_str() == "f")
             && self.search_replace_enabled
         {
@@ -1232,7 +1350,7 @@ impl CodeEditor {
         }
 
         // Handle Ctrl+H (open search and replace)
-        if modifiers.control()
+        if command_pressed
             && matches!(key, keyboard::Key::Character(h) if h.as_str() == "h")
             && self.search_replace_enabled
         {
@@ -1241,13 +1359,29 @@ impl CodeEditor {
             );
         }
 
-        // Handle Escape — handled by CloseSearch message, which also collapses multi-cursor
+        // Handle Cmd/Ctrl+G (open go-to-line input)
+        if command_pressed
+            && matches!(key, keyboard::Key::Character(g) if g.as_str() == "g")
+        {
+            return Some(Action::publish(Message::OpenGotoLine).and_capture());
+        }
+
+        // Handle Escape — close the active overlay, or collapse multi-cursor.
         if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
-            return Some(Action::publish(Message::CloseSearch).and_capture());
+            let message = if self.goto_line_state.is_open {
+                Message::CloseGotoLine
+            } else if self.search_state.is_open {
+                Message::CloseSearch
+            } else if self.vim_enabled {
+                Message::VimKey('\u{1b}')
+            } else {
+                Message::CloseSearch
+            };
+            return Some(Action::publish(message).and_capture());
         }
 
         // Handle Ctrl+D (select next occurrence)
-        if modifiers.control()
+        if command_pressed
             && matches!(key, keyboard::Key::Character(d) if d.as_str() == "d")
         {
             return Some(
@@ -1261,7 +1395,7 @@ impl CodeEditor {
         // works regardless of layout: on US/QWERTY `/` is unshifted (in `key`),
         // while on French AZERTY it is Shift+`:` and only appears in
         // `modified_key`.
-        if modifiers.control()
+        if command_pressed
             && (matches!(key, keyboard::Key::Character(c) if c.as_str() == "/")
                 || matches!(modified_key, keyboard::Key::Character(c) if c.as_str() == "/"))
         {
@@ -1354,7 +1488,7 @@ impl CodeEditor {
         }
 
         // Handle Ctrl+V / Shift+Insert (paste) - read clipboard and send paste message
-        if (modifiers.control()
+        if (command_pressed
             && matches!(key, keyboard::Key::Character(v) if v.as_str() == "v"))
             || (modifiers.shift()
                 && matches!(
@@ -1367,14 +1501,14 @@ impl CodeEditor {
         }
 
         // Handle Ctrl+Home (go to start of document)
-        if modifiers.control()
+        if command_pressed
             && matches!(key, keyboard::Key::Named(keyboard::key::Named::Home))
         {
             return Some(Action::publish(Message::CtrlHome).and_capture());
         }
 
         // Handle Ctrl+End (go to end of document)
-        if modifiers.control()
+        if command_pressed
             && matches!(key, keyboard::Key::Named(keyboard::key::Named::End))
         {
             return Some(Action::publish(Message::CtrlEnd).and_capture());
@@ -1420,6 +1554,14 @@ impl CodeEditor {
         None
     }
 
+    fn printable_input_message(&self, ch: char) -> Message {
+        if self.vim_enabled && self.vim_state.mode() != super::VimMode::Insert {
+            Message::VimKey(ch)
+        } else {
+            Message::CharacterInput(ch)
+        }
+    }
+
     /// Handles character input and special navigation keys.
     ///
     /// This implementation includes focus event propagation and focus chain management
@@ -1463,7 +1605,7 @@ impl CodeEditor {
                 && !first_char.is_control()
             {
                 return Some(
-                    Action::publish(Message::CharacterInput(first_char))
+                    Action::publish(self.printable_input_message(first_char))
                         .and_capture(),
                 );
             }
@@ -1472,16 +1614,38 @@ impl CodeEditor {
         // PRIORITY 2: Handle special named keys (navigation, editing)
         // These are only processed if text didn't contain a printable character
         let message = match key {
-            keyboard::Key::Named(keyboard::key::Named::Backspace) => {
-                Some(Message::Backspace)
+            keyboard::Key::Named(keyboard::key::Named::Backspace)
+                if !self.vim_enabled
+                    || self.vim_state.mode() == super::VimMode::Insert
+                    || self.vim_state.command_line_active() =>
+            {
+                if self.vim_state.command_line_active() {
+                    Some(Message::VimKey('\u{8}'))
+                } else {
+                    Some(Message::Backspace)
+                }
             }
-            keyboard::Key::Named(keyboard::key::Named::Delete) => {
+            keyboard::Key::Named(keyboard::key::Named::Delete)
+                if !self.vim_enabled
+                    || self.vim_state.mode() == super::VimMode::Insert =>
+            {
                 Some(Message::Delete)
             }
-            keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                Some(Message::Enter)
+            keyboard::Key::Named(keyboard::key::Named::Enter)
+                if !self.vim_enabled
+                    || self.vim_state.mode() == super::VimMode::Insert
+                    || self.vim_state.command_line_active() =>
+            {
+                if self.vim_state.command_line_active() {
+                    Some(Message::VimKey('\n'))
+                } else {
+                    Some(Message::Enter)
+                }
             }
-            keyboard::Key::Named(keyboard::key::Named::Tab) => {
+            keyboard::Key::Named(keyboard::key::Named::Tab)
+                if !self.vim_enabled
+                    || self.vim_state.mode() == super::VimMode::Insert =>
+            {
                 // Handle Tab for focus navigation or text insertion
                 // This implements focus event propagation and focus chain management
                 if modifiers.shift() {
@@ -1532,7 +1696,7 @@ impl CodeEditor {
                     return c
                         .chars()
                         .next()
-                        .map(Message::CharacterInput)
+                        .map(|ch| self.printable_input_message(ch))
                         .map(|msg| Action::publish(msg).and_capture());
                 }
                 None
@@ -1636,8 +1800,7 @@ impl CodeEditor {
             return None;
         }
 
-        let regions = self.foldable_regions();
-        folding::is_fold_header(&regions, visual_line.logical_line)
+        folding::is_line_fold_header(&self.buffer, visual_line.logical_line)
             .then_some(visual_line.logical_line)
     }
 
@@ -1669,13 +1832,23 @@ impl CodeEditor {
 
                     // Alt+Click: add a new cursor at the clicked position
                     if self.modifiers.get().alt() {
-                        return Action::publish(Message::AltClick(position))
-                            .and_capture();
+                        let message = if self.vim_enabled {
+                            Message::MouseClick(position)
+                        } else {
+                            Message::AltClick(position)
+                        };
+                        return Action::publish(message).and_capture();
                     }
 
                     // Don't capture the event so it can bubble up for focus management
                     // This implements focus event propagation through the widget hierarchy
                     Action::publish(Message::MouseClick(position))
+                })
+            }
+            mouse::Event::ButtonPressed(mouse::Button::Right) => {
+                cursor.position_in(bounds).map(|position| {
+                    Action::publish(Message::ContextMenuRequested(position))
+                        .and_capture()
                 })
             }
             mouse::Event::CursorMoved { .. } => {
@@ -1724,6 +1897,9 @@ impl CodeEditor {
         // This prevents focus stealing where IME events meant for other widgets
         // are incorrectly processed by this editor during focus transitions
         if !self.has_focus() || self.focus_locked {
+            return None;
+        }
+        if self.vim_enabled && self.vim_state.mode() != super::VimMode::Insert {
             return None;
         }
 
@@ -1902,6 +2078,12 @@ impl canvas::Program<Message> for CodeEditor {
         let visual_lines_for_content = visual_lines.clone();
         let content_geometry =
             self.content_cache.draw(renderer, bounds.size(), |frame| {
+                // Bound sequential syntect catch-up work for this frame. This
+                // keeps a deep jump or a cache truncation in a huge file from
+                // blocking the UI while parsing every preceding line.
+                self.highlight_lines_remaining
+                    .set(super::HIGHLIGHT_LINES_PER_FRAME);
+
                 // syntect initialization is relatively expensive; keep it global.
                 let syntax_set = SYNTAX_SET.get_or_init(|| {
                     #[cfg(feature = "two-face")]
@@ -2090,6 +2272,30 @@ impl canvas::Program<Message> for CodeEditor {
             _ => None,
         }
     }
+
+    /// Uses the text-selection cursor over the editable code area.
+    ///
+    /// The gutter keeps the default cursor, except for an interactive fold
+    /// chevron. Checking the cursor against `bounds` is important because a
+    /// canvas program's interaction can otherwise remain active out of bounds.
+    fn mouse_interaction(
+        &self,
+        _state: &Self::State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        let Some(position) = cursor.position_in(bounds) else {
+            return mouse::Interaction::default();
+        };
+
+        if self.fold_header_at_point(position).is_some() {
+            mouse::Interaction::Pointer
+        } else if position.x >= self.gutter_width() {
+            mouse::Interaction::Text
+        } else {
+            mouse::Interaction::default()
+        }
+    }
 }
 
 /// Validates that the selection indices fall on valid UTF-8 character boundaries
@@ -2132,6 +2338,164 @@ mod tests {
     use super::*;
     use crate::canvas_editor::{CHAR_WIDTH, FONT_SIZE, compare_floats};
     use std::cmp::Ordering;
+
+    fn editor_mouse_interaction(
+        editor: &CodeEditor,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        canvas::Program::<Message>::mouse_interaction(
+            editor,
+            &(),
+            bounds,
+            cursor,
+        )
+    }
+
+    #[test]
+    fn test_vim_navigation_keyboard_route_uses_dedicated_message() {
+        let mut editor = CodeEditor::new("abc", "txt").with_vim_enabled(true);
+
+        assert!(matches!(
+            editor.printable_input_message('l'),
+            Message::VimKey('l')
+        ));
+
+        let _ = editor.vim_state.parse_key('i');
+        assert!(matches!(
+            editor.printable_input_message('x'),
+            Message::CharacterInput('x')
+        ));
+
+        editor.set_vim_enabled(false);
+        assert!(matches!(
+            editor.printable_input_message('x'),
+            Message::CharacterInput('x')
+        ));
+
+        editor.set_vim_enabled(true);
+        let key = keyboard::Key::Character("r".into());
+        let message = editor
+            .handle_keyboard_shortcuts(&key, &key, &keyboard::Modifiers::CTRL)
+            .map(|action| action.into_inner().0);
+        assert!(matches!(message, Some(Some(Message::Redo))));
+    }
+
+    #[test]
+    fn test_vim_command_line_routes_enter_and_backspace() {
+        let mut editor = CodeEditor::new("abc", "txt").with_vim_enabled(true);
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+        let _ = editor.vim_state.parse_key('/');
+
+        let backspace = editor
+            .handle_character_input(
+                &keyboard::Key::Named(keyboard::key::Named::Backspace),
+                &keyboard::Modifiers::NONE,
+                None,
+            )
+            .map(|action| action.into_inner().0);
+        assert!(matches!(backspace, Some(Some(Message::VimKey('\u{8}')))));
+
+        let enter = editor
+            .handle_character_input(
+                &keyboard::Key::Named(keyboard::key::Named::Enter),
+                &keyboard::Modifiers::NONE,
+                None,
+            )
+            .map(|action| action.into_inner().0);
+        assert!(matches!(enter, Some(Some(Message::VimKey('\n')))));
+    }
+
+    #[test]
+    fn test_vim_cursor_rendering_insert_uses_bar() {
+        let mut editor = CodeEditor::new("a", "txt").with_vim_enabled(true);
+        let _ = editor.vim_state.parse_key('i');
+
+        let size = editor.cursor_size_for_position((0, 0));
+
+        assert_eq!(compare_floats(size.width, 2.0), Ordering::Equal);
+        assert_eq!(
+            compare_floats(size.height, editor.line_height() - 4.0),
+            Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn test_vim_cursor_rendering_normal_uses_ascii_block() {
+        let editor = CodeEditor::new("a", "txt").with_vim_enabled(true);
+
+        let size = editor.cursor_size_for_position((0, 0));
+
+        assert_eq!(
+            compare_floats(size.width, editor.char_width()),
+            Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn test_vim_cursor_rendering_normal_uses_cjk_width() {
+        let editor = CodeEditor::new("汉", "txt").with_vim_enabled(true);
+
+        let size = editor.cursor_size_for_position((0, 0));
+
+        assert_eq!(
+            compare_floats(size.width, editor.full_char_width()),
+            Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn test_vim_cursor_rendering_empty_line_has_visible_block() {
+        let editor = CodeEditor::new("", "txt").with_vim_enabled(true);
+
+        let size = editor.cursor_size_for_position((0, 0));
+
+        assert_eq!(
+            compare_floats(size.width, editor.char_width()),
+            Ordering::Equal
+        );
+        assert!(size.width > 2.0);
+    }
+
+    #[test]
+    fn test_mouse_interaction_uses_text_cursor_in_editable_area() {
+        let editor = CodeEditor::new("fn main() {}", "rs");
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(800.0, 600.0));
+        let cursor = mouse::Cursor::Available(Point::new(
+            editor.gutter_width() + 10.0,
+            10.0,
+        ));
+
+        assert_eq!(
+            editor_mouse_interaction(&editor, bounds, cursor),
+            mouse::Interaction::Text
+        );
+    }
+
+    #[test]
+    fn test_mouse_interaction_keeps_default_cursor_in_gutter_and_outside() {
+        let editor = CodeEditor::new("fn main() {}", "rs");
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(800.0, 600.0));
+
+        assert_eq!(
+            editor_mouse_interaction(
+                &editor,
+                bounds,
+                mouse::Cursor::Available(Point::new(5.0, 10.0)),
+            ),
+            mouse::Interaction::default()
+        );
+        assert_eq!(
+            editor_mouse_interaction(
+                &editor,
+                bounds,
+                mouse::Cursor::Available(Point::new(900.0, 10.0)),
+            ),
+            mouse::Interaction::default()
+        );
+    }
 
     #[test]
     fn test_calculate_segment_geometry_ascii() {
@@ -2414,6 +2778,31 @@ mod tests {
     }
 
     #[test]
+    fn test_highlight_budget_uses_plain_fallback_without_scanning_to_target() {
+        let editor = CodeEditor::new("zero\none\ntwo\nthree\nfour", "txt");
+        let syntax_set = SyntaxSet::load_defaults_newlines();
+        let syntax = syntax_set.find_syntax_plain_text();
+        let theme = syntect::highlighting::Theme::default();
+        editor.highlight_lines_remaining.set(2);
+
+        let spans =
+            editor.highlighted_line_cached(4, syntax, &theme, &syntax_set);
+        let combined: String =
+            spans.iter().map(|(_, text)| text.as_str()).collect();
+
+        assert_eq!(combined, "four");
+        assert_eq!(
+            editor
+                .highlight_cache
+                .borrow()
+                .as_ref()
+                .map(super::super::HighlightCache::valid_len),
+            Some(2)
+        );
+        assert_eq!(editor.highlight_lines_remaining.get(), 0);
+    }
+
+    #[test]
     fn test_highlighted_line_cached_handles_multiline_comments() {
         let syntax_set = SyntaxSet::load_defaults_newlines();
         let syntax = syntax_set
@@ -2490,5 +2879,21 @@ mod tests {
     fn test_split_whitespace_segments_empty() {
         let segs = split_whitespace_segments("");
         assert!(segs.is_empty());
+    }
+
+    #[test]
+    fn test_command_g_opens_goto_line_dialog() {
+        let editor = CodeEditor::new("one\ntwo", "rs");
+        let key = keyboard::Key::Character("g".into());
+
+        let message = editor
+            .handle_keyboard_shortcuts(
+                &key,
+                &key,
+                &keyboard::Modifiers::COMMAND,
+            )
+            .map(|action| action.into_inner().0);
+
+        assert!(matches!(message, Some(Some(Message::OpenGotoLine))));
     }
 }

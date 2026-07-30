@@ -354,6 +354,18 @@ impl InsertTextCommand {
 
         Self { line, col, text, cursor_before: cursor, cursor_after }
     }
+
+    /// Overrides the cursor position restored when this insertion is redone.
+    ///
+    /// Most paste operations leave the cursor after the inserted text, while
+    /// Vim paste leaves it on the first inserted character or line.
+    pub(crate) fn with_cursor_after(
+        mut self,
+        cursor_after: (usize, usize),
+    ) -> Self {
+        self.cursor_after = cursor_after;
+        self
+    }
 }
 
 impl Command for InsertTextCommand {

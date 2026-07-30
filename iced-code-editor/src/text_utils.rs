@@ -27,6 +27,13 @@
 /// assert_eq!(char_to_byte_index("abc", 10), 3); // out of bounds -> len
 /// ```
 pub(crate) fn char_to_byte_index(s: &str, char_index: usize) -> usize {
+    // Source code is overwhelmingly ASCII. In that common case character and
+    // byte offsets are identical, so avoid walking from the start of a long
+    // line for every cursor edit.
+    if s.is_ascii() {
+        return char_index.min(s.len());
+    }
+
     s.char_indices().nth(char_index).map_or(s.len(), |(idx, _)| idx)
 }
 
@@ -60,6 +67,10 @@ pub(crate) fn char_range_to_byte_range(
     start_char: usize,
     end_char: usize,
 ) -> (usize, usize) {
+    if text.is_ascii() {
+        return (start_char.min(text.len()), end_char.min(text.len()));
+    }
+
     let mut start_byte = text.len();
     let mut end_byte = text.len();
 

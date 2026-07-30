@@ -7,7 +7,7 @@ use iced::widget::{
     row, scrollable, slider, stack, text, text_input,
 };
 use iced::{Color, Element, Length, Theme};
-use iced_code_editor::IndentStyle;
+use iced_code_editor::{IndentStyle, VimMode};
 
 /// Renders the user interface.
 pub fn view(app: &DemoApp) -> Element<'_, Message> {
@@ -419,6 +419,7 @@ pub fn view_editor_pane<'a>(
     let line_numbers_enabled = editor.line_numbers_enabled();
     let lsp_enabled = editor.lsp_enabled();
     let show_whitespace = editor.show_whitespace();
+    let vim_enabled = editor.vim_enabled();
 
     // Template picker using pick_list
     let template_picker =
@@ -471,6 +472,20 @@ pub fn view_editor_pane<'a>(
         .label("Show whitespace")
         .on_toggle(move |b| Message::ToggleShowWhitespace(editor_id, b))
         .text_size(14);
+
+    // Vim mode checkbox and current mode label
+    let vim_checkbox = checkbox(vim_enabled)
+        .label("Vim mode (Cmd/Ctrl+Alt+V)")
+        .on_toggle(move |b| Message::ToggleVim(editor_id, b))
+        .text_size(14);
+    let vim_status = match editor.vim_mode() {
+        Some(VimMode::Normal) => "NORMAL",
+        Some(VimMode::Insert) => "INSERT",
+        Some(VimMode::Visual) => "VISUAL",
+        Some(VimMode::VisualLine) => "VISUAL LINE",
+        None => "OFF",
+    };
+    let vim_status = text(format!("Vim: {vim_status}")).size(14);
 
     // LSP enabled checkbox
     let lsp_enabled_checkbox = checkbox(lsp_enabled)
@@ -606,6 +621,10 @@ pub fn view_editor_pane<'a>(
                 line_numbers_checkbox,
                 Space::new().width(10),
                 show_whitespace_checkbox,
+                Space::new().width(10),
+                vim_checkbox,
+                Space::new().width(5),
+                vim_status,
                 Space::new().width(10),
                 lsp_enabled_checkbox,
                 Space::new().width(10),

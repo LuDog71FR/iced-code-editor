@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- feat: **Optional Vim mode**
+  - Per-editor opt-in API via `set_vim_enabled` / `with_vim_enabled`, with `vim_mode` for status display
+  - Normal, Insert, Visual, and Visual Line modes with counts, common motions, operators, paste, and undo/redo
+  - Counted line targets and operators, including `5G`, `5gg`, `5yy`, `5dd`, and `5cc`
+  - Per-editor character-wise/line-wise unnamed register; system clipboard shortcuts remain available
+  - Mode-aware bar/block cursor feedback and a per-tab toggle/status label in the demo app
+  - `Ctrl+Alt+V` / `Command+Alt+V` toggles Vim behavior for the focused editor without replacing system paste
+  - Fixed bottom status line for modes, pending Normal keys, and active `/` or `:` input
+  - Forward `/` search with `n`/`N` repeat and `:N` 1-based line jumps
+  - `:w` host save requests plus `:q` and `:wq` commands to leave Vim mode
+
 - feat: **Visible whitespace rendering**
   - Spaces are rendered as `·` and tabs as `→` (followed by `·` fill characters to preserve alignment)
   - Whitespace symbols are drawn in a dedicated dimmed color (`Style::whitespace_color`) to stay non-intrusive

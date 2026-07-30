@@ -35,19 +35,19 @@ pub fn view_lsp_panel() -> Element<'static, Message> {
 ///
 /// Otherwise delegates to [`iced_code_editor::view_lsp_overlay`].
 pub fn view_lsp_overlay(
-    app: &DemoApp,
-    editor_id: EditorId,
+    _app: &DemoApp,
+    _editor_id: EditorId,
 ) -> Element<'_, Message> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if app.lsp_overlay_editor != Some(editor_id) {
+        if _app.lsp_overlay_editor != Some(_editor_id) {
             return container(
                 Space::new().width(Length::Shrink).height(Length::Shrink),
             )
             .into();
         }
 
-        let Some(tab) = app.tabs.iter().find(|t| t.id == editor_id) else {
+        let Some(tab) = _app.tabs.iter().find(|t| t.id == _editor_id) else {
             return container(
                 Space::new().width(Length::Shrink).height(Length::Shrink),
             )
@@ -55,11 +55,11 @@ pub fn view_lsp_overlay(
         };
 
         iced_code_editor::view_lsp_overlay(
-            &app.lsp_overlay,
+            &_app.lsp_overlay,
             &tab.editor,
-            &app.current_theme,
-            app.current_font_size,
-            app.current_line_height,
+            &_app.current_theme,
+            _app.current_font_size,
+            _app.current_line_height,
             Message::LspOverlay,
         )
     }
