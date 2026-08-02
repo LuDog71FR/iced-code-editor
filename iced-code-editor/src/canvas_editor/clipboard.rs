@@ -184,6 +184,11 @@ impl CodeEditor {
         // Remove all selections before inserting.
         if self.cursors.iter().any(|c| c.has_selection()) {
             self.delete_selection();
+        } else {
+            // A plain click leaves a zero-length anchor in place (see
+            // `handle_enter` in update.rs); clear it so it isn't mistaken for
+            // a real selection by a later edit.
+            self.clear_selection();
         }
 
         let cursor_count = self.cursors.len();

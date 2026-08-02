@@ -1840,9 +1840,16 @@ impl CodeEditor {
                         return Action::publish(message).and_capture();
                     }
 
-                    // Don't capture the event so it can bubble up for focus management
-                    // This implements focus event propagation through the widget hierarchy
-                    Action::publish(Message::MouseClick(position))
+                    let click_count = self.classify_click(position);
+                    match click_count {
+                        2 => Action::publish(Message::DoubleClick(position))
+                            .and_capture(),
+                        3 => Action::publish(Message::TripleClick(position))
+                            .and_capture(),
+                        // Don't capture the event so it can bubble up for focus management
+                        // This implements focus event propagation through the widget hierarchy
+                        _ => Action::publish(Message::MouseClick(position)),
+                    }
                 })
             }
             mouse::Event::ButtonPressed(mouse::Button::Right) => {

@@ -357,6 +357,11 @@ impl CodeEditor {
         // so a single undo restores the replaced text.
         if self.cursors.iter().any(|cursor| cursor.has_selection()) {
             self.delete_selection();
+        } else {
+            // A plain click leaves a zero-length anchor in place (see
+            // `handle_enter`); clear it so it isn't mistaken for a real
+            // selection by a later edit.
+            self.clear_selection();
         }
 
         // Multi-cursor: build a sorted index list (descending document order)
@@ -406,6 +411,12 @@ impl CodeEditor {
     /// horizontal scroll when wrap is disabled)
     fn handle_tab(&mut self) -> Task<Message> {
         self.ensure_grouping_started("Tab");
+
+        // A plain click leaves a zero-length anchor in place (see
+        // `handle_enter`); clear it so it isn't mistaken for a real selection
+        // by a later edit. Tab only reaches here when there is no real
+        // selection to indent (see `IndentLines`).
+        self.clear_selection();
 
         // Multi-cursor: process in descending document order
         let mut order: Vec<usize> = (0..self.cursors.len()).collect();
@@ -756,6 +767,14 @@ impl CodeEditor {
             return self.scroll_to_cursor();
         }
 
+        // A mouse click leaves a zero-length anchor in place so a following
+        // drag can extend the selection (see `handle_enter`). Backspace must
+        // clear it before moving the caret; otherwise the anchor is left
+        // behind at the pre-edit position and a phantom one-character
+        // selection appears next to the cursor, which the next Backspace or
+        // Delete then eats instead of a single character.
+        self.clear_selection();
+
         // Multi-cursor: process in descending document order
         let mut order: Vec<usize> = (0..self.cursors.len()).collect();
         order.sort_by(|&a, &b| {
@@ -813,6 +832,11 @@ impl CodeEditor {
         if self.delete_selection_if_present() {
             return self.scroll_to_cursor();
         }
+
+        // See the matching comment in `handle_backspace`: clear any
+        // zero-length anchor left by a plain click before editing, so it
+        // can't be mistaken for a real selection on a later edit.
+        self.clear_selection();
 
         // Multi-cursor: process in descending document order
         let mut order: Vec<usize> = (0..self.cursors.len()).collect();
@@ -1745,6 +1769,56 @@ impl CodeEditor {
             }
             self.overlay_cache.clear();
         }
+        self.sync_search_match_from_primary_cursor();
+        Task::none()
+    }
+
+    /// Handles a double-click: selects the word under the cursor.
+    ///
+    /// If the click lands outside any word (e.g. on whitespace), the
+    /// selection is cleared and the caret is simply placed there.
+    fn handle_double_click_msg(&mut self, point: iced::Point) -> Task<Message> {
+        self.request_focus();
+        self.has_canvas_focus = true;
+        self.end_grouping_if_active();
+        self.cursors.remove_all_but_primary();
+        if let Some((line, col)) = self.calculate_cursor_from_point(point) {
+            let line_content = self.buffer.line(line);
+            let start = Self::word_start_in_line(line_content, col);
+            let end = Self::word_end_in_line(line_content, col);
+            let cursor = self.cursors.primary_mut();
+            if start < end {
+                cursor.anchor = Some((line, start));
+                cursor.position = (line, end);
+            } else {
+                cursor.anchor = None;
+                cursor.position = (line, col);
+            }
+        }
+        self.is_dragging = false;
+        self.show_cursor = true;
+        self.reset_cursor_blink();
+        self.overlay_cache.clear();
+        self.sync_search_match_from_primary_cursor();
+        Task::none()
+    }
+
+    /// Handles a triple-click: selects the whole line under the cursor.
+    fn handle_triple_click_msg(&mut self, point: iced::Point) -> Task<Message> {
+        self.request_focus();
+        self.has_canvas_focus = true;
+        self.end_grouping_if_active();
+        self.cursors.remove_all_but_primary();
+        if let Some((line, _col)) = self.calculate_cursor_from_point(point) {
+            let line_len = self.buffer.line_len(line);
+            let cursor = self.cursors.primary_mut();
+            cursor.anchor = Some((line, 0));
+            cursor.position = (line, line_len);
+        }
+        self.is_dragging = false;
+        self.show_cursor = true;
+        self.reset_cursor_blink();
+        self.overlay_cache.clear();
         self.sync_search_match_from_primary_cursor();
         Task::none()
     }
@@ -2718,6 +2792,8 @@ impl CodeEditor {
             Message::MouseDrag(point) => self.handle_mouse_drag_msg(*point),
             Message::MouseHover(point) => self.handle_mouse_drag_msg(*point),
             Message::MouseRelease => self.handle_mouse_release_msg(),
+            Message::DoubleClick(point) => self.handle_double_click_msg(*point),
+            Message::TripleClick(point) => self.handle_triple_click_msg(*point),
             Message::ContextMenuRequested(point) => {
                 self.handle_context_menu_requested_msg(*point)
             }
