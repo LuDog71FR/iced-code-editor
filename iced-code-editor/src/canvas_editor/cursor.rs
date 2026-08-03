@@ -480,6 +480,28 @@ impl CodeEditor {
         }
     }
 
+    /// Classifies a left-button press as a single/double/triple click.
+    ///
+    /// Consecutive presses count up as long as each one lands within 400ms
+    /// otherwise the count resets to 1. Counts
+    /// wrap back to 1 after 3, so a fourth rapid click starts a fresh
+    /// single/double/triple cycle rather than being silently ignored.
+    pub(crate) fn classify_click(&self, position: Point) -> u8 {
+        let now = Instant::now();
+        let count = match self.last_click.get() {
+            Some((time, pos, count))
+                if now.duration_since(time)
+                    < std::time::Duration::from_millis(400)
+                    && pos.distance(position) < 6.0 =>
+            {
+                if count >= 3 { 1 } else { count + 1 }
+            }
+            _ => 1,
+        };
+        self.last_click.set(Some((now, position, count)));
+        count
+    }
+
     /// Returns a scroll command to make the cursor visible.
     pub(crate) fn scroll_to_cursor(&self) -> Task<Message> {
         // Reuse memoized wrapping result so repeated scroll computations do not

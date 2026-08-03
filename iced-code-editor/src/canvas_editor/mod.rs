@@ -487,6 +487,9 @@ pub struct CodeEditor {
     /// This is updated via subscription events and used to handle modifier-dependent
     /// interactions, such as "Ctrl+Click" for jumping to a definition.
     pub(crate) modifiers: Cell<iced::keyboard::Modifiers>,
+    /// Last left-button press (time, position, consecutive count), used to
+    /// detect double/triple clicks.
+    pub(crate) last_click: Cell<Option<(Instant, iced::Point, u8)>>,
     /// The font used for rendering text
     pub(crate) font: iced::Font,
     /// IME pre-edit state (for CJK input)
@@ -733,6 +736,10 @@ pub enum Message {
     MouseHover(iced::Point),
     /// Mouse released
     MouseRelease,
+    /// Double-click: select the word under the cursor
+    DoubleClick(iced::Point),
+    /// Triple-click: select the whole line under the cursor
+    TripleClick(iced::Point),
     /// Right-clicked in the editor to position and open the context menu
     ContextMenuRequested(iced::Point),
     /// A configured context-menu action was selected.
@@ -966,6 +973,7 @@ impl CodeEditor {
             focus_locked: false,
             show_cursor: false,
             modifiers: Cell::new(iced::keyboard::Modifiers::default()),
+            last_click: Cell::new(None),
             font: iced::Font::MONOSPACE,
             ime_preedit: None,
             font_size: FONT_SIZE,
