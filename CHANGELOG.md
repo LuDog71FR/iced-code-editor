@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+None
+
+## [0.3.11] - 2026-08-03
+
 ### Added
 
 - feat: **Optional Vim mode**
@@ -32,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Indentation-aware (the comment token is inserted after the leading whitespace)
   - Per-language line-comment tokens (`//` for Rust/JS/TS/Go, `#` for Python, `--` for Lua); a no-op for languages without a line comment
   - Fully undoable/redoable through the command history
+
+- feat: **Double/Triple-click selection** ([#22](https://github.com/LuDog71FR/iced-code-editor/issues/22))
+  - Double-click: selects the word under the cursor
+  - Triple-click: selects the entire line under the cursor
+
+### Fixed
+
+- fix: Stale-anchor bug ([#21](https://github.com/LuDog71FR/iced-code-editor/issues/21))
+  - Fixed an issue where clicking to place the cursor and then editing (Backspace, Delete, typing, Tab, or Paste) could leave a stale selection anchor.
 
 ## [0.3.10] - 2026-06-24
 
