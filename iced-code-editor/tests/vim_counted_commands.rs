@@ -31,6 +31,27 @@ fn vim_counted_line_jumps_use_one_based_targets() {
 }
 
 #[test]
+fn vim_bare_g_and_explicit_1g_target_different_lines() {
+    let content = (1..=10)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut editor = CodeEditor::new(&content, "txt").with_vim_enabled(true);
+
+    vim_keys(&mut editor, "G");
+    assert_eq!(editor.cursor_position(), (9, 0));
+
+    vim_keys(&mut editor, "1G");
+    assert_eq!(editor.cursor_position(), (0, 0));
+
+    vim_keys(&mut editor, "5G");
+    assert_eq!(editor.cursor_position(), (4, 0));
+
+    vim_keys(&mut editor, "1gg");
+    assert_eq!(editor.cursor_position(), (0, 0));
+}
+
+#[test]
 fn vim_five_yy_yanks_five_lines() {
     let mut editor = CodeEditor::new("one\ntwo\nthree\nfour\nfive\nsix", "txt")
         .with_vim_enabled(true);

@@ -915,15 +915,23 @@ impl CodeEditor {
             Some(VimAction::Mode(mode)) => {
                 self.handle_vim_mode(mode, previous_mode)
             }
-            Some(VimAction::Motion { motion, count }) => {
-                self.handle_vim_motion(motion, count)
+            Some(VimAction::Motion { motion, count, explicit_count }) => {
+                self.handle_vim_motion(motion, count, explicit_count)
             }
             Some(VimAction::Insert { position, count }) => {
                 self.handle_vim_insert(position, count)
             }
-            Some(VimAction::Operator { operator, motion, count }) => {
-                self.handle_vim_motion_operator(operator, motion, count)
-            }
+            Some(VimAction::Operator {
+                operator,
+                motion,
+                count,
+                explicit_count,
+            }) => self.handle_vim_motion_operator(
+                operator,
+                motion,
+                count,
+                explicit_count,
+            ),
             Some(VimAction::LineOperator { operator, count }) => {
                 let start_line = self.cursors.primary_position().0;
                 let end_line = start_line
@@ -1049,6 +1057,7 @@ impl CodeEditor {
         operator: VimOperator,
         motion: VimMotion,
         count: usize,
+        explicit_count: bool,
     ) -> Task<Message> {
         let start = self.vim_normal_position(self.cursors.primary_position());
         if matches!(
@@ -1058,7 +1067,8 @@ impl CodeEditor {
                 | VimMotion::DocumentStart
                 | VimMotion::DocumentEnd
         ) {
-            let target = self.vim_motion_target(start, motion, count);
+            let target =
+                self.vim_motion_target(start, motion, count, explicit_count);
             return self.handle_vim_line_operator(
                 operator,
                 start.0.min(target.0),
@@ -1067,7 +1077,8 @@ impl CodeEditor {
             );
         }
 
-        let target = self.vim_motion_target(start, motion, count);
+        let target =
+            self.vim_motion_target(start, motion, count, explicit_count);
         let (range_start, range_end) = match motion {
             VimMotion::Right => (
                 start,
@@ -1394,6 +1405,7 @@ impl CodeEditor {
         &mut self,
         motion: VimMotion,
         count: usize,
+        explicit_count: bool,
     ) -> Task<Message> {
         self.end_grouping_if_active();
         match self.vim_state.mode() {
@@ -1405,7 +1417,12 @@ impl CodeEditor {
                         );
                         (position, position)
                     });
-                let target = self.vim_motion_target(active, motion, count);
+                let target = self.vim_motion_target(
+                    active,
+                    motion,
+                    count,
+                    explicit_count,
+                );
                 self.vim_state.set_visual_active(target);
                 self.apply_vim_visual_selection(
                     anchor,
@@ -1418,6 +1435,7 @@ impl CodeEditor {
                     self.cursors.primary_position(),
                     motion,
                     count,
+                    explicit_count,
                 );
                 self.cursors.set_single(target);
                 self.overlay_cache.clear();

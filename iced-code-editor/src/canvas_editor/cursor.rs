@@ -155,6 +155,7 @@ impl CodeEditor {
         start: (usize, usize),
         motion: VimMotion,
         count: usize,
+        explicit_count: bool,
     ) -> (usize, usize) {
         let mut position = self.vim_normal_position(start);
         let count = count.max(1);
@@ -191,8 +192,9 @@ impl CodeEditor {
             VimMotion::WordForward
             | VimMotion::WordBackward
             | VimMotion::WordEnd => {
+                let chars = self.vim_char_index();
                 for _ in 0..count {
-                    position = self.vim_word_motion(position, motion);
+                    position = Self::vim_word_motion(&chars, position, motion);
                 }
             }
             VimMotion::LineStart => position.1 = 0,
@@ -214,7 +216,7 @@ impl CodeEditor {
                 position = (line, 0);
             }
             VimMotion::DocumentEnd => {
-                let line = if count > 1 {
+                let line = if explicit_count {
                     count
                         .saturating_sub(1)
                         .min(self.buffer.line_count().saturating_sub(1))
@@ -228,8 +230,32 @@ impl CodeEditor {
         self.vim_normal_position(position)
     }
 
+    /// Builds a flat, position-tagged character index across the whole
+    /// buffer, inserting a synthetic `'\n'` at each line boundary so that
+    /// word motions can cross line breaks. Rebuilding this once per keystroke
+    /// (rather than once per counted repetition) keeps counted motions
+    /// (`5w`) linear in document size instead of `O(document_size * count)`.
+    fn vim_char_index(&self) -> Vec<((usize, usize), char)> {
+        let mut chars = Vec::new();
+        for line in 0..self.buffer.line_count() {
+            chars.extend(
+                self.buffer
+                    .line(line)
+                    .chars()
+                    .enumerate()
+                    .map(|(col, ch)| ((line, col), ch)),
+            );
+            if line + 1 < self.buffer.line_count() {
+                chars.push(((line, self.buffer.line_len(line)), '\n'));
+            }
+        }
+        chars
+    }
+
+    /// Resolves a single word-wise Vim motion (`w`/`b`/`e`) against a
+    /// prebuilt character index (see [`Self::vim_char_index`]).
     fn vim_word_motion(
-        &self,
+        chars: &[((usize, usize), char)],
         start: (usize, usize),
         motion: VimMotion,
     ) -> (usize, usize) {
@@ -250,19 +276,6 @@ impl CodeEditor {
             }
         }
 
-        let mut chars = Vec::new();
-        for line in 0..self.buffer.line_count() {
-            chars.extend(
-                self.buffer
-                    .line(line)
-                    .chars()
-                    .enumerate()
-                    .map(|(col, ch)| ((line, col), ch)),
-            );
-            if line + 1 < self.buffer.line_count() {
-                chars.push(((line, self.buffer.line_len(line)), '\n'));
-            }
-        }
         if chars.is_empty() {
             return (0, 0);
         }
@@ -649,6 +662,29 @@ impl CodeEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vim_word_motion_crosses_line_boundary_via_prebuilt_index() {
+        let editor = CodeEditor::new("one two\nthree four", "txt");
+        let chars = editor.vim_char_index();
+
+        assert_eq!(
+            CodeEditor::vim_word_motion(&chars, (0, 4), VimMotion::WordForward),
+            (1, 0)
+        );
+        assert_eq!(
+            CodeEditor::vim_word_motion(
+                &chars,
+                (1, 0),
+                VimMotion::WordBackward
+            ),
+            (0, 4)
+        );
+        assert_eq!(
+            CodeEditor::vim_word_motion(&chars, (0, 4), VimMotion::WordEnd),
+            (0, 6)
+        );
+    }
 
     #[test]
     fn test_cursor_movement() {

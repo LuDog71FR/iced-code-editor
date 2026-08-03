@@ -83,7 +83,7 @@
 //!
 //! Vim behavior is disabled by default and configured per editor instance:
 //!
-//! ```no_run
+//! ```
 //! use iced_code_editor::{CodeEditor, VimMode};
 //!
 //! let mut editor =

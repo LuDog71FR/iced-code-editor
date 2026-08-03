@@ -1561,6 +1561,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_toggle_vim_updates_editor_vim_enabled() {
+        let (mut app, _) = DemoApp::new();
+        let tab_id = app.active_tab_id;
+
+        assert!(!app.get_active_editor().is_some_and(|e| e.vim_enabled()));
+
+        let _ = app.handle_toggle_vim(tab_id, true);
+        assert!(app.get_active_editor().is_some_and(|e| e.vim_enabled()));
+
+        let _ = app.handle_toggle_vim(tab_id, false);
+        assert!(!app.get_active_editor().is_some_and(|e| e.vim_enabled()));
+    }
+
+    #[test]
     fn test_reveal_request_forwards_tab_path() {
         let (mut app, _) = DemoApp::new();
         let path = PathBuf::from("/tmp/iced-code-editor/reveal.lua");

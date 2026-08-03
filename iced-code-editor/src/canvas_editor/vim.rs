@@ -15,64 +15,117 @@ pub enum VimMode {
 /// A cursor motion recognized by the Vim parser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VimMotion {
+    /// Move left one character (`h`).
     Left,
+    /// Move down one visible line (`j`).
     Down,
+    /// Move up one visible line (`k`).
     Up,
+    /// Move right one character (`l`).
     Right,
+    /// Move to the start of the next word (`w`).
     WordForward,
+    /// Move to the start of the previous word (`b`).
     WordBackward,
+    /// Move to the end of the current/next word (`e`).
     WordEnd,
+    /// Move to column 0 of the current line (`0`).
     LineStart,
+    /// Move to the first non-blank character of the line (`^`).
     FirstNonBlank,
+    /// Move to the last character of the line (`$`).
     LineEnd,
+    /// Move to line `count` (1-based), or line 1 if no count is given (`gg`).
     DocumentStart,
+    /// Move to line `count` (1-based) if a count is explicitly given,
+    /// otherwise the last line (`G`).
     DocumentEnd,
 }
 
 /// An operator waiting for, or combined with, a motion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VimOperator {
+    /// Delete the targeted range (`d`).
     Delete,
+    /// Delete the targeted range and enter Insert mode (`c`).
     Change,
+    /// Yank (copy) the targeted range into the unnamed register (`y`).
     Yank,
 }
 
 /// The insertion position requested by a Normal-mode command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VimInsertPosition {
+    /// Enter Insert mode before the cursor (`i`).
     BeforeCursor,
+    /// Enter Insert mode after the cursor (`a`).
     AfterCursor,
+    /// Enter Insert mode at the first non-blank character of the line (`I`).
     FirstNonBlank,
+    /// Enter Insert mode at the end of the line (`A`).
     EndOfLine,
+    /// Open a new line below the current one and enter Insert mode (`o`).
     NewLineBelow,
+    /// Open a new line above the current one and enter Insert mode (`O`).
     NewLineAbove,
 }
 
 /// The side of the cursor on which a paste should occur.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VimPastePosition {
+    /// Paste after the cursor (`p`).
     AfterCursor,
+    /// Paste before the cursor (`P`).
     BeforeCursor,
 }
 
 /// A complete, buffer-independent intent emitted by [`VimState`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum VimAction {
+    /// Switch to a different Vim mode.
     Mode(VimMode),
-    Motion { motion: VimMotion, count: usize },
+    /// Move the cursor by a motion, repeated `count` times. `explicit_count`
+    /// distinguishes an explicitly typed count (e.g. `1G`) from the default
+    /// of 1 (e.g. bare `G`), since some motions (`G`) behave differently in
+    /// each case.
+    Motion { motion: VimMotion, count: usize, explicit_count: bool },
+    /// Enter Insert mode at the given position, repeating the eventual
+    /// inserted text `count` times on exit.
     Insert { position: VimInsertPosition, count: usize },
-    Operator { operator: VimOperator, motion: VimMotion, count: usize },
+    /// Apply an operator to the range covered by a motion, repeated `count`
+    /// times. See [`VimAction::Motion`] for the meaning of `explicit_count`.
+    Operator {
+        operator: VimOperator,
+        motion: VimMotion,
+        count: usize,
+        explicit_count: bool,
+    },
+    /// Apply an operator to `count` whole lines (e.g. `dd`, `yy`, `cc`).
     LineOperator { operator: VimOperator, count: usize },
+    /// Apply an operator to the active Visual/Visual Line selection.
     VisualOperator(VimOperator),
+    /// Delete `count` characters under and after the cursor (`x`).
     DeleteCharacters { count: usize },
+    /// Paste the unnamed register `count` times at the given position.
     Paste { position: VimPastePosition, count: usize },
+    /// Undo the last `count` grouped commands (`u`).
     Undo { count: usize },
+    /// Redo the last `count` undone commands (`Ctrl+R`).
     Redo { count: usize },
+    /// Repeat the last `/` search, optionally reversing its direction
+    /// (`n`/`N`).
     RepeatSearch { reverse: bool },
+    /// The pending `/` or `:` command-line input changed.
     CommandLineChanged,
+    /// A `/` search was submitted with the given pattern.
     SubmitSearch(String),
+    /// A `:N` command was submitted, requesting a jump to the given
+    /// 1-based line.
     SubmitGotoLine(usize),
+    /// A `:w` or `:wq` command was submitted, requesting a host save and
+    /// optionally exiting Vim mode.
     WriteFile { exit_vim: bool },
+    /// A `:q` command was submitted, requesting Vim mode be turned off.
     ExitVimMode,
 }
 
@@ -398,15 +451,25 @@ impl VimState {
     }
 
     fn finish_motion(&mut self, motion: VimMotion) -> VimAction {
+        let motion_count_explicit = self.count.is_some();
         let motion_count = self.take_count();
         if let Some(operator) = self.pending_operator {
             let count =
                 self.pending_operator_count.saturating_mul(motion_count);
+            // The operator's own count slot doesn't track whether it was
+            // explicitly typed, so `1dG` vs `dG` stays ambiguous; this
+            // approximates "explicit" for the combined count.
+            let explicit_count =
+                motion_count_explicit || self.pending_operator_count > 1;
             self.clear_pending();
-            VimAction::Operator { operator, motion, count }
+            VimAction::Operator { operator, motion, count, explicit_count }
         } else {
             self.g_prefix = false;
-            VimAction::Motion { motion, count: motion_count }
+            VimAction::Motion {
+                motion,
+                count: motion_count,
+                explicit_count: motion_count_explicit,
+            }
         }
     }
 
@@ -478,6 +541,7 @@ mod tests {
                 operator: VimOperator::Delete,
                 motion: VimMotion::WordForward,
                 count: 6,
+                explicit_count: true,
             })
         );
     }
@@ -488,14 +552,46 @@ mod tests {
 
         assert_eq!(
             state.parse_key('0'),
-            Some(VimAction::Motion { motion: VimMotion::LineStart, count: 1 })
+            Some(VimAction::Motion {
+                motion: VimMotion::LineStart,
+                count: 1,
+                explicit_count: false,
+            })
         );
 
         assert_eq!(state.parse_key('1'), None);
         assert_eq!(state.parse_key('0'), None);
         assert_eq!(
             state.parse_key('l'),
-            Some(VimAction::Motion { motion: VimMotion::Right, count: 10 })
+            Some(VimAction::Motion {
+                motion: VimMotion::Right,
+                count: 10,
+                explicit_count: true,
+            })
+        );
+    }
+
+    #[test]
+    fn vim_parser_distinguishes_explicit_count_for_document_end() {
+        let mut state = VimState::default();
+
+        assert_eq!(
+            state.parse_key('G'),
+            Some(VimAction::Motion {
+                motion: VimMotion::DocumentEnd,
+                count: 1,
+                explicit_count: false,
+            })
+        );
+
+        assert_eq!(state.parse_key('1'), None);
+        assert_eq!(
+            state.parse_key('G'),
+            Some(VimAction::Motion {
+                motion: VimMotion::DocumentEnd,
+                count: 1,
+                explicit_count: true,
+            })
         );
     }
 

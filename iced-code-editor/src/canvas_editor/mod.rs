@@ -2935,6 +2935,7 @@ mod tests {
             Some(vim::VimAction::Motion {
                 motion: vim::VimMotion::Right,
                 count: 1,
+                explicit_count: false,
             })
         );
         assert_eq!(editor.content(), "unchanged");
@@ -2959,6 +2960,7 @@ mod tests {
             Some(vim::VimAction::Motion {
                 motion: vim::VimMotion::WordForward,
                 count: 1,
+                explicit_count: false,
             })
         );
         assert_eq!(editor.content(), "unchanged");
@@ -2981,6 +2983,7 @@ mod tests {
             Some(vim::VimAction::Motion {
                 motion: vim::VimMotion::DocumentStart,
                 count: 1,
+                explicit_count: false,
             })
         );
         assert_eq!(editor.content(), "after");
