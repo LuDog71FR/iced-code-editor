@@ -494,7 +494,11 @@ impl CodeEditor {
                     < std::time::Duration::from_millis(400)
                     && pos.distance(position) < 6.0 =>
             {
-                if count >= 3 { 1 } else { count + 1 }
+                if count >= 3 {
+                    1
+                } else {
+                    count + 1
+                }
             }
             _ => 1,
         };
