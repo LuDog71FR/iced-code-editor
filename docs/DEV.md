@@ -21,6 +21,7 @@
    - [Search and Replace](#search-and-replace)
    - [Auto-Indentation](#auto-indentation)
    - [Auto-Closing Brackets/Quotes](#auto-closing-bracketsquotes)
+   - [Matching Bracket/Quote Highlight](#matching-bracketquote-highlight)
    - [Cursor Blinking](#cursor-blinking)
    - [Focus Management](#focus-management)
    - [Selection Rendering](#selection-rendering)
@@ -84,6 +85,7 @@ iced-code-editor/
 ├── i18n.rs                   # Internationalization (rust-i18n)
 └── canvas_editor/            # Core editor implementation
     ├── mod.rs                # Main editor struct, builder API, constants
+    ├── bracket_match.rs      # Matching bracket/quote detection
     ├── canvas_impl.rs        # Canvas rendering (Iced Canvas trait)
     ├── clipboard.rs          # Clipboard operations
     ├── command.rs            # Command pattern for undo/redo
@@ -128,6 +130,7 @@ pub struct CodeEditor {
     collapsed_folds: HashSet<usize>,     // Collapsed region headers
     auto_indent_enabled: bool,           // Auto-indent on newline
     auto_close_brackets: bool,           // Auto-close brackets/quotes + surround selection
+    bracket_match_highlight_enabled: bool, // Matching bracket/quote highlight overlay
     indent_style: IndentStyle,           // Spaces(n) or Tab
     search_state: search::SearchState,   // Search/replace state
     lsp_client: Option<Box<dyn LspClient>>, // Optional LSP connection
@@ -606,6 +609,45 @@ variant (see [Multi-Cursor Edit Order](#5-multi-cursor-edit-order)).
 
 `set_auto_close_brackets()` toggles the whole feature; the demo app exposes it as a
 toolbar checkbox next to "Auto-indentation".
+
+### Matching Bracket/Quote Highlight
+
+**Location:** `canvas_editor/bracket_match.rs` (detection), `canvas_editor/canvas_impl.rs` (overlay draw), `canvas_editor/mod.rs` (toggle field)
+
+When `bracket_match_highlight_enabled` is set, `draw_matching_bracket_highlight()` calls
+`find_matching_pair()` with the primary cursor's position on every overlay redraw:
+
+```rust
+pub(crate) fn find_matching_pair(
+    buffer: &TextBuffer,
+    pos: (usize, usize),
+) -> Option<((usize, usize), (usize, usize))>;
+```
+
+**Detection, per character class:**
+
+- **Brackets** (`( ) [ ] { }`): the cursor must touch a bracket (immediately before or
+  after it). The buffer is then scanned forward (for an opener) or backward (for a
+  closer), tracking a same-family nesting depth so a `(` inside a `[]` pair is skipped
+  while looking for a `)`.
+- **Quotes** (`" '`): since a quote doesn't distinguish opener from closer, all quotes
+  of that kind on the *same line* are paired sequentially in the order they appear
+  (1st with 2nd, 3rd with 4th, ...). The pair containing the cursor's quote is returned.
+
+Both scans are plain textual scans — like [Auto-Closing Brackets/Quotes](#auto-closing-bracketsquotes),
+they don't skip over brackets/quotes found inside strings or comments, and quote
+matching doesn't account for escaped quotes (e.g. `\"`).
+
+**Rendering:** the two positions returned by `find_matching_pair()` are each converted
+to a visual line via `WrappingCalculator::logical_to_visual()` and drawn as a 1-char-wide
+rectangle in the `overlay_cache` layer, reusing `fill_highlight_segment()` (the same
+helper used for search-match highlights). No dedicated cache-invalidation is needed:
+`overlay_cache.clear()` already runs on every cursor move and edit, so the pair is
+recomputed fresh on the next relevant redraw.
+
+`set_bracket_match_highlight_enabled()` toggles the whole feature (and clears
+`overlay_cache` immediately so the change is visible without waiting for the next
+cursor move); the demo app exposes it as a toolbar checkbox next to "Show whitespace".
 
 ### Cursor Blinking
 

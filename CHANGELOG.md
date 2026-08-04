@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- feat: **Matching bracket/quote highlight**
+  - Placing the cursor next to a bracket (`(`, `)`, `[`, `]`, `{`, `}`) or a quote (`"`, `'`) highlights it and its matching pair
+  - Brackets are matched by scanning the buffer with nesting-depth tracking; quotes on the same line are paired sequentially (1st with 2nd, 3rd with 4th, ...)
+  - Enabled by default; toggle via `set_bracket_match_highlight_enabled(bool)` / `bracket_match_highlight_enabled()`, with a checkbox in the demo app toolbar
+
 - feat: **Auto-closing brackets/quotes** with surround selection
   - Typing an opening bracket/quote (`(`, `[`, `{`, `"`, `'`) auto-inserts its matching closing character with the cursor placed between them
   - Typing the closing character right after an already-inserted match moves the cursor past it instead of duplicating it

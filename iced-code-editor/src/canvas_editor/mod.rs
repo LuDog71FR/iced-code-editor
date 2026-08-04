@@ -36,6 +36,7 @@ static EDITOR_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static FOCUSED_EDITOR_ID: AtomicU64 = AtomicU64::new(0);
 
 // Re-export submodules
+mod bracket_match;
 mod canvas_impl;
 mod clipboard;
 pub mod command;
@@ -458,6 +459,8 @@ pub struct CodeEditor {
     pub(crate) line_numbers_enabled: bool,
     /// Whether to render whitespace characters visibly (spaces as `·`, tabs as `→`)
     pub(crate) show_whitespace: bool,
+    /// Whether the matching-bracket/quote-pair highlight overlay is enabled.
+    pub(crate) bracket_match_highlight_enabled: bool,
     /// Whether LSP support is enabled
     pub(crate) lsp_enabled: bool,
     /// Active LSP client connection, if configured.
@@ -962,6 +965,7 @@ impl CodeEditor {
             search_replace_enabled: true,
             line_numbers_enabled: true,
             show_whitespace: true,
+            bracket_match_highlight_enabled: true,
             lsp_enabled: true,
             lsp_client: None,
             lsp_document: None,
@@ -1947,6 +1951,36 @@ impl CodeEditor {
     /// Returns whether visible whitespace rendering is enabled.
     pub fn show_whitespace(&self) -> bool {
         self.show_whitespace
+    }
+
+    /// Enables or disables the matching-bracket/quote-pair highlight overlay.
+    ///
+    /// When enabled, placing the cursor next to a bracket (`(`, `)`, `[`,
+    /// `]`, `{`, `}`) or a quote (`"`, `'`) highlights it and its matching
+    /// pair. When disabled, no matching scan or highlight is performed.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable the bracket/quote-matching highlight
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_bracket_match_highlight_enabled(false); // Disable
+    /// ```
+    pub fn set_bracket_match_highlight_enabled(&mut self, enabled: bool) {
+        if self.bracket_match_highlight_enabled != enabled {
+            self.bracket_match_highlight_enabled = enabled;
+            self.overlay_cache.clear();
+        }
+    }
+
+    /// Returns whether the matching-bracket/quote-pair highlight overlay is enabled.
+    pub fn bracket_match_highlight_enabled(&self) -> bool {
+        self.bracket_match_highlight_enabled
     }
 
     /// Enables or disables code folding (collapse/expand blocks).
@@ -2956,6 +2990,18 @@ mod tests {
 
         editor.set_auto_close_brackets(true);
         assert!(editor.auto_close_brackets());
+    }
+
+    #[test]
+    fn test_bracket_match_highlight_configuration() {
+        let mut editor = CodeEditor::new("", "rs");
+        assert!(editor.bracket_match_highlight_enabled());
+
+        editor.set_bracket_match_highlight_enabled(false);
+        assert!(!editor.bracket_match_highlight_enabled());
+
+        editor.set_bracket_match_highlight_enabled(true);
+        assert!(editor.bracket_match_highlight_enabled());
     }
 
     #[test]

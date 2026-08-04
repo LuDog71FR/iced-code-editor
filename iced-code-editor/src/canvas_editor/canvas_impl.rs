@@ -953,6 +953,52 @@ impl CodeEditor {
         }
     }
 
+    /// Draws a highlight around the bracket or quote pair touching the
+    /// primary cursor, if any.
+    ///
+    /// # Arguments
+    ///
+    /// * `frame` - The canvas frame to draw on
+    /// * `ctx` - Rendering context containing visual lines and metrics
+    fn draw_matching_bracket_highlight(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext,
+    ) {
+        if !self.bracket_match_highlight_enabled {
+            return;
+        }
+
+        let Some((bracket_pos, match_pos)) =
+            super::bracket_match::find_matching_pair(
+                &self.buffer,
+                self.cursors.primary_position(),
+            )
+        else {
+            return;
+        };
+
+        let bracket_color = Color { r: 0.5, g: 0.5, b: 0.5, a: 0.4 };
+
+        for (line, col) in [bracket_pos, match_pos] {
+            if let Some(visual_idx) = WrappingCalculator::logical_to_visual(
+                ctx.visual_lines,
+                line,
+                col,
+            ) {
+                let vl = &ctx.visual_lines[visual_idx];
+                self.fill_highlight_segment(
+                    frame,
+                    ctx,
+                    visual_idx,
+                    vl,
+                    (col, col + 1),
+                    bracket_color,
+                );
+            }
+        }
+    }
+
     /// Draws text selection highlights for all cursors.
     ///
     /// # Arguments
@@ -2215,6 +2261,7 @@ impl canvas::Program<Message> for CodeEditor {
                 }
 
                 self.draw_search_highlights(frame, &ctx, start_idx, end_idx);
+                self.draw_matching_bracket_highlight(frame, &ctx);
                 self.draw_selection_highlight(frame, &ctx);
                 self.draw_jump_link_highlight(frame, &ctx, bounds, _cursor);
                 self.draw_cursor(frame, &ctx);

@@ -39,6 +39,7 @@ Screenshot of the demo application:
 - **Language Server Protocol** (LSP) support
 - **Auto indentation** with custom indent style
 - **Auto-closing brackets/quotes** with surround selection
+- **Matching bracket/quote highlight** — highlights the paired bracket or quote next to the cursor
 - **Multiple cursors** for simultaneous editing at multiple positions
 - **Move and duplicate lines** with keyboard shortcuts
 - **Toggle comment** on the current line or selection (`Ctrl+/`)
@@ -611,6 +612,20 @@ editor.set_auto_close_brackets(false);
 // Check current state
 if editor.auto_close_brackets() {
     println!("Auto-closing is active");
+}
+```
+
+### Matching bracket/quote highlight
+
+Matching bracket/quote highlight is **enabled by default**. Placing the cursor next to a bracket (`(`, `)`, `[`, `]`, `{`, `}`) or a quote (`"`, `'`) highlights it and its matching pair.
+
+```rust
+// Disable the matching bracket/quote highlight
+editor.set_bracket_match_highlight_enabled(false);
+
+// Check current state
+if editor.bracket_match_highlight_enabled() {
+    println!("Matching bracket/quote highlight is active");
 }
 ```
 

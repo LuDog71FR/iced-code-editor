@@ -175,6 +175,8 @@ pub enum Message {
     ToggleLineNumbers(EditorId, bool),
     /// Toggle visible whitespace rendering
     ToggleShowWhitespace(EditorId, bool),
+    /// Toggle matching-bracket-pair highlight
+    ToggleBracketMatchHighlight(EditorId, bool),
     /// Toggle Vim behavior
     ToggleVim(EditorId, bool),
     /// Toggle LSP support
@@ -825,6 +827,18 @@ greet("World")
         Task::none()
     }
 
+    /// Handles toggling the matching-bracket-pair highlight for a specific editor.
+    fn handle_toggle_bracket_match_highlight(
+        &mut self,
+        editor_id: EditorId,
+        enabled: bool,
+    ) -> Task<Message> {
+        if let Some(tab) = self.get_tab(editor_id) {
+            tab.editor.set_bracket_match_highlight_enabled(enabled);
+        }
+        Task::none()
+    }
+
     /// Handles toggling Vim behavior for a specific editor.
     fn handle_toggle_vim(
         &mut self,
@@ -1342,6 +1356,9 @@ greet("World")
             }
             Message::ToggleShowWhitespace(editor_id, enabled) => {
                 self.handle_toggle_show_whitespace(editor_id, enabled)
+            }
+            Message::ToggleBracketMatchHighlight(editor_id, enabled) => {
+                self.handle_toggle_bracket_match_highlight(editor_id, enabled)
             }
             Message::ToggleVim(editor_id, enabled) => {
                 self.handle_toggle_vim(editor_id, enabled)

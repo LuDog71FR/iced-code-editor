@@ -12,7 +12,7 @@ None
 
 ### Editing
 
-1. **Matching bracket highlight** + indentation guides
+1. **Indentation guides**
 2. **Snippets**
 
 ### LSP / IntelliSense (completion, hover, go-to-definition already done)

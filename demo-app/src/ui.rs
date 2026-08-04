@@ -420,6 +420,8 @@ pub fn view_editor_pane<'a>(
     let line_numbers_enabled = editor.line_numbers_enabled();
     let lsp_enabled = editor.lsp_enabled();
     let show_whitespace = editor.show_whitespace();
+    let bracket_match_highlight_enabled =
+        editor.bracket_match_highlight_enabled();
     let vim_enabled = editor.vim_enabled();
 
     // Template picker using pick_list
@@ -479,6 +481,15 @@ pub fn view_editor_pane<'a>(
         .label("Show whitespace")
         .on_toggle(move |b| Message::ToggleShowWhitespace(editor_id, b))
         .text_size(14);
+
+    // Matching bracket highlight checkbox
+    let bracket_match_highlight_checkbox =
+        checkbox(bracket_match_highlight_enabled)
+            .label("Highlight matching bracket")
+            .on_toggle(move |b| {
+                Message::ToggleBracketMatchHighlight(editor_id, b)
+            })
+            .text_size(14);
 
     // Vim mode checkbox and current mode label
     let vim_checkbox = checkbox(vim_enabled)
@@ -630,6 +641,8 @@ pub fn view_editor_pane<'a>(
                 line_numbers_checkbox,
                 Space::new().width(10),
                 show_whitespace_checkbox,
+                Space::new().width(10),
+                bracket_match_highlight_checkbox,
                 Space::new().width(10),
                 vim_checkbox,
                 Space::new().width(5),
