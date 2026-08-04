@@ -86,6 +86,8 @@ pub struct DemoApp {
     pub show_settings: bool,
     /// Whether to automatically adjust line height when font size changes
     pub auto_adjust_line_height: bool,
+    /// Whether the editor options dropdown panel is expanded
+    pub show_editor_options: bool,
     #[cfg(not(target_arch = "wasm32"))]
     lsp_events: Option<mpsc::Receiver<LspEvent>>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -120,6 +122,8 @@ pub enum Message {
     ToggleSettings,
     /// Toggle auto adjust line height
     ToggleAutoLineHeight(bool),
+    /// Toggle the editor options dropdown panel
+    ToggleEditorOptions,
     /// Editor event
     EditorEvent(EditorId, EditorMessage),
     /// Editor mouse entered
@@ -260,6 +264,7 @@ greet("World")
             text_input_value: String::new(),
             show_settings: false,
             auto_adjust_line_height: true,
+            show_editor_options: false,
             #[cfg(not(target_arch = "wasm32"))]
             lsp_events,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1299,6 +1304,10 @@ greet("World")
             }
             Message::ToggleAutoLineHeight(enabled) => {
                 self.auto_adjust_line_height = enabled;
+                Task::none()
+            }
+            Message::ToggleEditorOptions => {
+                self.show_editor_options = !self.show_editor_options;
                 Task::none()
             }
             Message::ClearLog => {

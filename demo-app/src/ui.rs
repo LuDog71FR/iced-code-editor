@@ -7,7 +7,7 @@ use iced::widget::{
     row, scrollable, slider, stack, text, text_input,
 };
 use iced::{Color, Element, Length, Theme};
-use iced_code_editor::{IndentStyle, VimMode};
+use iced_code_editor::IndentStyle;
 
 /// Renders the user interface.
 pub fn view(app: &DemoApp) -> Element<'_, Message> {
@@ -491,19 +491,11 @@ pub fn view_editor_pane<'a>(
             })
             .text_size(14);
 
-    // Vim mode checkbox and current mode label
+    // Vim mode checkbox
     let vim_checkbox = checkbox(vim_enabled)
         .label("Vim mode (Cmd/Ctrl+Alt+V)")
         .on_toggle(move |b| Message::ToggleVim(editor_id, b))
         .text_size(14);
-    let vim_status = match editor.vim_mode() {
-        Some(VimMode::Normal) => "NORMAL",
-        Some(VimMode::Insert) => "INSERT",
-        Some(VimMode::Visual) => "VISUAL",
-        Some(VimMode::VisualLine) => "VISUAL LINE",
-        None => "OFF",
-    };
-    let vim_status = text(format!("Vim: {vim_status}")).size(14);
 
     // LSP enabled checkbox
     let lsp_enabled_checkbox = checkbox(lsp_enabled)
@@ -621,38 +613,67 @@ pub fn view_editor_pane<'a>(
         .on_enter(Message::EditorMouseEntered(editor_id))
         .on_exit(Message::EditorMouseExited(editor_id));
 
+    // Single button that expands/collapses the options dropdown panel,
+    // replacing the long row of individual checkboxes.
+    let options_button = button(
+        text(if app.show_editor_options {
+            "Options ▲"
+        } else {
+            "Options ▼"
+        })
+        .size(14),
+    )
+    .on_press(Message::ToggleEditorOptions)
+    .style(button::secondary);
+
+    let options_panel: Element<'_, Message> = if app.show_editor_options {
+        container(
+            column![
+                wrap_checkbox,
+                folding_checkbox,
+                auto_indent_checkbox,
+                auto_close_brackets_checkbox,
+                search_replace_checkbox,
+                line_numbers_checkbox,
+                show_whitespace_checkbox,
+                bracket_match_highlight_checkbox,
+                vim_checkbox,
+                lsp_enabled_checkbox,
+            ]
+            .spacing(8)
+            .padding(10),
+        )
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.weak.color.into()),
+                border: iced::Border {
+                    color: palette.background.strong.color,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+    } else {
+        Space::new().into()
+    };
+
     container(
         column![
             row![
                 template_picker,
                 Space::new().width(10),
-                wrap_checkbox,
-                Space::new().width(10),
-                folding_checkbox,
-                Space::new().width(10),
-                auto_indent_checkbox,
-                Space::new().width(10),
-                auto_close_brackets_checkbox,
-                Space::new().width(10),
                 indent_style_picker,
                 Space::new().width(10),
-                search_replace_checkbox,
-                Space::new().width(10),
-                line_numbers_checkbox,
-                Space::new().width(10),
-                show_whitespace_checkbox,
-                Space::new().width(10),
-                bracket_match_highlight_checkbox,
-                Space::new().width(10),
-                vim_checkbox,
-                Space::new().width(5),
-                vim_status,
-                Space::new().width(10),
-                lsp_enabled_checkbox,
+                options_button,
                 Space::new().width(10),
                 lsp_status
             ]
-            .padding(10),
+            .padding(10)
+            .align_y(iced::Center),
+            options_panel,
             editor_stack,
         ]
         .spacing(5)
