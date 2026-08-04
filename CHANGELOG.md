@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-None
+### Added
+
+- feat: **Auto-closing brackets/quotes** with surround selection
+  - Typing an opening bracket/quote (`(`, `[`, `{`, `"`, `'`) auto-inserts its matching closing character with the cursor placed between them
+  - Typing the closing character right after an already-inserted match moves the cursor past it instead of duplicating it
+  - Typing an opening bracket/quote while text is selected wraps the selection in the pair instead of replacing it
+  - Enabled by default; toggle via `set_auto_close_brackets(bool)` / `auto_close_brackets()`, with a checkbox in the demo app toolbar
 
 ## [0.3.11] - 2026-08-03
 

@@ -112,6 +112,37 @@ fn adjust_other_cursors(
     }
 }
 
+// =========================================================================
+// Auto-closing brackets/quotes helpers
+// =========================================================================
+
+/// Returns the closing character auto-inserted for an opening bracket or
+/// quote, or `None` if `ch` doesn't start an auto-closeable pair.
+///
+/// # Examples
+///
+/// ```ignore
+/// assert_eq!(matching_close('('), Some(')'));
+/// assert_eq!(matching_close('"'), Some('"'));
+/// assert_eq!(matching_close('x'), None);
+/// ```
+fn matching_close(ch: char) -> Option<char> {
+    match ch {
+        '(' => Some(')'),
+        '[' => Some(']'),
+        '{' => Some('}'),
+        '"' => Some('"'),
+        '\'' => Some('\''),
+        _ => None,
+    }
+}
+
+/// Returns `true` if `ch` is one of the closing brackets/quotes managed by
+/// auto-close (`)`, `]`, `}`, `"`, `'`).
+fn is_closing_char(ch: char) -> bool {
+    matches!(ch, ')' | ']' | '}' | '"' | '\'')
+}
+
 impl CodeEditor {
     // =========================================================================
     // Helper Methods
@@ -335,6 +366,14 @@ impl CodeEditor {
     /// undo history. Characters are grouped together for smart undo.
     /// Only processes input when the editor has active focus and is not locked.
     ///
+    /// When [`auto_close_brackets`](CodeEditor::auto_close_brackets) is enabled:
+    /// - Typing an opening bracket/quote while a selection is active wraps the
+    ///   selection in the pair (surround selection) instead of replacing it.
+    /// - Typing an opening bracket/quote with no selection auto-inserts the
+    ///   matching closing character, leaving the cursor between the two.
+    /// - Typing a closing character that already sits at the cursor "types
+    ///   through" it (the cursor just steps over it) instead of duplicating it.
+    ///
     /// # Arguments
     ///
     /// * `ch` - The character to insert
@@ -352,44 +391,76 @@ impl CodeEditor {
         // Start grouping if not already grouping (for smart undo)
         self.ensure_grouping_started("Typing");
 
-        // Typing replaces active selections, matching paste and IME commit
-        // behavior. Keep the deletion and insertion in the same history group
-        // so a single undo restores the replaced text.
-        if self.cursors.iter().any(|cursor| cursor.has_selection()) {
-            self.delete_selection();
+        let has_any_selection =
+            self.cursors.iter().any(|cursor| cursor.has_selection());
+        let surround_close = if self.auto_close_brackets && has_any_selection {
+            matching_close(ch)
         } else {
-            // A plain click leaves a zero-length anchor in place (see
-            // `handle_enter`); clear it so it isn't mistaken for a real
-            // selection by a later edit.
-            self.clear_selection();
-        }
+            None
+        };
 
-        // Multi-cursor: build a sorted index list (descending document order)
-        // so that edits at higher positions don't invalidate lower positions.
-        let mut order: Vec<usize> = (0..self.cursors.len()).collect();
-        order.sort_by(|&a, &b| {
-            self.cursors.as_slice()[b]
-                .position
-                .cmp(&self.cursors.as_slice()[a].position)
-        });
+        if let Some(close) = surround_close {
+            self.surround_selections_with_pair(ch, close);
+        } else {
+            // Typing replaces active selections, matching paste and IME commit
+            // behavior. Keep the deletion and insertion in the same history group
+            // so a single undo restores the replaced text.
+            if has_any_selection {
+                self.delete_selection();
+            } else {
+                // A plain click leaves a zero-length anchor in place (see
+                // `handle_enter`); clear it so it isn't mistaken for a real
+                // selection by a later edit.
+                self.clear_selection();
+            }
 
-        for &idx in &order {
-            // Any active selection was deleted above, which also moves the
-            // cursor to the original selection start and clears its anchor.
-            // The current cursor position is therefore the insertion point.
-            let pos = self.cursors.as_slice()[idx].position;
-            let mut cmd = InsertCharCommand::new(pos.0, pos.1, ch, pos);
-            let mut cursor_pos = pos;
-            cmd.execute(&mut self.buffer, &mut cursor_pos);
-            self.cursors.as_mut_slice()[idx].position = cursor_pos;
-            adjust_other_cursors(
-                self.cursors.as_mut_slice(),
-                idx,
-                pos.0,
-                pos.1,
-                EditType::InsertChar,
-            );
-            self.history.push(Box::new(cmd));
+            // Multi-cursor: build a sorted index list (descending document order)
+            // so that edits at higher positions don't invalidate lower positions.
+            let mut order: Vec<usize> = (0..self.cursors.len()).collect();
+            order.sort_by(|&a, &b| {
+                self.cursors.as_slice()[b]
+                    .position
+                    .cmp(&self.cursors.as_slice()[a].position)
+            });
+
+            for &idx in &order {
+                // Any active selection was deleted above, which also moves the
+                // cursor to the original selection start and clears its anchor.
+                // The current cursor position is therefore the insertion point.
+                let pos = self.cursors.as_slice()[idx].position;
+
+                if self.auto_close_brackets
+                    && is_closing_char(ch)
+                    && self.char_at(pos) == Some(ch)
+                {
+                    // An auto-inserted closer already sits here: step over it
+                    // instead of inserting a duplicate.
+                    self.cursors.as_mut_slice()[idx].position =
+                        (pos.0, pos.1 + 1);
+                    continue;
+                }
+
+                if self.auto_close_brackets
+                    && let Some(close) = matching_close(ch)
+                    && self.should_auto_close(pos)
+                {
+                    self.insert_pair_at_cursor(idx, pos, ch, close);
+                    continue;
+                }
+
+                let mut cmd = InsertCharCommand::new(pos.0, pos.1, ch, pos);
+                let mut cursor_pos = pos;
+                cmd.execute(&mut self.buffer, &mut cursor_pos);
+                self.cursors.as_mut_slice()[idx].position = cursor_pos;
+                adjust_other_cursors(
+                    self.cursors.as_mut_slice(),
+                    idx,
+                    pos.0,
+                    pos.1,
+                    EditType::InsertChar,
+                );
+                self.history.push(Box::new(cmd));
+            }
         }
 
         self.finish_edit_operation();
@@ -401,6 +472,142 @@ impl CodeEditor {
         }
 
         self.scroll_to_cursor()
+    }
+
+    /// Returns the character at `(line, col)`, or `None` if `col` is at or
+    /// past the end of the line.
+    fn char_at(&self, pos: (usize, usize)) -> Option<char> {
+        self.buffer.line(pos.0).chars().nth(pos.1)
+    }
+
+    /// Returns `true` when auto-closing a pair at `pos` would not wrap
+    /// existing text.
+    ///
+    /// Auto-close only triggers when the cursor is at the end of the line, or
+    /// is followed by whitespace or another closing bracket/quote. This
+    /// avoids inserting a spurious pair in the middle of an identifier (e.g.
+    /// typing `'` inside `sn|ake`).
+    fn should_auto_close(&self, pos: (usize, usize)) -> bool {
+        match self.char_at(pos) {
+            None => true,
+            Some(next) => next.is_whitespace() || is_closing_char(next),
+        }
+    }
+
+    /// Inserts `open` immediately followed by `close` at `pos` for cursor
+    /// `idx`, leaving that cursor positioned between the two characters.
+    ///
+    /// Pushed as two grouped [`InsertCharCommand`]s (grouped with the current
+    /// typing group) so each has independent, correct undo semantics — a
+    /// single command spanning both chars with the cursor resting *between*
+    /// them (rather than after, as `InsertTextCommand` assumes) would make
+    /// `InsertTextCommand::undo`'s backward walk from the resting cursor
+    /// delete the wrong character. Adjusts every other cursor for the
+    /// resulting 2-character insert.
+    fn insert_pair_at_cursor(
+        &mut self,
+        idx: usize,
+        pos: (usize, usize),
+        open: char,
+        close: char,
+    ) {
+        let mut open_cmd = InsertCharCommand::new(pos.0, pos.1, open, pos);
+        let mut cursor_pos = pos;
+        open_cmd.execute(&mut self.buffer, &mut cursor_pos);
+        self.history.push(Box::new(open_cmd));
+
+        let mut close_cmd =
+            InsertCharCommand::new(pos.0, pos.1 + 1, close, cursor_pos);
+        close_cmd.execute(&mut self.buffer, &mut cursor_pos);
+        self.history.push(Box::new(close_cmd));
+
+        // Rest the cursor between the two inserted characters rather than
+        // after the close char (where `close_cmd`'s own `cursor_after` puts it).
+        self.cursors.as_mut_slice()[idx].position = (pos.0, pos.1 + 1);
+
+        // Two characters were inserted at the same column: apply the
+        // single-char adjustment twice so other cursors shift by 2.
+        adjust_other_cursors(
+            self.cursors.as_mut_slice(),
+            idx,
+            pos.0,
+            pos.1,
+            EditType::InsertChar,
+        );
+        adjust_other_cursors(
+            self.cursors.as_mut_slice(),
+            idx,
+            pos.0,
+            pos.1,
+            EditType::InsertChar,
+        );
+    }
+
+    /// Wraps every selected cursor's text in `open`/`close`, and inserts the
+    /// pair at any cursor with no active selection.
+    ///
+    /// Cursors are processed in descending document order (by the start of
+    /// their selection, or their position when unselected) so that edits at
+    /// higher positions don't invalidate earlier ones. Wrapped selections
+    /// keep their original direction (anchor/position) so the originally
+    /// selected text stays selected between the newly inserted pair.
+    fn surround_selections_with_pair(&mut self, open: char, close: char) {
+        let mut order: Vec<usize> = (0..self.cursors.len()).collect();
+        order.sort_by(|&a, &b| {
+            let key = |i: usize| {
+                let cursor = &self.cursors.as_slice()[i];
+                cursor.selection_range().map_or(cursor.position, |(s, _)| s)
+            };
+            key(b).cmp(&key(a))
+        });
+
+        for idx in order {
+            let cursor = self.cursors.as_slice()[idx].clone();
+            let Some((start, end)) = cursor.selection_range() else {
+                self.insert_pair_at_cursor(idx, cursor.position, open, close);
+                continue;
+            };
+            let anchor_is_start = cursor.anchor == Some(start);
+
+            let mut open_cmd =
+                InsertCharCommand::new(start.0, start.1, open, cursor.position);
+            let mut cursor_pos = cursor.position;
+            open_cmd.execute(&mut self.buffer, &mut cursor_pos);
+            self.history.push(Box::new(open_cmd));
+            adjust_other_cursors(
+                self.cursors.as_mut_slice(),
+                idx,
+                start.0,
+                start.1,
+                EditType::InsertChar,
+            );
+
+            // The open char shifted everything after it on the same line by
+            // one column, including `end` if the selection is single-line.
+            let close_col = if end.0 == start.0 { end.1 + 1 } else { end.1 };
+            let mut close_cmd =
+                InsertCharCommand::new(end.0, close_col, close, cursor_pos);
+            close_cmd.execute(&mut self.buffer, &mut cursor_pos);
+            self.history.push(Box::new(close_cmd));
+            adjust_other_cursors(
+                self.cursors.as_mut_slice(),
+                idx,
+                end.0,
+                close_col,
+                EditType::InsertChar,
+            );
+
+            let new_start = (start.0, start.1 + 1);
+            let new_end = (end.0, close_col);
+            let cursor = &mut self.cursors.as_mut_slice()[idx];
+            if anchor_is_start {
+                cursor.anchor = Some(new_start);
+                cursor.position = new_end;
+            } else {
+                cursor.anchor = Some(new_end);
+                cursor.position = new_start;
+            }
+        }
     }
 
     /// Handles Tab key press (inserts 4 spaces).
@@ -3540,6 +3747,172 @@ mod tests {
         let _ = editor.update(&Message::CharacterInput('X'));
         let _ = editor.update(&Message::Undo);
         assert_eq!(editor.buffer.line(0), "hello world");
+    }
+
+    #[test]
+    fn test_matching_close_pairs() {
+        assert_eq!(matching_close('('), Some(')'));
+        assert_eq!(matching_close('['), Some(']'));
+        assert_eq!(matching_close('{'), Some('}'));
+        assert_eq!(matching_close('"'), Some('"'));
+        assert_eq!(matching_close('\''), Some('\''));
+        assert_eq!(matching_close('a'), None);
+    }
+
+    #[test]
+    fn test_is_closing_char() {
+        for ch in [')', ']', '}', '"', '\''] {
+            assert!(is_closing_char(ch), "{ch} should be a closing char");
+        }
+        assert!(!is_closing_char('('));
+        assert!(!is_closing_char('a'));
+    }
+
+    #[test]
+    fn test_auto_close_inserts_pair_with_cursor_between() {
+        for &(open, close) in
+            &[('(', ')'), ('[', ']'), ('{', '}'), ('"', '"'), ('\'', '\'')]
+        {
+            let mut editor = CodeEditor::new("", "py");
+            focus_editor(&mut editor);
+
+            let _ = editor.update(&Message::CharacterInput(open));
+            assert_eq!(
+                editor.buffer.line(0),
+                format!("{open}{close}"),
+                "pair {open}{close}"
+            );
+            assert_eq!(
+                editor.cursors.primary_position(),
+                (0, 1),
+                "pair {open}{close}"
+            );
+            assert!(!editor.cursors.primary().has_selection());
+        }
+    }
+
+    #[test]
+    fn test_auto_close_types_through_existing_closer() {
+        let mut editor = CodeEditor::new("()", "py");
+        focus_editor(&mut editor);
+        editor.cursors.primary_mut().position = (0, 1);
+
+        let _ = editor.update(&Message::CharacterInput(')'));
+        assert_eq!(editor.buffer.line(0), "()");
+        assert_eq!(editor.cursors.primary_position(), (0, 2));
+    }
+
+    #[test]
+    fn test_auto_close_suppressed_before_word_char() {
+        let mut editor = CodeEditor::new("snake", "py");
+        focus_editor(&mut editor);
+        editor.cursors.primary_mut().position = (0, 2); // sn|ake
+
+        let _ = editor.update(&Message::CharacterInput('\''));
+        assert_eq!(editor.buffer.line(0), "sn'ake");
+        assert_eq!(editor.cursors.primary_position(), (0, 3));
+    }
+
+    #[test]
+    fn test_auto_close_undo_removes_pair_in_one_step() {
+        let mut editor = CodeEditor::new("", "py");
+        focus_editor(&mut editor);
+
+        let _ = editor.update(&Message::CharacterInput('('));
+        assert_eq!(editor.buffer.line(0), "()");
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "");
+    }
+
+    #[test]
+    fn test_auto_close_multi_cursor_shifts_other_cursors() {
+        let mut editor = CodeEditor::new("a b", "py");
+        focus_editor(&mut editor);
+        editor.cursors.set_single((0, 1));
+        editor.cursors.add_cursor((0, 3));
+
+        let _ = editor.update(&Message::CharacterInput('('));
+        assert_eq!(editor.buffer.line(0), "a() b()");
+        assert_eq!(editor.cursors.as_slice()[0].position, (0, 2));
+        assert_eq!(editor.cursors.as_slice()[1].position, (0, 6));
+    }
+
+    #[test]
+    fn test_auto_close_brackets_disabled_inserts_plain_char() {
+        let mut editor = CodeEditor::new("", "py");
+        focus_editor(&mut editor);
+        editor.set_auto_close_brackets(false);
+
+        let _ = editor.update(&Message::CharacterInput('('));
+        assert_eq!(editor.buffer.line(0), "(");
+        assert_eq!(editor.cursors.primary_position(), (0, 1));
+    }
+
+    #[test]
+    fn test_surround_selection_wraps_forward_selection() {
+        let mut editor = CodeEditor::new("hello world", "py");
+        focus_editor(&mut editor);
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 5);
+
+        let _ = editor.update(&Message::CharacterInput('"'));
+        assert_eq!(editor.buffer.line(0), "\"hello\" world");
+        assert_eq!(editor.cursors.primary().anchor, Some((0, 1)));
+        assert_eq!(editor.cursors.primary_position(), (0, 6));
+        assert!(editor.cursors.primary().has_selection());
+    }
+
+    #[test]
+    fn test_surround_selection_wraps_reversed_selection() {
+        let mut editor = CodeEditor::new("hello world", "py");
+        focus_editor(&mut editor);
+        editor.cursors.primary_mut().anchor = Some((0, 5));
+        editor.cursors.primary_mut().position = (0, 0);
+
+        let _ = editor.update(&Message::CharacterInput('('));
+        assert_eq!(editor.buffer.line(0), "(hello) world");
+        assert_eq!(editor.cursors.primary().anchor, Some((0, 6)));
+        assert_eq!(editor.cursors.primary_position(), (0, 1));
+    }
+
+    #[test]
+    fn test_surround_selection_wraps_multiline_selection() {
+        let mut editor = CodeEditor::new("foo\nbar", "py");
+        focus_editor(&mut editor);
+        editor.cursors.primary_mut().anchor = Some((0, 1));
+        editor.cursors.primary_mut().position = (1, 2);
+
+        let _ = editor.update(&Message::CharacterInput('['));
+        assert_eq!(editor.buffer.line(0), "f[oo");
+        assert_eq!(editor.buffer.line(1), "ba]r");
+        assert_eq!(editor.cursors.primary().anchor, Some((0, 2)));
+        assert_eq!(editor.cursors.primary_position(), (1, 2));
+    }
+
+    #[test]
+    fn test_surround_selection_undoes_as_single_group() {
+        let mut editor = CodeEditor::new("hello world", "py");
+        focus_editor(&mut editor);
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 5);
+
+        let _ = editor.update(&Message::CharacterInput('"'));
+        assert_eq!(editor.buffer.line(0), "\"hello\" world");
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "hello world");
+    }
+
+    #[test]
+    fn test_surround_selection_disabled_replaces_selection_instead() {
+        let mut editor = CodeEditor::new("hello world", "py");
+        focus_editor(&mut editor);
+        editor.set_auto_close_brackets(false);
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 5);
+
+        let _ = editor.update(&Message::CharacterInput('"'));
+        assert_eq!(editor.buffer.line(0), "\" world");
+        assert!(!editor.cursors.primary().has_selection());
     }
 
     #[test]

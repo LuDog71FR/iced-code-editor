@@ -414,6 +414,7 @@ pub fn view_editor_pane<'a>(
     let wrap_enabled = editor.wrap_enabled();
     let folding_enabled = editor.folding_enabled();
     let auto_indent_enabled = editor.auto_indent_enabled();
+    let auto_close_brackets_enabled = editor.auto_close_brackets();
     let current_indent_style = editor.indent_style();
     let search_replace_enabled = editor.search_replace_enabled();
     let line_numbers_enabled = editor.line_numbers_enabled();
@@ -445,6 +446,12 @@ pub fn view_editor_pane<'a>(
     let auto_indent_checkbox = checkbox(auto_indent_enabled)
         .label("Auto-indentation")
         .on_toggle(move |b| Message::ToggleAutoIndent(editor_id, b))
+        .text_size(14);
+
+    // Auto-close brackets/quotes checkbox
+    let auto_close_brackets_checkbox = checkbox(auto_close_brackets_enabled)
+        .label("Auto-close brackets")
+        .on_toggle(move |b| Message::ToggleAutoCloseBrackets(editor_id, b))
         .text_size(14);
 
     // Indent style pick_list
@@ -613,6 +620,8 @@ pub fn view_editor_pane<'a>(
                 folding_checkbox,
                 Space::new().width(10),
                 auto_indent_checkbox,
+                Space::new().width(10),
+                auto_close_brackets_checkbox,
                 Space::new().width(10),
                 indent_style_picker,
                 Space::new().width(10),

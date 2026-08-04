@@ -38,6 +38,7 @@ Screenshot of the demo application:
 - **Search and replace** text
 - **Language Server Protocol** (LSP) support
 - **Auto indentation** with custom indent style
+- **Auto-closing brackets/quotes** with surround selection
 - **Multiple cursors** for simultaneous editing at multiple positions
 - **Move and duplicate lines** with keyboard shortcuts
 - **Toggle comment** on the current line or selection (`Ctrl+/`)
@@ -46,7 +47,6 @@ Screenshot of the demo application:
 
 ## Planned features
 
-- [ ] Auto-closing brackets/quotes
 - [ ] Find references / Rename symbol
 - [ ] Command palette
 - [ ] Minimap
@@ -599,6 +599,20 @@ match editor.indent_style() {
 ```
 
 Available styles via `IndentStyle::ALL`: `Spaces(2)`, `Spaces(4)`, `Spaces(8)`, `Tab`.
+
+### Auto-closing brackets/quotes
+
+Auto-closing is **enabled by default**. Typing an opening bracket or quote (`(`, `[`, `{`, `"`, `'`) auto-inserts its matching closing character with the cursor placed between them; typing the closing character right after an already-inserted match moves the cursor past it instead of duplicating it; and typing an opening bracket/quote while text is selected wraps the selection in the pair instead of replacing it.
+
+```rust
+// Disable auto-closing of brackets/quotes
+editor.set_auto_close_brackets(false);
+
+// Check current state
+if editor.auto_close_brackets() {
+    println!("Auto-closing is active");
+}
+```
 
 ### Language Server Protocol (LSP)
 

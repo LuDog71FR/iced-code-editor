@@ -165,6 +165,8 @@ pub enum Message {
     ToggleFolding(EditorId, bool),
     /// Toggle auto-indentation
     ToggleAutoIndent(EditorId, bool),
+    /// Toggle auto-closing of brackets/quotes
+    ToggleAutoCloseBrackets(EditorId, bool),
     /// Change indentation style
     IndentStyleChanged(EditorId, IndentStyle),
     /// Toggle search/replace
@@ -702,6 +704,27 @@ greet("World")
 
         if let Some(tab) = self.get_tab(editor_id) {
             tab.editor.set_auto_indent_enabled(enabled);
+        }
+        Task::none()
+    }
+
+    /// Handles toggling auto-closing of brackets/quotes for a specific editor.
+    fn handle_toggle_auto_close_brackets(
+        &mut self,
+        editor_id: EditorId,
+        enabled: bool,
+    ) -> Task<Message> {
+        self.log(
+            "INFO",
+            &format!(
+                "Auto-close brackets {} in {:?} editor",
+                if enabled { "enabled" } else { "disabled" },
+                editor_id
+            ),
+        );
+
+        if let Some(tab) = self.get_tab(editor_id) {
+            tab.editor.set_auto_close_brackets(enabled);
         }
         Task::none()
     }
@@ -1305,6 +1328,9 @@ greet("World")
             Message::ToggleAutoIndent(editor_id, enabled) => {
                 self.handle_toggle_auto_indent(editor_id, enabled)
             }
+            Message::ToggleAutoCloseBrackets(editor_id, enabled) => {
+                self.handle_toggle_auto_close_brackets(editor_id, enabled)
+            }
             Message::IndentStyleChanged(editor_id, style) => {
                 self.handle_indent_style_changed(editor_id, style)
             }
@@ -1572,6 +1598,26 @@ mod tests {
 
         let _ = app.handle_toggle_vim(tab_id, false);
         assert!(!app.get_active_editor().is_some_and(|e| e.vim_enabled()));
+    }
+
+    #[test]
+    fn test_toggle_auto_close_brackets_updates_editor_setting() {
+        let (mut app, _) = DemoApp::new();
+        let tab_id = app.active_tab_id;
+
+        assert!(
+            app.get_active_editor().is_some_and(|e| e.auto_close_brackets())
+        );
+
+        let _ = app.handle_toggle_auto_close_brackets(tab_id, false);
+        assert!(
+            !app.get_active_editor().is_some_and(|e| e.auto_close_brackets())
+        );
+
+        let _ = app.handle_toggle_auto_close_brackets(tab_id, true);
+        assert!(
+            app.get_active_editor().is_some_and(|e| e.auto_close_brackets())
+        );
     }
 
     #[test]

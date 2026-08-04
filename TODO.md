@@ -12,26 +12,25 @@ None
 
 ### Editing
 
-1. **Auto-closing brackets/quotes** + surround selection
-2. **Matching bracket highlight** + indentation guides
-3. **Snippets**
+1. **Matching bracket highlight** + indentation guides
+2. **Snippets**
 
 ### LSP / IntelliSense (completion, hover, go-to-definition already done)
 
-4. **Diagnostics display** (underlines + gutter + panel)
-5. **Find references** + **Rename symbol**
-6. **Document formatting** (format on save)
-7. **Signature help**
-8. **Code actions / quick fixes**
-9. **Outline / document symbols** (+ breadcrumbs)
+3. **Diagnostics display** (underlines + gutter + panel)
+4. **Find references** + **Rename symbol**
+5. **Document formatting** (format on save)
+6. **Signature help**
+7. **Code actions / quick fixes**
+8. **Outline / document symbols** (+ breadcrumbs)
 
 ### Navigation / UI
 
-10. **Command palette** (`Ctrl+Shift+P`)
-11. **Sticky scroll** (pinned scope header)
-12. **Bracket pair colorization** (rainbow brackets)
-13. **Inline color preview** (swatches for `#rrggbb`)
-14. **Minimap** (overview of entire file & clickable navigation)
+9. **Command palette** (`Ctrl+Shift+P`)
+10. **Sticky scroll** (pinned scope header)
+11. **Bracket pair colorization** (rainbow brackets)
+12. **Inline color preview** (swatches for `#rrggbb`)
+13. **Minimap** (overview of entire file & clickable navigation)
 
 ## Performance Improvements
 

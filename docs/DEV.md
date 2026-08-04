@@ -20,6 +20,7 @@
    - [Code Folding](#code-folding)
    - [Search and Replace](#search-and-replace)
    - [Auto-Indentation](#auto-indentation)
+   - [Auto-Closing Brackets/Quotes](#auto-closing-bracketsquotes)
    - [Cursor Blinking](#cursor-blinking)
    - [Focus Management](#focus-management)
    - [Selection Rendering](#selection-rendering)
@@ -51,6 +52,7 @@
    - [Multi-Cursor Edit Order](#5-multi-cursor-edit-order)
    - [Buffer Revision Bumping](#6-buffer-revision-bumping)
    - [Highlight Cache Anchor (pre_edit_line)](#7-highlight-cache-anchor-pre_edit_line)
+   - [InsertTextCommand Cursor Override vs. Undo](#8-inserttextcommand-cursor-override-vs-undo)
 9. [Future Enhancements](#future-enhancements)
 10. [Contributing Guidelines](#contributing-guidelines)
     - [Code Style](#code-style)
@@ -125,6 +127,7 @@ pub struct CodeEditor {
     folding_enabled: bool,               // Code folding toggle
     collapsed_folds: HashSet<usize>,     // Collapsed region headers
     auto_indent_enabled: bool,           // Auto-indent on newline
+    auto_close_brackets: bool,           // Auto-close brackets/quotes + surround selection
     indent_style: IndentStyle,           // Spaces(n) or Tab
     search_state: search::SearchState,   // Search/replace state
     lsp_client: Option<Box<dyn LspClient>>, // Optional LSP connection
@@ -560,6 +563,49 @@ IndentStyle::ALL == [Spaces(2), Spaces(4), Spaces(8), Tab];
 
 `set_indent_style()` selects the active style and `set_auto_indent_enabled()` toggles
 the behaviour. Tab width for display/folding is governed by the `TAB_WIDTH` constant.
+
+### Auto-Closing Brackets/Quotes
+
+**Location:** `canvas_editor/update.rs` (logic), `canvas_editor/mod.rs` (toggle field)
+
+When `auto_close_brackets` is set, `handle_character_input_msg()` branches on the typed
+character before falling back to a plain `InsertCharCommand`:
+
+```rust
+fn matching_close(ch: char) -> Option<char> {
+    match ch {
+        '(' => Some(')'),
+        '[' => Some(']'),
+        '{' => Some('}'),
+        '"' => Some('"'),
+        '\'' => Some('\''),
+        _ => None,
+    }
+}
+```
+
+**Three behaviours, evaluated per cursor:**
+
+- **Surround selection** (`surround_selections_with_pair()`): if the cursor has a
+  selection and the typed char has a pair, the open char is inserted at the selection
+  start and the close char at the selection end, instead of replacing the selection.
+  The wrapped text stays selected — the cursor's `anchor`/`position` are recomputed to
+  keep the original selection direction.
+- **Type-through**: if the typed char is a closing char and it already sits immediately
+  after the cursor (`char_at(pos) == Some(ch)`), the cursor just steps over it — no
+  buffer mutation, no history entry.
+- **Auto-close insert** (`insert_pair_at_cursor()`): if the typed char opens a pair and
+  `should_auto_close()` says the following character is EOL, whitespace, or another
+  closing bracket/quote (so it never wraps mid-identifier, e.g. typing `'` inside
+  `sn|ake`), both characters are inserted with the cursor left between them.
+
+Multi-cursor adjustment reuses `EditType::InsertChar` — since a 2-character insert at
+column `c` is equivalent to two 1-character inserts at the same `c`,
+`adjust_other_cursors()` is simply called twice instead of adding a new `EditType`
+variant (see [Multi-Cursor Edit Order](#5-multi-cursor-edit-order)).
+
+`set_auto_close_brackets()` toggles the whole feature; the demo app exposes it as a
+toolbar checkbox next to "Auto-indentation".
 
 ### Cursor Blinking
 
@@ -1443,6 +1489,40 @@ anchor. `finish_edit_operation()` then truncates from `pre_edit_line - 1` (a
 one-line margin covering edits that merge with the preceding line, e.g. backspace at
 column 0). A new edit handler must keep `pre_edit_line` consistent with where it
 actually mutates the buffer.
+
+### 8. InsertTextCommand Cursor Override vs. Undo
+
+**Problem:** `InsertTextCommand::with_cursor_after()` (`command.rs`) lets a command
+override where the cursor rests after `execute()` — used by auto-close bracket
+insertion to leave the cursor *between* the two inserted characters instead of after
+them. But `InsertTextCommand::undo()` assumes the opposite: it walks backward from
+`cursor_after`, deleting one character per step via `buffer.delete_char()` (a
+backspace-style delete of the character *before* the given column). That walk is only
+correct when `cursor_after` sits *after* the whole inserted string. Overriding it to a
+position *inside* the string (e.g. between `(` and `)`) makes undo delete the wrong
+character and leave one of the pair behind.
+
+**Solution:** When the resting cursor must land inside the inserted text, don't use a
+single `InsertTextCommand` with an overridden cursor. Push one `InsertCharCommand` per
+character instead (as `insert_pair_at_cursor()` and `surround_selections_with_pair()`
+in `update.rs` do) — each command's own `cursor_before`/`cursor_after` stays consistent
+with what it actually inserted, so undoing them in reverse (via the history group)
+restores the exact prior state regardless of where the visible cursor ends up.
+
+```rust
+// update.rs — insert_pair_at_cursor(): two independent commands, not one
+// InsertTextCommand::with_cursor_after() spanning both chars.
+let mut open_cmd = InsertCharCommand::new(pos.0, pos.1, open, pos);
+open_cmd.execute(&mut self.buffer, &mut cursor_pos);
+self.history.push(Box::new(open_cmd));
+
+let mut close_cmd = InsertCharCommand::new(pos.0, pos.1 + 1, close, cursor_pos);
+close_cmd.execute(&mut self.buffer, &mut cursor_pos);
+self.history.push(Box::new(close_cmd));
+```
+
+`with_cursor_after()` remains correct and safe for its existing use (Vim paste), where
+the resting cursor is still at a string boundary (start or end), never mid-string.
 
 ## Future Enhancements
 

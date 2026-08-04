@@ -418,6 +418,8 @@ pub struct CodeEditor {
     pub(crate) wrap_enabled: bool,
     /// Auto-indentation enabled
     pub(crate) auto_indent_enabled: bool,
+    /// Auto-closing of brackets/quotes and surround-selection enabled
+    pub(crate) auto_close_brackets: bool,
     /// Indentation style (spaces or tab)
     pub(crate) indent_style: IndentStyle,
     /// Wrap column (None = wrap at viewport width)
@@ -942,6 +944,7 @@ impl CodeEditor {
             is_grouping: false,
             wrap_enabled: true,
             auto_indent_enabled: true,
+            auto_close_brackets: true,
             indent_style: IndentStyle::Spaces(4),
             wrap_column: None,
             folding_enabled: true,
@@ -2189,6 +2192,40 @@ impl CodeEditor {
         self.auto_indent_enabled
     }
 
+    /// Enables or disables auto-closing of brackets and quotes.
+    ///
+    /// When enabled, typing an opening bracket/quote (`(`, `[`, `{`, `"`,
+    /// `'`) auto-inserts its matching closing character with the cursor
+    /// placed between them, typing the closing character right before an
+    /// already-inserted match moves the cursor past it instead of
+    /// duplicating it, and typing an opening bracket/quote while text is
+    /// selected wraps the selection in the pair instead of replacing it.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - `true` to enable auto-closing, `false` to disable
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_auto_close_brackets(false); // Disable auto-closing
+    /// ```
+    pub fn set_auto_close_brackets(&mut self, enabled: bool) {
+        self.auto_close_brackets = enabled;
+    }
+
+    /// Returns whether auto-closing of brackets and quotes is enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` if auto-closing is enabled, `false` otherwise
+    pub fn auto_close_brackets(&self) -> bool {
+        self.auto_close_brackets
+    }
+
     /// Sets the indentation style used when pressing the Tab key.
     ///
     /// # Arguments
@@ -2907,6 +2944,18 @@ mod tests {
         let editor =
             CodeEditor::new("", "rs").with_reveal_in_file_manager_enabled(true);
         assert!(editor.reveal_in_file_manager_enabled());
+    }
+
+    #[test]
+    fn test_auto_close_brackets_configuration() {
+        let mut editor = CodeEditor::new("", "rs");
+        assert!(editor.auto_close_brackets());
+
+        editor.set_auto_close_brackets(false);
+        assert!(!editor.auto_close_brackets());
+
+        editor.set_auto_close_brackets(true);
+        assert!(editor.auto_close_brackets());
     }
 
     #[test]
