@@ -330,6 +330,75 @@ greet("World")
             .with_default_context_menu_enabled(true)
     }
 
+    /// Creates a [`Self::new_editor`] configured with the app's current
+    /// font, size, line height, theme, and language.
+    ///
+    /// Does not set reveal-in-file-manager: that policy depends on whether
+    /// the caller has an associated file path, decided by
+    /// [`Self::open_content_in_tab`].
+    fn configured_editor(&self, content: &str) -> CodeEditor {
+        let mut editor = Self::new_editor(content);
+        editor.set_font(self.current_font.font());
+        editor.set_font_size(
+            self.current_font_size,
+            self.auto_adjust_line_height,
+        );
+        editor.set_line_height(self.current_line_height);
+        editor.set_theme(theme::from_iced_theme(&self.current_theme));
+        editor.set_language(self.current_language);
+        editor
+    }
+
+    /// Resolves the tab that should hold `content`, reusing the active tab
+    /// if it is empty, unmodified, and has no file path, or otherwise
+    /// creating and activating a new tab via [`Self::configured_editor`].
+    ///
+    /// Applies the reveal-in-file-manager policy — enabled only on native
+    /// targets and only when `path` is `Some` — to whichever tab is
+    /// returned.
+    ///
+    /// Callers remain responsible for any further tab-specific work:
+    /// syncing existing-editor content (`reset`), cursor placement, LSP
+    /// sync, dirty-flag bookkeeping, and logging.
+    fn open_content_in_tab(
+        &mut self,
+        path: Option<&PathBuf>,
+        content: &str,
+    ) -> EditorId {
+        let active_tab_id = self.active_tab_id;
+        let reuse_tab = self.get_active_tab().is_some_and(|tab| {
+            tab.file_path.is_none()
+                && tab.editor.content().trim().is_empty()
+                && !tab.is_dirty
+        });
+
+        let target_tab_id = if reuse_tab {
+            active_tab_id
+        } else {
+            let new_id = EditorId(self.next_tab_id);
+            self.next_tab_id += 1;
+            let editor = self.configured_editor(content);
+            let tab = EditorTab {
+                id: new_id,
+                editor,
+                file_path: path.cloned(),
+                is_dirty: false,
+                #[cfg(not(target_arch = "wasm32"))]
+                lsp_server_key: None,
+            };
+            self.tabs.push(tab);
+            self.active_tab_id = new_id;
+            new_id
+        };
+
+        let reveal_enabled = !cfg!(target_arch = "wasm32") && path.is_some();
+        if let Some(tab) = self.get_tab(target_tab_id) {
+            tab.editor.set_reveal_in_file_manager_enabled(reveal_enabled);
+        }
+
+        target_tab_id
+    }
+
     pub fn get_active_tab(&mut self) -> Option<&mut EditorTab> {
         let id = self.active_tab_id;
         self.tabs.iter_mut().find(|t| t.id == id)
@@ -447,46 +516,8 @@ greet("World")
 
                 // If current tab is empty (no file, no content), reuse it.
                 // Otherwise create new tab.
-                let active_tab_id = self.active_tab_id;
-                let reuse_tab = self.get_active_tab().is_some_and(|tab| {
-                    tab.file_path.is_none()
-                        && tab.editor.content().trim().is_empty()
-                        && !tab.is_dirty
-                });
-
-                let target_tab_id = if reuse_tab {
-                    active_tab_id
-                } else {
-                    let new_id = EditorId(self.next_tab_id);
-                    self.next_tab_id += 1;
-
-                    let mut editor = Self::new_editor(&content); // Default language, will update
-                    let font = self.current_font.font();
-                    editor.set_font(font);
-                    editor.set_font_size(
-                        self.current_font_size,
-                        self.auto_adjust_line_height,
-                    );
-                    editor.set_line_height(self.current_line_height);
-                    editor
-                        .set_theme(theme::from_iced_theme(&self.current_theme));
-                    editor.set_language(self.current_language);
-                    editor.set_reveal_in_file_manager_enabled(!cfg!(
-                        target_arch = "wasm32"
-                    ));
-
-                    let tab = EditorTab {
-                        id: new_id,
-                        editor,
-                        file_path: Some(path.clone()),
-                        is_dirty: false,
-                        #[cfg(not(target_arch = "wasm32"))]
-                        lsp_server_key: None,
-                    };
-                    self.tabs.push(tab);
-                    self.active_tab_id = new_id;
-                    new_id
-                };
+                let target_tab_id =
+                    self.open_content_in_tab(Some(&path), &content);
 
                 self.log(
                     "INFO",
@@ -511,9 +542,6 @@ greet("World")
                 let task = editor.reset(&content);
                 editor.set_theme(style);
                 editor.mark_saved();
-                editor.set_reveal_in_file_manager_enabled(!cfg!(
-                    target_arch = "wasm32"
-                ));
                 #[cfg(not(target_arch = "wasm32"))]
                 let path_for_lsp = path.clone();
                 *current_file = Some(path);
@@ -1200,44 +1228,8 @@ greet("World")
                 }
 
                 // New tab logic similar to handle_file_opened
-                let active_tab_id = self.active_tab_id;
-                let reuse_tab = self.get_active_tab().is_some_and(|tab| {
-                    tab.file_path.is_none()
-                        && tab.editor.content().trim().is_empty()
-                        && !tab.is_dirty
-                });
-
-                let target_tab_id = if reuse_tab {
-                    active_tab_id
-                } else {
-                    let new_id = EditorId(self.next_tab_id);
-                    self.next_tab_id += 1;
-
-                    let mut editor = Self::new_editor(&content);
-                    let font = self.current_font.font();
-                    editor.set_font(font);
-                    editor.set_font_size(
-                        self.current_font_size,
-                        self.auto_adjust_line_height,
-                    );
-                    editor.set_line_height(self.current_line_height);
-                    editor
-                        .set_theme(theme::from_iced_theme(&self.current_theme));
-                    editor.set_language(self.current_language);
-                    editor.set_reveal_in_file_manager_enabled(true);
-
-                    let tab = EditorTab {
-                        id: new_id,
-                        editor,
-                        file_path: Some(path.clone()),
-                        is_dirty: false,
-                        #[cfg(not(target_arch = "wasm32"))]
-                        lsp_server_key: None,
-                    };
-                    self.tabs.push(tab);
-                    self.active_tab_id = new_id;
-                    new_id
-                };
+                let target_tab_id =
+                    self.open_content_in_tab(Some(&path), &content);
 
                 let Some((editor, current_file)) =
                     self.get_editor_and_file(target_tab_id)
@@ -1249,7 +1241,6 @@ greet("World")
                     return Task::none();
                 };
                 *current_file = Some(path.clone());
-                editor.set_reveal_in_file_manager_enabled(true);
                 let t1 = editor
                     .reset(&content)
                     .map(move |e| Message::EditorEvent(target_tab_id, e));
@@ -1577,20 +1568,13 @@ greet("World")
                 Task::none()
             }
             Message::NewTab => {
+                // Always creates a fresh tab (unlike `open_content_in_tab`,
+                // which may reuse an empty active tab) — an explicit "new
+                // tab" action must always produce a new one.
                 let new_id = EditorId(self.next_tab_id);
                 self.next_tab_id += 1;
 
-                let mut editor = Self::new_editor("");
-                let font = self.current_font.font();
-                editor.set_font(font);
-                editor.set_font_size(
-                    self.current_font_size,
-                    self.auto_adjust_line_height,
-                );
-                editor.set_line_height(self.current_line_height);
-                editor.set_theme(theme::from_iced_theme(&self.current_theme));
-                editor.set_language(self.current_language);
-
+                let editor = self.configured_editor("");
                 let tab = EditorTab {
                     id: new_id,
                     editor,
@@ -1625,6 +1609,72 @@ greet("World")
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_configured_editor_applies_font_size_theme_and_language() {
+        let (mut app, _) = DemoApp::new();
+        app.current_font_size = 21.0;
+        app.current_line_height = 30.0;
+
+        let editor = app.configured_editor("hello");
+        assert_eq!(editor.content(), "hello");
+        assert!((editor.font_size() - 21.0).abs() < f32::EPSILON);
+        assert!((editor.line_height() - 30.0).abs() < f32::EPSILON);
+        // configured_editor never touches reveal-in-file-manager; that is
+        // decided by open_content_in_tab based on the path.
+        assert!(!editor.reveal_in_file_manager_enabled());
+    }
+
+    #[test]
+    fn test_open_content_in_tab_reuses_empty_untouched_active_tab() {
+        let (mut app, _) = DemoApp::new();
+        // The initial tab created by `DemoApp::new()` has template content,
+        // so it is not eligible for reuse. `NewTab` produces a genuinely
+        // empty, clean tab.
+        let _ = app.update(Message::NewTab);
+        let active_id = app.active_tab_id;
+        let tab_count_before = app.tabs.len();
+
+        let target = app.open_content_in_tab(None, "");
+        assert_eq!(target, active_id);
+        assert_eq!(app.tabs.len(), tab_count_before);
+    }
+
+    #[test]
+    fn test_open_content_in_tab_creates_new_tab_when_active_tab_is_dirty() {
+        let (mut app, _) = DemoApp::new();
+        // Start from a genuinely empty tab, then mark it dirty: it must no
+        // longer be eligible for reuse despite having no content.
+        let _ = app.update(Message::NewTab);
+        let active_id = app.active_tab_id;
+        if let Some(tab) = app.get_active_tab() {
+            tab.is_dirty = true;
+        }
+        let tab_count_before = app.tabs.len();
+
+        let target = app.open_content_in_tab(None, "");
+        assert_ne!(target, active_id);
+        assert_eq!(app.tabs.len(), tab_count_before + 1);
+    }
+
+    #[test]
+    fn test_open_content_in_tab_enables_reveal_only_with_path() {
+        let (mut app, _) = DemoApp::new();
+        let path = PathBuf::from("/tmp/iced-code-editor/open-content.lua");
+
+        let with_path = app.open_content_in_tab(Some(&path), "content");
+        assert!(
+            app.get_tab(with_path)
+                .is_some_and(|tab| tab.editor.reveal_in_file_manager_enabled())
+        );
+
+        let without_path = app.open_content_in_tab(None, "");
+        assert!(
+            app.get_tab(without_path).is_some_and(|tab| !tab
+                .editor
+                .reveal_in_file_manager_enabled())
+        );
+    }
 
     #[test]
     fn test_toggle_vim_updates_editor_vim_enabled() {

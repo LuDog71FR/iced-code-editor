@@ -27,6 +27,42 @@ pub trait Command: Send + std::fmt::Debug {
     fn undo(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize));
 }
 
+/// Inserts `text` into `buffer` starting at `(line, col)`, character by
+/// character, translating `'\n'` into a newline split and every other
+/// character into a plain insertion.
+///
+/// Returns the buffer position immediately after the last inserted
+/// character (i.e. where the caret would rest after typing `text`).
+///
+/// # Examples
+///
+/// ```ignore
+/// let end = insert_text_at(&mut buffer, 0, 0, "ab\ncd");
+/// assert_eq!(end, (1, 2));
+/// ```
+fn insert_text_at(
+    buffer: &mut TextBuffer,
+    line: usize,
+    col: usize,
+    text: &str,
+) -> (usize, usize) {
+    let mut current_line = line;
+    let mut current_col = col;
+
+    for ch in text.chars() {
+        if ch == '\n' {
+            buffer.insert_newline(current_line, current_col);
+            current_line += 1;
+            current_col = 0;
+        } else {
+            buffer.insert_char(current_line, current_col, ch);
+            current_col += 1;
+        }
+    }
+
+    (current_line, current_col)
+}
+
 /// Command for inserting a single character.
 #[derive(Debug, Clone)]
 pub struct InsertCharCommand {
@@ -383,20 +419,7 @@ impl Command for InsertTextCommand {
         buffer: &mut TextBuffer,
         cursor: &mut (usize, usize),
     ) {
-        let mut current_line = self.line;
-        let mut current_col = self.col;
-
-        for ch in self.text.chars() {
-            if ch == '\n' {
-                buffer.insert_newline(current_line, current_col);
-                current_line += 1;
-                current_col = 0;
-            } else {
-                buffer.insert_char(current_line, current_col, ch);
-                current_col += 1;
-            }
-        }
-
+        insert_text_at(buffer, self.line, self.col, &self.text);
         *cursor = self.cursor_after;
     }
 
@@ -536,20 +559,7 @@ impl Command for DeleteRangeCommand {
 
     fn undo(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) {
         // Re-insert the deleted text
-        let mut current_line = self.start.0;
-        let mut current_col = self.start.1;
-
-        for ch in self.deleted_text.chars() {
-            if ch == '\n' {
-                buffer.insert_newline(current_line, current_col);
-                current_line += 1;
-                current_col = 0;
-            } else {
-                buffer.insert_char(current_line, current_col, ch);
-                current_col += 1;
-            }
-        }
-
+        insert_text_at(buffer, self.start.0, self.start.1, &self.deleted_text);
         *cursor = self.cursor_before;
     }
 }
@@ -990,6 +1000,31 @@ impl Command for ToggleCommentCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_insert_text_at_single_line() {
+        let mut buffer = TextBuffer::new("hello");
+        let end = insert_text_at(&mut buffer, 0, 5, "!!");
+        assert_eq!(buffer.line(0), "hello!!");
+        assert_eq!(end, (0, 7));
+    }
+
+    #[test]
+    fn test_insert_text_at_with_newlines_returns_end_position() {
+        let mut buffer = TextBuffer::new("ac");
+        let end = insert_text_at(&mut buffer, 0, 1, "b\nb");
+        assert_eq!(buffer.line(0), "ab");
+        assert_eq!(buffer.line(1), "bc");
+        assert_eq!(end, (1, 1));
+    }
+
+    #[test]
+    fn test_insert_text_at_empty_string_is_noop() {
+        let mut buffer = TextBuffer::new("hello");
+        let end = insert_text_at(&mut buffer, 0, 2, "");
+        assert_eq!(buffer.line(0), "hello");
+        assert_eq!(end, (0, 2));
+    }
 
     #[test]
     fn test_insert_char_command() {

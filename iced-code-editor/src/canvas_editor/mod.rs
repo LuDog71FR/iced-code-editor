@@ -1417,21 +1417,16 @@ impl CodeEditor {
     pub fn attach_lsp(
         &mut self,
         mut client: Box<dyn lsp::LspClient>,
-        mut document: lsp::LspDocument,
+        document: lsp::LspDocument,
     ) {
         if !self.lsp_enabled {
             return;
         }
-        document.version = 1;
-        let text = self.buffer.to_string();
-        client.did_open(&document, &text);
+        let (document, text) =
+            open_lsp_document(client.as_mut(), &self.buffer, document);
         self.lsp_client = Some(client);
         self.lsp_document = Some(document);
-        self.lsp_shadow_text = text;
-        self.lsp_shadow_is_current = true;
-        self.update_lsp_synced_extent();
-        self.lsp_edit_snapshot = None;
-        self.lsp_pending_changes.clear();
+        self.reset_lsp_shadow_state(text);
     }
 
     /// Opens a new document on the attached LSP client.
@@ -1442,15 +1437,20 @@ impl CodeEditor {
     /// # Arguments
     ///
     /// * `document` - Document metadata describing the buffer
-    pub fn lsp_open_document(&mut self, mut document: lsp::LspDocument) {
+    pub fn lsp_open_document(&mut self, document: lsp::LspDocument) {
         let Some(client) = self.lsp_client.as_mut() else { return };
         if let Some(current) = self.lsp_document.as_ref() {
             client.did_close(current);
         }
-        document.version = 1;
-        let text = self.buffer.to_string();
-        client.did_open(&document, &text);
+        let (document, text) =
+            open_lsp_document(client.as_mut(), &self.buffer, document);
         self.lsp_document = Some(document);
+        self.reset_lsp_shadow_state(text);
+    }
+
+    /// Resets LSP shadow-sync bookkeeping after (re)opening a document whose
+    /// buffer contents are `text`.
+    fn reset_lsp_shadow_state(&mut self, text: String) {
         self.lsp_shadow_text = text;
         self.lsp_shadow_is_current = true;
         self.update_lsp_synced_extent();
@@ -1458,15 +1458,37 @@ impl CodeEditor {
         self.lsp_pending_changes.clear();
     }
 
+    /// Runs `f` with the attached LSP client and document, if both are
+    /// present. Returns `None` (without calling `f`) if either is absent.
+    ///
+    /// `f` receives only `client`/`document`, not `&mut self`, so callers
+    /// needing other `self` state (e.g. `self.buffer`) must compute it
+    /// before calling this helper and move it into the closure.
+    fn with_lsp<R>(
+        &mut self,
+        f: impl FnOnce(&mut dyn lsp::LspClient, &lsp::LspDocument) -> R,
+    ) -> Option<R> {
+        let client = self.lsp_client.as_deref_mut()?;
+        let document = self.lsp_document.as_ref()?;
+        Some(f(client, document))
+    }
+
+    /// Like [`Self::with_lsp`], but gives `f` a mutable reference to the
+    /// document (needed to bump `document.version`).
+    fn with_lsp_mut_document<R>(
+        &mut self,
+        f: impl FnOnce(&mut dyn lsp::LspClient, &mut lsp::LspDocument) -> R,
+    ) -> Option<R> {
+        let client = self.lsp_client.as_deref_mut()?;
+        let document = self.lsp_document.as_mut()?;
+        Some(f(client, document))
+    }
+
     /// Detaches the current LSP client and closes any open document.
     ///
     /// This clears all LSP-related state on the editor instance.
     pub fn detach_lsp(&mut self) {
-        if let (Some(client), Some(document)) =
-            (self.lsp_client.as_mut(), self.lsp_document.as_ref())
-        {
-            client.did_close(document);
-        }
+        self.with_lsp(|client, document| client.did_close(document));
         self.lsp_client = None;
         self.lsp_document = None;
         self.lsp_shadow_text = String::new();
@@ -1479,22 +1501,16 @@ impl CodeEditor {
 
     /// Sends a `did_save` notification with the current buffer contents.
     pub fn lsp_did_save(&mut self) {
-        if let (Some(client), Some(document)) =
-            (self.lsp_client.as_mut(), self.lsp_document.as_ref())
-        {
-            let text = self.buffer.to_string();
-            client.did_save(document, &text);
-        }
+        let text = self.buffer.to_string();
+        self.with_lsp(|client, document| client.did_save(document, &text));
     }
 
     /// Requests hover information at the current cursor position.
     pub fn lsp_request_hover(&mut self) {
         let position = self.lsp_position_from_cursor();
-        if let (Some(client), Some(document)) =
-            (self.lsp_client.as_mut(), self.lsp_document.as_ref())
-        {
+        self.with_lsp(|client, document| {
             client.request_hover(document, position);
-        }
+        });
     }
 
     /// Requests hover information at a canvas point.
@@ -1505,13 +1521,10 @@ impl CodeEditor {
         let Some(position) = self.lsp_position_from_point(point) else {
             return false;
         };
-        if let (Some(client), Some(document)) =
-            (self.lsp_client.as_mut(), self.lsp_document.as_ref())
-        {
+        self.with_lsp(|client, document| {
             client.request_hover(document, position);
-            return true;
-        }
-        false
+        })
+        .is_some()
     }
 
     /// Requests hover information at an explicit LSP position.
@@ -1521,13 +1534,10 @@ impl CodeEditor {
         &mut self,
         position: lsp::LspPosition,
     ) -> bool {
-        if let (Some(client), Some(document)) =
-            (self.lsp_client.as_mut(), self.lsp_document.as_ref())
-        {
+        self.with_lsp(|client, document| {
             client.request_hover(document, position);
-            return true;
-        }
-        false
+        })
+        .is_some()
     }
 
     /// Converts a canvas point to an LSP position, if possible.
@@ -1560,11 +1570,9 @@ impl CodeEditor {
     /// Requests completion items at the current cursor position.
     pub fn lsp_request_completion(&mut self) {
         let position = self.lsp_position_from_cursor();
-        if let (Some(client), Some(document)) =
-            (self.lsp_client.as_mut(), self.lsp_document.as_ref())
-        {
+        self.with_lsp(|client, document| {
             client.request_completion(document, position);
-        }
+        });
     }
 
     /// Flushes pending LSP text changes to the attached client.
@@ -1575,14 +1583,18 @@ impl CodeEditor {
         if self.lsp_pending_changes.is_empty() {
             return;
         }
+        // Only drain the queue once a client and document are confirmed
+        // attached — otherwise the changes must stay queued for a future
+        // `attach_lsp`/`lsp_open_document` flush.
+        if self.lsp_client.is_none() || self.lsp_document.is_none() {
+            return;
+        }
 
-        if let (Some(client), Some(document)) =
-            (self.lsp_client.as_mut(), self.lsp_document.as_mut())
-        {
-            let changes = std::mem::take(&mut self.lsp_pending_changes);
+        let changes = std::mem::take(&mut self.lsp_pending_changes);
+        self.with_lsp_mut_document(|client, document| {
             document.version = document.version.saturating_add(1);
             client.did_change(document, &changes);
-        }
+        });
     }
 
     /// Sets whether LSP changes are flushed automatically after edits.
@@ -3009,11 +3021,9 @@ impl CodeEditor {
     /// and delegates the request to the active `LspClient`, if one is attached.
     pub fn lsp_request_definition(&mut self) {
         let position = self.lsp_position_from_cursor();
-        if let (Some(client), Some(document)) =
-            (self.lsp_client.as_mut(), self.lsp_document.as_ref())
-        {
+        self.with_lsp(|client, document| {
             client.request_definition(document, position);
-        }
+        });
     }
 
     /// Initiates a "Go to Definition" request for the symbol at the specified screen coordinates.
@@ -3029,13 +3039,66 @@ impl CodeEditor {
         let Some(position) = self.lsp_position_from_point(point) else {
             return false;
         };
-        if let (Some(client), Some(document)) =
-            (self.lsp_client.as_mut(), self.lsp_document.as_ref())
-        {
+        self.with_lsp(|client, document| {
             client.request_definition(document, position);
-            return true;
-        }
-        false
+        })
+        .is_some()
+    }
+}
+
+/// Builds a plain-color scrollable rail: a solid background track with a
+/// Sends `did_open` for `document` (after stamping `version = 1`) on
+/// `client`, using `buffer`'s current contents.
+///
+/// Returns the stamped document and the serialized buffer text, both needed
+/// by the caller to update its LSP shadow-sync bookkeeping.
+///
+/// Free function (not a method) so callers can hold a mutable borrow of
+/// `self.lsp_client` while still passing `&self.buffer` — a method taking
+/// `&mut self` here would conflict with that borrow in `lsp_open_document`.
+fn open_lsp_document(
+    client: &mut dyn lsp::LspClient,
+    buffer: &TextBuffer,
+    mut document: lsp::LspDocument,
+) -> (lsp::LspDocument, String) {
+    document.version = 1;
+    let text = buffer.to_string();
+    client.did_open(&document, &text);
+    (document, text)
+}
+
+/// Builds a plain-color scrollable rail: a solid background track with a
+/// solid-color scroller, square corners of `radius`, and no border.
+///
+/// Shared by the canvas editor's own scrollbars ([`view`]) and the LSP
+/// overlay panels ([`lsp_process::overlay`]), which derive their colors from
+/// a theme palette instead of plain [`Color`]s.
+///
+/// # Examples
+///
+/// ```ignore
+/// let rail = scrollable_rail(Color::BLACK, Color::WHITE, 4.0);
+/// ```
+pub(crate) fn scrollable_rail(
+    background: Color,
+    scroller: Color,
+    radius: f32,
+) -> iced::widget::scrollable::Rail {
+    iced::widget::scrollable::Rail {
+        background: Some(background.into()),
+        border: iced::Border {
+            radius: radius.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        scroller: iced::widget::scrollable::Scroller {
+            background: scroller.into(),
+            border: iced::Border {
+                radius: radius.into(),
+                width: 0.0,
+                color: Color::TRANSPARENT,
+            },
+        },
     }
 }
 
@@ -3490,6 +3553,38 @@ mod tests {
         }
     }
 
+    /// Records every [`lsp::LspClient`] method invoked on it, by name.
+    #[derive(Default)]
+    struct RecordingLspClient {
+        calls: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl lsp::LspClient for RecordingLspClient {
+        fn did_open(&mut self, _document: &lsp::LspDocument, _text: &str) {
+            self.calls.borrow_mut().push("did_open".to_string());
+        }
+        fn did_close(&mut self, _document: &lsp::LspDocument) {
+            self.calls.borrow_mut().push("did_close".to_string());
+        }
+        fn did_save(&mut self, _document: &lsp::LspDocument, _text: &str) {
+            self.calls.borrow_mut().push("did_save".to_string());
+        }
+        fn request_hover(
+            &mut self,
+            _document: &lsp::LspDocument,
+            _position: lsp::LspPosition,
+        ) {
+            self.calls.borrow_mut().push("request_hover".to_string());
+        }
+        fn did_change(
+            &mut self,
+            _document: &lsp::LspDocument,
+            _changes: &[lsp::LspTextChange],
+        ) {
+            self.calls.borrow_mut().push("did_change".to_string());
+        }
+    }
+
     #[test]
     fn test_word_start_in_line() {
         let line = "foo_bar baz";
@@ -3781,5 +3876,112 @@ mod tests {
         // Collapsed state is preserved but produces no hidden lines while off.
         editor.collapsed_folds.insert(0);
         assert!(editor.hidden_lines_set().is_empty());
+    }
+
+    #[test]
+    fn test_scrollable_rail_sets_background_scroller_and_radius() {
+        let bg = Color::from_rgb(0.1, 0.2, 0.3);
+        let scroller = Color::from_rgb(0.4, 0.5, 0.6);
+        let rail = scrollable_rail(bg, scroller, 4.0);
+
+        assert_eq!(rail.background, Some(iced::Background::Color(bg)));
+        assert_eq!(rail.scroller.background, iced::Background::Color(scroller));
+        assert_eq!(rail.border.radius, iced::border::Radius::from(4.0));
+        assert!(rail.border.width.abs() < f32::EPSILON);
+        assert_eq!(
+            rail.scroller.border.radius,
+            iced::border::Radius::from(4.0)
+        );
+    }
+
+    #[test]
+    fn test_open_lsp_document_stamps_version_and_sends_did_open() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let mut client = RecordingLspClient { calls: Rc::clone(&calls) };
+        let buffer = TextBuffer::new("hello");
+        let document = lsp::LspDocument::new("file:///test.rs", "rust");
+
+        let (document, text) =
+            open_lsp_document(&mut client, &buffer, document);
+
+        assert_eq!(document.version, 1);
+        assert_eq!(text, "hello");
+        assert_eq!(calls.borrow().as_slice(), ["did_open"]);
+    }
+
+    #[test]
+    fn test_with_lsp_runs_closure_when_client_and_document_present() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let client = RecordingLspClient { calls: Rc::clone(&calls) };
+        let mut editor = CodeEditor::new("hello", "rs");
+        editor.attach_lsp(
+            Box::new(client),
+            lsp::LspDocument::new("file:///test.rs", "rust"),
+        );
+        calls.borrow_mut().clear(); // attach_lsp itself already logged did_open
+
+        let ran = editor.with_lsp(|client, document| {
+            client.did_save(document, "hello");
+        });
+
+        assert!(ran.is_some());
+        assert_eq!(calls.borrow().as_slice(), ["did_save"]);
+    }
+
+    #[test]
+    fn test_with_lsp_returns_none_when_client_absent() {
+        let mut editor = CodeEditor::new("hello", "rs");
+        let ran = editor.with_lsp(|_client, _document| {});
+        assert!(ran.is_none());
+    }
+
+    #[test]
+    fn test_with_lsp_returns_none_when_document_absent() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let client = RecordingLspClient { calls: Rc::clone(&calls) };
+        let mut editor = CodeEditor::new("hello", "rs");
+        editor.attach_lsp(
+            Box::new(client),
+            lsp::LspDocument::new("file:///test.rs", "rust"),
+        );
+        editor.lsp_document = None;
+
+        let ran = editor.with_lsp(|_client, _document| {});
+        assert!(ran.is_none());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_with_lsp_mut_document_allows_version_bump() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let client = RecordingLspClient { calls: Rc::clone(&calls) };
+        let mut editor = CodeEditor::new("hello", "rs");
+        editor.attach_lsp(
+            Box::new(client),
+            lsp::LspDocument::new("file:///test.rs", "rust"),
+        );
+
+        editor.with_lsp_mut_document(|_client, document| {
+            document.version = document.version.saturating_add(1);
+        });
+
+        assert_eq!(editor.lsp_document.as_ref().unwrap().version, 2);
+    }
+
+    #[test]
+    fn test_lsp_flush_pending_changes_preserves_queue_when_no_client_attached()
+    {
+        let mut editor = CodeEditor::new("hello", "rs");
+        editor.lsp_pending_changes.push(lsp::LspTextChange {
+            range: lsp::LspRange {
+                start: lsp::LspPosition { line: 0, character: 0 },
+                end: lsp::LspPosition { line: 0, character: 0 },
+            },
+            text: "x".to_string(),
+        });
+
+        editor.lsp_flush_pending_changes();
+
+        assert_eq!(editor.lsp_pending_changes.len(), 1);
     }
 }

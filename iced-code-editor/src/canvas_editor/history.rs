@@ -87,6 +87,27 @@ struct HistoryInner {
     current_group: Option<CompositeCommand>,
 }
 
+impl HistoryInner {
+    /// Trims `undo_stack` down to `max_size`, discarding the oldest commands
+    /// first and shifting `save_point` to stay aligned with what remains.
+    ///
+    /// If a discarded command was the one marked as the save point, the save
+    /// point is cleared instead, since that saved state is no longer
+    /// reachable via undo.
+    fn enforce_size_limit(&mut self) {
+        while self.undo_stack.len() > self.max_size {
+            self.undo_stack.remove(0);
+            if let Some(ref mut sp) = self.save_point {
+                if *sp > 0 {
+                    *sp -= 1;
+                } else {
+                    self.save_point = None;
+                }
+            }
+        }
+    }
+}
+
 impl CommandHistory {
     /// Creates a new command history with the specified size limit.
     ///
@@ -151,18 +172,7 @@ impl CommandHistory {
         // Add to undo stack
         inner.undo_stack.push(command);
 
-        // Enforce size limit
-        if inner.undo_stack.len() > inner.max_size {
-            inner.undo_stack.remove(0);
-            // Adjust save point if it exists
-            if let Some(ref mut sp) = inner.save_point {
-                if *sp > 0 {
-                    *sp -= 1;
-                } else {
-                    inner.save_point = None;
-                }
-            }
-        }
+        inner.enforce_size_limit();
     }
 
     /// Undoes the last command.
@@ -336,17 +346,7 @@ impl CommandHistory {
             // Add composite to undo stack
             inner.undo_stack.push(Box::new(group));
 
-            // Enforce size limit
-            if inner.undo_stack.len() > inner.max_size {
-                inner.undo_stack.remove(0);
-                if let Some(ref mut sp) = inner.save_point {
-                    if *sp > 0 {
-                        *sp -= 1;
-                    } else {
-                        inner.save_point = None;
-                    }
-                }
-            }
+            inner.enforce_size_limit();
         }
     }
 
@@ -397,18 +397,7 @@ impl CommandHistory {
     pub fn set_max_size(&self, max_size: usize) {
         let mut inner = self.inner.lock().unwrap();
         inner.max_size = max_size;
-
-        // Trim if necessary
-        while inner.undo_stack.len() > max_size {
-            inner.undo_stack.remove(0);
-            if let Some(ref mut sp) = inner.save_point {
-                if *sp > 0 {
-                    *sp -= 1;
-                } else {
-                    inner.save_point = None;
-                }
-            }
-        }
+        inner.enforce_size_limit();
     }
 
     /// Returns the current number of undo operations available.
@@ -663,6 +652,84 @@ mod tests {
         history.undo(&mut buffer, &mut cursor);
         assert_eq!(buffer.line(0), "hello");
         assert_eq!(cursor, (0, 5));
+    }
+
+    #[test]
+    fn test_enforce_size_limit_adjusts_save_point() {
+        let mut buffer = TextBuffer::new("a");
+        let mut cursor = (0, 1);
+        let history = CommandHistory::new(3);
+
+        // Fill to the limit and mark this state as saved.
+        for i in 0..3 {
+            let mut cmd = InsertCharCommand::new(0, 1 + i, 'x', cursor);
+            cmd.execute(&mut buffer, &mut cursor);
+            cursor.1 += 1;
+            history.push(Box::new(cmd));
+        }
+        history.mark_saved();
+        assert!(!history.is_modified());
+
+        // Pushing one more command exceeds max_size (3), trimming the
+        // oldest command and shifting the save point down by one to stay
+        // aligned with the commands that remain.
+        let mut cmd = InsertCharCommand::new(0, cursor.1, 'x', cursor);
+        cmd.execute(&mut buffer, &mut cursor);
+        history.push(Box::new(cmd));
+        assert_eq!(history.undo_count(), 3);
+        assert!(history.is_modified()); // the just-pushed command is unsaved
+
+        // Undoing the new command should land exactly back on the saved
+        // state, proving the save point still points at the correct
+        // (shifted) index after trimming.
+        history.undo(&mut buffer, &mut cursor);
+        assert!(!history.is_modified());
+    }
+
+    #[test]
+    fn test_enforce_size_limit_clears_save_point_when_trimmed_away() {
+        let mut buffer = TextBuffer::new("a");
+        let mut cursor = (0, 1);
+        let history = CommandHistory::new(3);
+
+        // Mark saved at the very first command (save_point = 1), then push
+        // enough commands that the first one gets trimmed away entirely.
+        let mut cmd = InsertCharCommand::new(0, 1, 'x', cursor);
+        cmd.execute(&mut buffer, &mut cursor);
+        cursor.1 += 1;
+        history.push(Box::new(cmd));
+        history.mark_saved();
+
+        for i in 0..3 {
+            let mut cmd = InsertCharCommand::new(0, cursor.1 + i, 'x', cursor);
+            cmd.execute(&mut buffer, &mut cursor);
+            cursor.1 += 1;
+            history.push(Box::new(cmd));
+        }
+
+        // The saved command has been trimmed out of the undo stack, so the
+        // save point can never be reached again and must report modified.
+        assert!(history.is_modified());
+    }
+
+    #[test]
+    fn test_set_max_size_trims_multiple_entries_in_one_call() {
+        let mut buffer = TextBuffer::new("a");
+        let mut cursor = (0, 1);
+        let history = CommandHistory::new(10);
+
+        for i in 0..5 {
+            let mut cmd = InsertCharCommand::new(0, 1 + i, 'x', cursor);
+            cmd.execute(&mut buffer, &mut cursor);
+            cursor.1 += 1;
+            history.push(Box::new(cmd));
+        }
+        assert_eq!(history.undo_count(), 5);
+
+        // Shrinking by more than one below the current length must trim
+        // more than one command in a single `set_max_size` call.
+        history.set_max_size(2);
+        assert_eq!(history.undo_count(), 2);
     }
 
     #[test]

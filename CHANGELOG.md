@@ -33,7 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The workflow also runs on pull requests targeting `main`, not only on pushes to it, so incoming contributions are checked before they are merged rather than after
   - Closing this gap surfaced 23 pre-existing clippy errors in feature-gated test modules: `decode_sent` now borrows its input instead of taking it by value, and the `expect`/`panic!`/`unwrap` used to report test failures carry a scoped `#[allow]` on the individual test, matching the existing convention in `update.rs` and `selection.rs`
 
+- refactor: **Removed duplicated code across the editor and demo app**
+  - Multi-cursor descending-order sorting, LSP JSON-RPC framing/location parsing, text-insertion loops, history size-limit trimming, scrollbar styling, LSP client/document access, and several near-identical `update.rs` message handler pairs were each consolidated into a single shared helper
+  - Demo app tab-creation logic (open file, jump-to-definition, new tab) now shares one `open_content_in_tab` helper instead of three copies
+  - No functional changes intended, aside from the fix below; all new helpers are unit-tested
+
 ### Fixed
+
+- fix: **Reveal-in-file-manager was incorrectly enabled on wasm32 when opening a file via "jump to definition"** (demo app)
+  - One of the three duplicated tab-creation code paths hardcoded the flag to `true` instead of checking the target platform; unified during the refactor above
 
 - fix: **`is_modified()` could report a modified document as saved after an undo**
   - Marking a document saved records the undo-stack depth at that moment. Undoing past that point and then making a *different* edit could grow the undo stack back to the same depth, so `is_modified()` returned `false` even though the buffer no longer matched what was actually saved on disk — a host application could let the user close the document without a save prompt while real changes were pending

@@ -241,6 +241,63 @@ impl CursorSet {
             self.cursors.push(cursor);
         }
     }
+
+    /// Returns cursor indices selected by `filter` and ordered by descending
+    /// `key(cursor)`.
+    ///
+    /// Multi-cursor edits must apply their change to each cursor from the
+    /// bottom of the document upward: editing at a higher position first
+    /// would shift the `(line, col)` coordinates of cursors that come
+    /// earlier in the document, invalidating their still-pending edits.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let mut cs = CursorSet::new((0, 0));
+    /// cs.add_cursor((2, 0));
+    /// cs.add_cursor((1, 0));
+    ///
+    /// let order = cs.descending_order_by_key(|_| true, |c| c.position);
+    /// let positions: Vec<_> =
+    ///     order.iter().map(|&i| cs.as_slice()[i].position).collect();
+    /// assert_eq!(positions, vec![(2, 0), (1, 0), (0, 0)]);
+    /// ```
+    pub fn descending_order_by_key<F, K>(
+        &self,
+        mut filter: F,
+        mut key: K,
+    ) -> Vec<usize>
+    where
+        F: FnMut(&Cursor) -> bool,
+        K: FnMut(&Cursor) -> (usize, usize),
+    {
+        let mut order: Vec<usize> = (0..self.cursors.len())
+            .filter(|&i| filter(&self.cursors[i]))
+            .collect();
+        order.sort_by(|&a, &b| {
+            key(&self.cursors[b]).cmp(&key(&self.cursors[a]))
+        });
+        order
+    }
+
+    /// Returns all cursor indices ordered by descending `position`.
+    ///
+    /// Shorthand for [`Self::descending_order_by_key`] with no filtering and
+    /// [`Cursor::position`] as the key — the common case used by most
+    /// multi-cursor edit operations.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let mut cs = CursorSet::new((0, 0));
+    /// cs.add_cursor((2, 0));
+    ///
+    /// let order = cs.descending_order();
+    /// assert_eq!(cs.as_slice()[order[0]].position, (2, 0));
+    /// ```
+    pub fn descending_order(&self) -> Vec<usize> {
+        self.descending_order_by_key(|_| true, |c| c.position)
+    }
 }
 
 // =====================================================================
@@ -433,5 +490,47 @@ mod tests {
         assert_eq!(cs.primary_position(), (1, 0));
         // Verify primary cursor is the most recently added one
         assert_eq!(cs.primary().position, (1, 0));
+    }
+
+    #[test]
+    fn test_descending_order_sorts_by_position_descending() {
+        let mut cs = CursorSet::new((0, 0));
+        cs.add_cursor((2, 0));
+        cs.add_cursor((1, 0));
+
+        let order = cs.descending_order();
+        let positions: Vec<_> =
+            order.iter().map(|&i| cs.as_slice()[i].position).collect();
+        assert_eq!(positions, vec![(2, 0), (1, 0), (0, 0)]);
+    }
+
+    #[test]
+    fn test_descending_order_by_key_filters_and_sorts() {
+        let mut cs = CursorSet::new((0, 0));
+        cs.add_cursor_with_selection(Cursor {
+            position: (2, 0),
+            anchor: Some((1, 0)),
+        });
+        cs.add_cursor((1, 5)); // no selection
+
+        // Only cursors with a selection should be included, keyed by the
+        // start of their selection range.
+        let order = cs.descending_order_by_key(Cursor::has_selection, |c| {
+            c.selection_range().map_or((0, 0), |(s, _)| s)
+        });
+
+        assert_eq!(order.len(), 1);
+        assert!(cs.as_slice()[order[0]].has_selection());
+    }
+
+    #[test]
+    fn test_descending_order_matches_unfiltered_position_keyed_call() {
+        let mut cs = CursorSet::new((0, 0));
+        cs.add_cursor((3, 0));
+        cs.add_cursor((1, 0));
+
+        let shorthand = cs.descending_order();
+        let explicit = cs.descending_order_by_key(|_| true, |c| c.position);
+        assert_eq!(shorthand, explicit);
     }
 }

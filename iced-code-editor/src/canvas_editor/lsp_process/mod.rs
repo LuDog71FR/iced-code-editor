@@ -28,7 +28,7 @@ use self::config::{
     resolve_lsp_command,
 };
 use crate::canvas_editor::lsp::{
-    LspClient, LspDocument, LspPosition, LspTextChange,
+    LspClient, LspDocument, LspPosition, LspRange, LspTextChange,
 };
 use crate::text_utils::char_to_byte_index;
 use serde_json::json;
@@ -439,11 +439,8 @@ impl LspProcessClient {
     ///
     /// Formats the message with the required `Content-Length` header.
     fn send_message(&self, value: &serde_json::Value) {
-        if let Ok(data) = serde_json::to_vec(&value) {
-            let mut header =
-                format!("Content-Length: {}\r\n\r\n", data.len()).into_bytes();
-            header.extend_from_slice(&data);
-            let _ = self.writer.send(header);
+        if let Some(bytes) = frame_message(value) {
+            let _ = self.writer.send(bytes);
         }
     }
 
@@ -523,6 +520,25 @@ fn read_message(reader: &mut impl BufRead) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+/// Frames a JSON-RPC value as `Content-Length: N\r\n\r\n<body>` bytes, ready
+/// to be written to an LSP server's stdin.
+///
+/// Returns `None` if `value` cannot be serialized to JSON.
+///
+/// # Examples
+///
+/// ```ignore
+/// let framed = frame_message(&serde_json::json!({"jsonrpc": "2.0"})).unwrap();
+/// assert!(framed.starts_with(b"Content-Length: "));
+/// ```
+fn frame_message(value: &serde_json::Value) -> Option<Vec<u8>> {
+    let data = serde_json::to_vec(value).ok()?;
+    let mut framed =
+        format!("Content-Length: {}\r\n\r\n", data.len()).into_bytes();
+    framed.extend_from_slice(&data);
+    Some(framed)
+}
+
 /// Handles an LSP server request that requires a JSON-RPC response.
 ///
 /// Currently handles `window/workDoneProgress/create` by replying with a null
@@ -534,11 +550,8 @@ fn handle_server_request(id: u64, method: &str, tx: &mpsc::Sender<Vec<u8>>) {
             "id": id,
             "result": null
         });
-        if let Ok(data) = serde_json::to_vec(&response) {
-            let mut header =
-                format!("Content-Length: {}\r\n\r\n", data.len()).into_bytes();
-            header.extend_from_slice(&data);
-            let _ = tx.send(header);
+        if let Some(bytes) = frame_message(&response) {
+            let _ = tx.send(bytes);
         }
     }
 }
@@ -696,71 +709,51 @@ fn parse_completion_items(result: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+/// Parses a JSON-RPC `Range` object (`{start: {line, character}, end: {...}}`)
+/// into an [`LspRange`].
+///
+/// Returns `None` if either endpoint is missing or has the wrong shape.
+fn extract_range(range_val: &serde_json::Value) -> Option<LspRange> {
+    let start = range_val.get("start")?;
+    let end = range_val.get("end")?;
+
+    Some(LspRange {
+        start: LspPosition {
+            line: start.get("line")?.as_u64()? as u32,
+            character: start.get("character")?.as_u64()? as u32,
+        },
+        end: LspPosition {
+            line: end.get("line")?.as_u64()? as u32,
+            character: end.get("character")?.as_u64()? as u32,
+        },
+    })
+}
+
+/// Extracts `(uri, range)` from an LSP `Location` object.
+fn extract_location(loc: &serde_json::Value) -> Option<(String, LspRange)> {
+    let uri = loc.get("uri")?.as_str()?.to_string();
+    let range = extract_range(loc.get("range")?)?;
+    Some((uri, range))
+}
+
+/// Extracts `(uri, range)` from an LSP `LocationLink` object.
+///
+/// Prefers `targetSelectionRange` (the precise symbol range) and falls back
+/// to `targetRange` (the enclosing range) when it is absent.
+fn extract_link(link: &serde_json::Value) -> Option<(String, LspRange)> {
+    let uri = link.get("targetUri")?.as_str()?.to_string();
+    let range_val =
+        link.get("targetSelectionRange").or(link.get("targetRange"))?;
+    let range = extract_range(range_val)?;
+    Some((uri, range))
+}
+
 /// Parses definition location from an LSP definition response.
 ///
 /// Handles `Location`, `Location[]`, and `LocationLink[]` responses.
 fn parse_definition_location(
     result: &serde_json::Value,
-) -> Option<(String, crate::canvas_editor::lsp::LspRange)> {
-    fn extract_location(
-        loc: &serde_json::Value,
-    ) -> Option<(String, crate::canvas_editor::lsp::LspRange)> {
-        let uri = loc.get("uri")?.as_str()?.to_string();
-        let range_val = loc.get("range")?;
-
-        let start = range_val.get("start")?;
-        let end = range_val.get("end")?;
-
-        let start_line = start.get("line")?.as_u64()? as u32;
-        let start_char = start.get("character")?.as_u64()? as u32;
-        let end_line = end.get("line")?.as_u64()? as u32;
-        let end_char = end.get("character")?.as_u64()? as u32;
-
-        Some((
-            uri,
-            crate::canvas_editor::lsp::LspRange {
-                start: crate::canvas_editor::lsp::LspPosition {
-                    line: start_line,
-                    character: start_char,
-                },
-                end: crate::canvas_editor::lsp::LspPosition {
-                    line: end_line,
-                    character: end_char,
-                },
-            },
-        ))
-    }
-
-    fn extract_link(
-        link: &serde_json::Value,
-    ) -> Option<(String, crate::canvas_editor::lsp::LspRange)> {
-        let uri = link.get("targetUri")?.as_str()?.to_string();
-        let range_val =
-            link.get("targetSelectionRange").or(link.get("targetRange"))?;
-
-        let start = range_val.get("start")?;
-        let end = range_val.get("end")?;
-
-        let start_line = start.get("line")?.as_u64()? as u32;
-        let start_char = start.get("character")?.as_u64()? as u32;
-        let end_line = end.get("line")?.as_u64()? as u32;
-        let end_char = end.get("character")?.as_u64()? as u32;
-
-        Some((
-            uri,
-            crate::canvas_editor::lsp::LspRange {
-                start: crate::canvas_editor::lsp::LspPosition {
-                    line: start_line,
-                    character: start_char,
-                },
-                end: crate::canvas_editor::lsp::LspPosition {
-                    line: end_line,
-                    character: end_char,
-                },
-            },
-        ))
-    }
-
+) -> Option<(String, LspRange)> {
     if let Some(array) = result.as_array() {
         if let Some(first) = array.first() {
             if first.get("targetUri").is_some() {
@@ -1024,6 +1017,95 @@ mod tests {
         // invalid JSON, then keeps reading.
         let mut stream = std::io::Cursor::new(b"X-Unknown: 1\r\n\r\n".to_vec());
         assert_eq!(read_message(&mut stream).as_deref(), Some(&b""[..]));
+    }
+
+    // -------------------------------------------------------------------------
+    // frame_message
+    // -------------------------------------------------------------------------
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_frame_message_builds_content_length_header() {
+        let value = serde_json::json!({"jsonrpc": "2.0", "id": 1});
+        let data = serde_json::to_vec(&value).unwrap();
+        let framed = frame_message(&value).unwrap();
+
+        let expected_header = format!("Content-Length: {}\r\n\r\n", data.len());
+        assert!(framed.starts_with(expected_header.as_bytes()));
+        assert_eq!(&framed[expected_header.len()..], data.as_slice());
+    }
+
+    // -------------------------------------------------------------------------
+    // extract_range / extract_location / extract_link
+    // -------------------------------------------------------------------------
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_extract_range_parses_start_and_end() {
+        let range_val = serde_json::json!({
+            "start": { "line": 1, "character": 2 },
+            "end": { "line": 3, "character": 4 }
+        });
+        let range = extract_range(&range_val).unwrap();
+        assert_eq!(range.start, LspPosition { line: 1, character: 2 });
+        assert_eq!(range.end, LspPosition { line: 3, character: 4 });
+    }
+
+    #[test]
+    fn test_extract_range_missing_end_returns_none() {
+        let range_val = serde_json::json!({
+            "start": { "line": 1, "character": 2 }
+        });
+        assert!(extract_range(&range_val).is_none());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_extract_location_reads_uri_and_range() {
+        let loc = serde_json::json!({
+            "uri": "file:///a.rs",
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end": { "line": 0, "character": 1 }
+            }
+        });
+        let (uri, range) = extract_location(&loc).unwrap();
+        assert_eq!(uri, "file:///a.rs");
+        assert_eq!(range.start, LspPosition { line: 0, character: 0 });
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_extract_link_prefers_target_selection_range() {
+        let link = serde_json::json!({
+            "targetUri": "file:///b.rs",
+            "targetRange": {
+                "start": { "line": 10, "character": 0 },
+                "end": { "line": 20, "character": 0 }
+            },
+            "targetSelectionRange": {
+                "start": { "line": 12, "character": 4 },
+                "end": { "line": 12, "character": 8 }
+            }
+        });
+        let (uri, range) = extract_link(&link).unwrap();
+        assert_eq!(uri, "file:///b.rs");
+        assert_eq!(range.start, LspPosition { line: 12, character: 4 });
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_extract_link_falls_back_to_target_range() {
+        let link = serde_json::json!({
+            "targetUri": "file:///c.rs",
+            "targetRange": {
+                "start": { "line": 5, "character": 0 },
+                "end": { "line": 6, "character": 0 }
+            }
+        });
+        let (uri, range) = extract_link(&link).unwrap();
+        assert_eq!(uri, "file:///c.rs");
+        assert_eq!(range.start, LspPosition { line: 5, character: 0 });
     }
 
     // -------------------------------------------------------------------------

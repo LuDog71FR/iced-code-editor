@@ -725,22 +725,11 @@ fn build_completion_layer<'a, M: Clone + 'a>(
 fn lsp_scrollable_rail(
     palette: &iced::theme::palette::Extended,
 ) -> scrollable::Rail {
-    scrollable::Rail {
-        background: Some(palette.background.weak.color.into()),
-        border: Border {
-            radius: SCROLLABLE_BORDER_RADIUS.into(),
-            width: 0.0,
-            color: Color::TRANSPARENT,
-        },
-        scroller: scrollable::Scroller {
-            background: palette.primary.weak.color.into(),
-            border: Border {
-                radius: SCROLLABLE_BORDER_RADIUS.into(),
-                width: 0.0,
-                color: Color::TRANSPARENT,
-            },
-        },
-    }
+    crate::canvas_editor::scrollable_rail(
+        palette.background.weak.color,
+        palette.primary.weak.color,
+        SCROLLABLE_BORDER_RADIUS,
+    )
 }
 
 /// Returns a zero-size placeholder element.

@@ -3,6 +3,7 @@
 use iced::Task;
 
 use super::command::{Command, DeleteRangeCommand, InsertTextCommand};
+use super::cursor_set::Cursor;
 use super::{CodeEditor, Message};
 
 // =========================================================================
@@ -120,21 +121,12 @@ impl CodeEditor {
     /// earlier in the document.  After every range deletion all other
     /// cursors (including ones without a selection) are adjusted.
     pub(crate) fn delete_selection(&mut self) {
-        // Collect indices of cursors that have a non-empty selection.
-        let mut indices: Vec<usize> = (0..self.cursors.len())
-            .filter(|&i| self.cursors.as_slice()[i].has_selection())
-            .collect();
-
-        // Sort descending by the start of the selection range.
-        indices.sort_by(|&a, &b| {
-            let sa = self.cursors.as_slice()[a]
-                .selection_range()
-                .map_or((0, 0), |(s, _)| s);
-            let sb = self.cursors.as_slice()[b]
-                .selection_range()
-                .map_or((0, 0), |(s, _)| s);
-            sb.cmp(&sa) // descending
-        });
+        // Collect indices of cursors that have a non-empty selection, sorted
+        // descending by the start of their selection range.
+        let indices =
+            self.cursors.descending_order_by_key(Cursor::has_selection, |c| {
+                c.selection_range().map_or((0, 0), |(s, _)| s)
+            });
 
         for idx in indices {
             let (start, end) =
@@ -211,12 +203,7 @@ impl CodeEditor {
         let per_cursor = clip_lines.len() == cursor_count;
 
         // Build a descending-order index list (highest position first).
-        let mut order: Vec<usize> = (0..cursor_count).collect();
-        order.sort_by(|&a, &b| {
-            self.cursors.as_slice()[b]
-                .position
-                .cmp(&self.cursors.as_slice()[a].position)
-        });
+        let order = self.cursors.descending_order();
 
         for (rank, &idx) in order.iter().enumerate() {
             // `rank` 0 = highest position, `cursor_count - 1` = lowest.

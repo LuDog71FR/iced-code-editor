@@ -17,6 +17,37 @@ use super::wrapping::{self, WrappingCalculator};
 use super::{CodeEditor, GUTTER_WIDTH, Message};
 use std::rc::Rc;
 
+/// Builds the transparent-container scrollable style shared by the canvas
+/// editor's vertical and horizontal scrollbars.
+fn canvas_scrollbar_style(
+    scrollbar_bg: Color,
+    scroller_color: Color,
+) -> scrollable::Style {
+    scrollable::Style {
+        container: container::Style {
+            background: Some(Background::Color(Color::TRANSPARENT)),
+            ..container::Style::default()
+        },
+        vertical_rail: super::scrollable_rail(
+            scrollbar_bg,
+            scroller_color,
+            4.0,
+        ),
+        horizontal_rail: super::scrollable_rail(
+            scrollbar_bg,
+            scroller_color,
+            4.0,
+        ),
+        gap: None,
+        auto_scroll: scrollable::AutoScroll {
+            background: Color::TRANSPARENT.into(),
+            border: Border::default(),
+            shadow: Shadow::default(),
+            icon: Color::TRANSPARENT,
+        },
+    }
+}
+
 impl CodeEditor {
     /// Calculates visual lines and canvas height for the editor.
     ///
@@ -47,50 +78,8 @@ impl CodeEditor {
         let scrollbar_bg = self.style.scrollbar_background;
         let scroller_color = self.style.scroller_color;
 
-        move |_theme, _status| scrollable::Style {
-            container: container::Style {
-                background: Some(Background::Color(Color::TRANSPARENT)),
-                ..container::Style::default()
-            },
-            vertical_rail: scrollable::Rail {
-                background: Some(scrollbar_bg.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                scroller: scrollable::Scroller {
-                    background: scroller_color.into(),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                },
-            },
-            horizontal_rail: scrollable::Rail {
-                background: Some(scrollbar_bg.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                scroller: scrollable::Scroller {
-                    background: scroller_color.into(),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                },
-            },
-            gap: None,
-            auto_scroll: scrollable::AutoScroll {
-                background: Color::TRANSPARENT.into(),
-                border: Border::default(),
-                shadow: Shadow::default(),
-                icon: Color::TRANSPARENT,
-            },
+        move |_theme, _status| {
+            canvas_scrollbar_style(scrollbar_bg, scroller_color)
         }
     }
 
@@ -149,50 +138,8 @@ impl CodeEditor {
             scrollable::Scrollbar::new(),
         ))
         .on_scroll(Message::HorizontalScrolled)
-        .style(move |_theme, _status| scrollable::Style {
-            container: container::Style {
-                background: Some(Background::Color(Color::TRANSPARENT)),
-                ..container::Style::default()
-            },
-            vertical_rail: scrollable::Rail {
-                background: Some(scrollbar_bg.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                scroller: scrollable::Scroller {
-                    background: scroller_color.into(),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                },
-            },
-            horizontal_rail: scrollable::Rail {
-                background: Some(scrollbar_bg.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                scroller: scrollable::Scroller {
-                    background: scroller_color.into(),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                },
-            },
-            gap: None,
-            auto_scroll: scrollable::AutoScroll {
-                background: Color::TRANSPARENT.into(),
-                border: Border::default(),
-                shadow: Shadow::default(),
-                icon: Color::TRANSPARENT,
-            },
+        .style(move |_theme, _status| {
+            canvas_scrollbar_style(scrollbar_bg, scroller_color)
         });
 
         Some(h_scrollable.into())
@@ -497,5 +444,25 @@ impl CodeEditor {
         } else {
             editor_body
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_canvas_scrollbar_style_uses_transparent_container() {
+        let bg = Color::from_rgb(0.1, 0.2, 0.3);
+        let scroller = Color::from_rgb(0.4, 0.5, 0.6);
+        let style = canvas_scrollbar_style(bg, scroller);
+
+        assert_eq!(
+            style.container.background,
+            Some(Background::Color(Color::TRANSPARENT))
+        );
+        let expected_rail = super::super::scrollable_rail(bg, scroller, 4.0);
+        assert_eq!(style.vertical_rail.background, expected_rail.background);
+        assert_eq!(style.horizontal_rail.background, expected_rail.background);
     }
 }

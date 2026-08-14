@@ -419,12 +419,7 @@ impl CodeEditor {
 
             // Multi-cursor: build a sorted index list (descending document order)
             // so that edits at higher positions don't invalidate lower positions.
-            let mut order: Vec<usize> = (0..self.cursors.len()).collect();
-            order.sort_by(|&a, &b| {
-                self.cursors.as_slice()[b]
-                    .position
-                    .cmp(&self.cursors.as_slice()[a].position)
-            });
+            let order = self.cursors.descending_order();
 
             for &idx in &order {
                 // Any active selection was deleted above, which also moves the
@@ -555,14 +550,10 @@ impl CodeEditor {
     /// keep their original direction (anchor/position) so the originally
     /// selected text stays selected between the newly inserted pair.
     fn surround_selections_with_pair(&mut self, open: char, close: char) {
-        let mut order: Vec<usize> = (0..self.cursors.len()).collect();
-        order.sort_by(|&a, &b| {
-            let key = |i: usize| {
-                let cursor = &self.cursors.as_slice()[i];
-                cursor.selection_range().map_or(cursor.position, |(s, _)| s)
-            };
-            key(b).cmp(&key(a))
-        });
+        let order = self.cursors.descending_order_by_key(
+            |_| true,
+            |c| c.selection_range().map_or(c.position, |(s, _)| s),
+        );
 
         for idx in order {
             let cursor = self.cursors.as_slice()[idx].clone();
@@ -629,12 +620,7 @@ impl CodeEditor {
         self.clear_selection();
 
         // Multi-cursor: process in descending document order
-        let mut order: Vec<usize> = (0..self.cursors.len()).collect();
-        order.sort_by(|&a, &b| {
-            self.cursors.as_slice()[b]
-                .position
-                .cmp(&self.cursors.as_slice()[a].position)
-        });
+        let order = self.cursors.descending_order();
 
         for &idx in &order {
             let pos = self.cursors.as_slice()[idx].position;
@@ -683,46 +669,24 @@ impl CodeEditor {
         self.scroll_to_cursor()
     }
 
-    /// Handles Tab key press for focus navigation (when search dialog is not open).
+    /// Handles Tab/Shift+Tab key presses for focus navigation (when the
+    /// search dialog is not open).
     ///
     /// # Returns
     ///
     /// A `Task<Message>` that may navigate focus to another editor
-    fn handle_focus_navigation_tab(&mut self) -> Task<Message> {
+    fn handle_focus_navigation(&mut self) -> Task<Message> {
         // Only handle focus navigation if search dialog is not open
         if !self.search_state.is_open {
             // Lose focus from current editor
             self.has_canvas_focus = false;
             self.show_cursor = false;
-
-            // Return a task that could potentially focus another editor
-            // This implements focus chain management by allowing the parent application
-            // to handle focus navigation between multiple editors
-            Task::none()
-        } else {
-            Task::none()
         }
-    }
 
-    /// Handles Shift+Tab key press for focus navigation (when search dialog is not open).
-    ///
-    /// # Returns
-    ///
-    /// A `Task<Message>` that may navigate focus to another editor
-    fn handle_focus_navigation_shift_tab(&mut self) -> Task<Message> {
-        // Only handle focus navigation if search dialog is not open
-        if !self.search_state.is_open {
-            // Lose focus from current editor
-            self.has_canvas_focus = false;
-            self.show_cursor = false;
-
-            // Return a task that could potentially focus another editor
-            // This implements focus chain management by allowing the parent application
-            // to handle focus navigation between multiple editors
-            Task::none()
-        } else {
-            Task::none()
-        }
+        // Return a task that could potentially focus another editor
+        // This implements focus chain management by allowing the parent application
+        // to handle focus navigation between multiple editors
+        Task::none()
     }
 
     /// Handles Enter key press (inserts newline).
@@ -755,12 +719,7 @@ impl CodeEditor {
         }
 
         // Multi-cursor: process in descending document order
-        let mut order: Vec<usize> = (0..self.cursors.len()).collect();
-        order.sort_by(|&a, &b| {
-            self.cursors.as_slice()[b]
-                .position
-                .cmp(&self.cursors.as_slice()[a].position)
-        });
+        let order = self.cursors.descending_order();
 
         for &idx in &order {
             let pos = self.cursors.as_slice()[idx].position;
@@ -986,12 +945,7 @@ impl CodeEditor {
         self.clear_selection();
 
         // Multi-cursor: process in descending document order
-        let mut order: Vec<usize> = (0..self.cursors.len()).collect();
-        order.sort_by(|&a, &b| {
-            self.cursors.as_slice()[b]
-                .position
-                .cmp(&self.cursors.as_slice()[a].position)
-        });
+        let order = self.cursors.descending_order();
 
         for &idx in &order {
             let pos = self.cursors.as_slice()[idx].position;
@@ -1049,12 +1003,7 @@ impl CodeEditor {
         self.clear_selection();
 
         // Multi-cursor: process in descending document order
-        let mut order: Vec<usize> = (0..self.cursors.len()).collect();
-        order.sort_by(|&a, &b| {
-            self.cursors.as_slice()[b]
-                .position
-                .cmp(&self.cursors.as_slice()[a].position)
-        });
+        let order = self.cursors.descending_order();
 
         for &idx in &order {
             let pos = self.cursors.as_slice()[idx].position;
@@ -2204,34 +2153,21 @@ impl CodeEditor {
 
     /// Handles opening the search dialog.
     ///
+    /// # Arguments
+    ///
+    /// * `replace` - `true` to open the search-and-replace dialog, `false`
+    ///   for search-only
+    ///
     /// # Returns
     ///
     /// A `Task<Message>` that focuses and selects all in the search input
-    fn handle_open_search_msg(&mut self) -> Task<Message> {
+    fn handle_open_search(&mut self, replace: bool) -> Task<Message> {
         self.goto_line_state.close();
-        self.search_state.open_search();
-        if !self.search_state.query.is_empty() {
-            self.search_state.update_matches(&self.buffer);
-            self.search_state
-                .select_match_near_cursor(self.cursors.primary_position());
+        if replace {
+            self.search_state.open_replace();
+        } else {
+            self.search_state.open_search();
         }
-        self.overlay_cache.clear();
-
-        // Focus the search input and select all text if any
-        Task::batch([
-            focus(self.search_state.search_input_id.clone()),
-            select_all(self.search_state.search_input_id.clone()),
-        ])
-    }
-
-    /// Handles opening the search and replace dialog.
-    ///
-    /// # Returns
-    ///
-    /// A `Task<Message>` that focuses and selects all in the search input
-    fn handle_open_search_replace_msg(&mut self) -> Task<Message> {
-        self.goto_line_state.close();
-        self.search_state.open_replace();
         if !self.search_state.query.is_empty() {
             self.search_state.update_matches(&self.buffer);
             self.search_state
@@ -2371,33 +2307,23 @@ impl CodeEditor {
         Task::none()
     }
 
-    /// Handles finding the next match.
+    /// Handles finding the next or previous match.
+    ///
+    /// # Arguments
+    ///
+    /// * `forward` - `true` to move to the next match, `false` for the
+    ///   previous match
     ///
     /// # Returns
     ///
-    /// A `Task<Message>` that scrolls to the next match if any
-    fn handle_find_next_msg(&mut self) -> Task<Message> {
+    /// A `Task<Message>` that scrolls to the matched position if any
+    fn handle_find_match(&mut self, forward: bool) -> Task<Message> {
         if !self.search_state.matches.is_empty() {
-            self.search_state.next_match();
-            if let Some(match_pos) = self.search_state.current_match() {
-                self.cursors.primary_mut().position =
-                    (match_pos.line, match_pos.col);
-                self.clear_selection();
-                self.overlay_cache.clear();
-                return self.scroll_to_cursor();
+            if forward {
+                self.search_state.next_match();
+            } else {
+                self.search_state.previous_match();
             }
-        }
-        Task::none()
-    }
-
-    /// Handles finding the previous match.
-    ///
-    /// # Returns
-    ///
-    /// A `Task<Message>` that scrolls to the previous match if any
-    fn handle_find_previous_msg(&mut self) -> Task<Message> {
-        if !self.search_state.matches.is_empty() {
-            self.search_state.previous_match();
             if let Some(match_pos) = self.search_state.current_match() {
                 self.cursors.primary_mut().position =
                     (match_pos.line, match_pos.col);
@@ -2510,34 +2436,22 @@ impl CodeEditor {
         }
     }
 
-    /// Handles Tab key in search dialog (cycle forward).
+    /// Handles Tab/Shift+Tab key in the search dialog (cycles field focus).
+    ///
+    /// # Arguments
+    ///
+    /// * `forward` - `true` to cycle forward (Search → Replace → Search),
+    ///   `false` to cycle backward (Replace → Search → Replace)
     ///
     /// # Returns
     ///
-    /// A `Task<Message>` that focuses the next field
-    fn handle_search_dialog_tab_msg(&mut self) -> Task<Message> {
-        // Cycle focus forward (Search → Replace → Search)
-        self.search_state.focus_next_field();
-
-        // Focus the appropriate input based on new focused_field
-        match self.search_state.focused_field {
-            crate::canvas_editor::search::SearchFocusedField::Search => {
-                focus(self.search_state.search_input_id.clone())
-            }
-            crate::canvas_editor::search::SearchFocusedField::Replace => {
-                focus(self.search_state.replace_input_id.clone())
-            }
+    /// A `Task<Message>` that focuses the newly focused field
+    fn handle_search_dialog_tab(&mut self, forward: bool) -> Task<Message> {
+        if forward {
+            self.search_state.focus_next_field();
+        } else {
+            self.search_state.focus_previous_field();
         }
-    }
-
-    /// Handles Shift+Tab key in search dialog (cycle backward).
-    ///
-    /// # Returns
-    ///
-    /// A `Task<Message>` that focuses the previous field
-    fn handle_search_dialog_shift_tab_msg(&mut self) -> Task<Message> {
-        // Cycle focus backward (Replace → Search → Replace)
-        self.search_state.focus_previous_field();
 
         // Focus the appropriate input based on new focused_field
         match self.search_state.focused_field {
@@ -3040,8 +2954,8 @@ impl CodeEditor {
             Message::Redo => self.handle_redo_msg(),
 
             // Search and replace operations
-            Message::OpenSearch => self.handle_open_search_msg(),
-            Message::OpenSearchReplace => self.handle_open_search_replace_msg(),
+            Message::OpenSearch => self.handle_open_search(false),
+            Message::OpenSearchReplace => self.handle_open_search(true),
             Message::CloseSearch => self.handle_close_search_msg(),
             Message::SearchQueryChanged(query) => {
                 self.handle_search_query_changed_msg(query)
@@ -3052,18 +2966,16 @@ impl CodeEditor {
             Message::ToggleCaseSensitive => {
                 self.handle_toggle_case_sensitive_msg()
             }
-            Message::FindNext => self.handle_find_next_msg(),
-            Message::FindPrevious => self.handle_find_previous_msg(),
+            Message::FindNext => self.handle_find_match(true),
+            Message::FindPrevious => self.handle_find_match(false),
             Message::ReplaceNext => self.handle_replace_next_msg(),
             Message::ReplaceAll => self.handle_replace_all_msg(),
-            Message::SearchDialogTab => self.handle_search_dialog_tab_msg(),
+            Message::SearchDialogTab => self.handle_search_dialog_tab(true),
             Message::SearchDialogShiftTab => {
-                self.handle_search_dialog_shift_tab_msg()
+                self.handle_search_dialog_tab(false)
             }
-            Message::FocusNavigationTab => self.handle_focus_navigation_tab(),
-            Message::FocusNavigationShiftTab => {
-                self.handle_focus_navigation_shift_tab()
-            }
+            Message::FocusNavigationTab => self.handle_focus_navigation(),
+            Message::FocusNavigationShiftTab => self.handle_focus_navigation(),
 
             // Focus and IME operations
             Message::CanvasFocusGained => self.handle_canvas_focus_gained_msg(),
@@ -5016,5 +4928,70 @@ mod tests {
 
         assert_eq!(editor.cursors.primary_position(), (1, 1));
         assert!(editor.goto_line_state.is_open);
+    }
+
+    #[test]
+    fn test_open_search_replace_opens_in_replace_mode() {
+        let mut editor = CodeEditor::new("hello", "txt");
+        let _ = editor.update(&Message::OpenSearchReplace);
+        assert!(editor.search_state.is_open);
+        assert!(editor.search_state.is_replace_mode);
+    }
+
+    #[test]
+    fn test_open_search_opens_in_search_only_mode() {
+        let mut editor = CodeEditor::new("hello", "txt");
+        let _ = editor.update(&Message::OpenSearch);
+        assert!(editor.search_state.is_open);
+        assert!(!editor.search_state.is_replace_mode);
+    }
+
+    #[test]
+    fn test_find_previous_moves_to_previous_match() {
+        let mut editor = CodeEditor::new("foo bar foo baz foo", "txt");
+        editor.search_state.open_search();
+        editor.search_state.set_query("foo".to_owned(), &editor.buffer);
+        assert_eq!(editor.search_state.current_match_index, Some(0));
+
+        let _ = editor.update(&Message::FindPrevious);
+        // Wraps backward from the first match to the last.
+        assert_eq!(editor.search_state.current_match_index, Some(2));
+    }
+
+    #[test]
+    fn test_search_dialog_shift_tab_cycles_focus_backward() {
+        let mut editor = CodeEditor::new("hello", "txt");
+        editor.search_state.open_replace();
+        assert_eq!(
+            editor.search_state.focused_field,
+            crate::canvas_editor::search::SearchFocusedField::Search
+        );
+
+        let _ = editor.update(&Message::SearchDialogShiftTab);
+        assert_eq!(
+            editor.search_state.focused_field,
+            crate::canvas_editor::search::SearchFocusedField::Replace
+        );
+    }
+
+    #[test]
+    fn test_focus_navigation_shift_tab_loses_focus_when_search_closed() {
+        let mut editor = CodeEditor::new("hello", "txt");
+        focus_editor(&mut editor);
+        assert!(editor.has_canvas_focus);
+
+        let _ = editor.update(&Message::FocusNavigationShiftTab);
+        assert!(!editor.has_canvas_focus);
+        assert!(!editor.show_cursor);
+    }
+
+    #[test]
+    fn test_focus_navigation_shift_tab_keeps_focus_when_search_open() {
+        let mut editor = CodeEditor::new("hello", "txt");
+        focus_editor(&mut editor);
+        editor.search_state.open_search();
+
+        let _ = editor.update(&Message::FocusNavigationShiftTab);
+        assert!(editor.has_canvas_focus);
     }
 }
