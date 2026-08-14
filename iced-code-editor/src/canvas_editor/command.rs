@@ -530,36 +530,73 @@ impl Command for DeleteRangeCommand {
             return;
         }
 
-        // Calculate how many characters to delete
-        let mut chars_to_delete = 0;
         if self.start.0 == self.end.0 {
-            // Single line: just delete the characters between start and end
-            chars_to_delete = self.end.1 - self.start.1;
+            // Single line: remove the selected characters in one splice.
+            buffer.replace_range(
+                self.start.0,
+                self.start.1,
+                self.end.1 - self.start.1,
+                "",
+            );
         } else {
-            // Multi-line: calculate total characters including newlines
-            // First line: from start.1 to end of line
-            chars_to_delete += buffer.line_len(self.start.0) - self.start.1 + 1; // +1 for newline
-
-            // Middle lines: entire lines
-            for line_idx in (self.start.0 + 1)..self.end.0 {
-                chars_to_delete += buffer.line_len(line_idx) + 1; // +1 for newline
+            // Multi-line: splice the surviving tail of the last line onto
+            // the first line's prefix, then drop the fully-consumed lines
+            // in between (including the original last line). This keeps
+            // the whole operation O(text touched + lines removed) instead
+            // of the previous per-character `delete_forward` loop.
+            let tail: String =
+                buffer.line(self.end.0).chars().skip(self.end.1).collect();
+            let first_line_len = buffer.line_len(self.start.0);
+            buffer.replace_range(
+                self.start.0,
+                self.start.1,
+                first_line_len - self.start.1,
+                &tail,
+            );
+            for _ in self.start.0..self.end.0 {
+                buffer.remove_line(self.start.0 + 1);
             }
-
-            // Last line: from 0 to end.1
-            chars_to_delete += self.end.1;
-        }
-
-        // Delete all characters forward from start position
-        for _ in 0..chars_to_delete {
-            buffer.delete_forward(self.start.0, self.start.1);
         }
 
         *cursor = self.start;
     }
 
     fn undo(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) {
-        // Re-insert the deleted text
-        insert_text_at(buffer, self.start.0, self.start.1, &self.deleted_text);
+        // Re-insert the deleted text by reversing the splice performed in
+        // `execute`, using the exact captured text instead of replaying it
+        // character by character.
+        if self.start.0 == self.end.0 {
+            buffer.replace_range(
+                self.start.0,
+                self.start.1,
+                0,
+                &self.deleted_text,
+            );
+        } else {
+            let segments: Vec<&str> = self.deleted_text.split('\n').collect();
+            if let [first_segment, middle_segments @ .., last_segment] =
+                segments.as_slice()
+            {
+                let tail: String = buffer
+                    .line(self.start.0)
+                    .chars()
+                    .skip(self.start.1)
+                    .collect();
+                buffer.replace_range(
+                    self.start.0,
+                    self.start.1,
+                    tail.chars().count(),
+                    first_segment,
+                );
+                for (offset, segment) in middle_segments.iter().enumerate() {
+                    buffer.insert_line(
+                        self.start.0 + 1 + offset,
+                        (*segment).to_string(),
+                    );
+                }
+                buffer.insert_line(self.end.0, format!("{last_segment}{tail}"));
+            }
+        }
         *cursor = self.cursor_before;
     }
 }
@@ -1257,6 +1294,67 @@ mod tests {
 
         cmd.undo(&mut buffer, &mut cursor);
         assert_eq!(buffer.to_string(), "ab\ncd");
+        assert_eq!(cursor, (0, 0));
+    }
+
+    #[test]
+    fn test_delete_range_command_empty_selection() {
+        let mut buffer = TextBuffer::new("hello world");
+        let mut cursor = (0, 3);
+        let mut cmd = DeleteRangeCommand::new(&buffer, (0, 3), (0, 3), cursor);
+
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "hello world");
+        assert_eq!(cursor, (0, 3));
+
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "hello world");
+        assert_eq!(cursor, (0, 3));
+    }
+
+    #[test]
+    fn test_delete_range_command_at_buffer_start() {
+        let mut buffer = TextBuffer::new("hello\nworld");
+        let mut cursor = (0, 0);
+        let mut cmd = DeleteRangeCommand::new(&buffer, (0, 0), (1, 2), cursor);
+
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "rld");
+        assert_eq!(cursor, (0, 0));
+
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "hello\nworld");
+        assert_eq!(cursor, (0, 0));
+    }
+
+    #[test]
+    fn test_delete_range_command_at_buffer_end() {
+        let mut buffer = TextBuffer::new("hello\nworld");
+        let mut cursor = (0, 0);
+        let mut cmd = DeleteRangeCommand::new(&buffer, (0, 3), (1, 5), cursor);
+
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "hel");
+        assert_eq!(cursor, (0, 3));
+
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "hello\nworld");
+        assert_eq!(cursor, (0, 0));
+    }
+
+    #[test]
+    fn test_delete_range_command_many_lines() {
+        let original = "one\ntwo\nthree\nfour\nfive\nsix\nseven";
+        let mut buffer = TextBuffer::new(original);
+        let mut cursor = (0, 0);
+        let mut cmd = DeleteRangeCommand::new(&buffer, (1, 1), (5, 2), cursor);
+
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "one\ntx\nseven");
+        assert_eq!(cursor, (1, 1));
+
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), original);
         assert_eq!(cursor, (0, 0));
     }
 

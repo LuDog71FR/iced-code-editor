@@ -72,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The match's byte offset, found in the lowercased line, was re-sliced against the original line; this silently drifted once an earlier character's case-folding changed the character count
   - Column is now computed via an explicit character-boundary map back to the original line instead of re-slicing it
 
+- fix: **Deleting or undoing a large multi-line selection was quadratic in the size of the selection**
+  - `DeleteRangeCommand` removed a range by calling `delete_forward` once per character, and its `undo` re-inserted the deleted text one character at a time; each call re-scanned the current line, so a large Select All + Delete (or its undo) in a big file could visibly hang the UI
+  - Both directions now splice whole lines in bulk (truncate/merge the boundary lines with `replace_range`, drop or reinsert the fully-consumed lines with `remove_line`/`insert_line`), turning the cost into O(text touched + lines affected) instead of O(n²)
+
 ## [0.3.11] - 2026-08-03
 
 ### Added
