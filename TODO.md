@@ -10,6 +10,10 @@ None
 
 ## Features
 
+### Testing
+
+0. Code UI tests to validate all features.
+
 ### Editing
 
 1. **Indentation guides**

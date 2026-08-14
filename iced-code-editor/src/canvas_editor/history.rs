@@ -134,6 +134,17 @@ impl CommandHistory {
             return;
         }
 
+        // The save point may sit ahead of the current position (the user
+        // undid past it). Pushing a new command here clears the redo stack,
+        // permanently discarding the path back to that saved state, so the
+        // save point can never be reached again and must be invalidated.
+        // Otherwise, if the new undo stack happens to reach the same length
+        // later, `is_modified()` would wrongly report "not modified" even
+        // though the actual command sequence has diverged.
+        if inner.save_point.is_some_and(|sp| sp > inner.undo_stack.len()) {
+            inner.save_point = None;
+        }
+
         // Clear redo stack when new command is added
         inner.redo_stack.clear();
 
@@ -152,9 +163,6 @@ impl CommandHistory {
                 }
             }
         }
-
-        // Update save point - we've made changes
-        // The save point is now invalid unless it's still at the current position
     }
 
     /// Undoes the last command.
@@ -315,6 +323,13 @@ impl CommandHistory {
         if let Some(group) = inner.current_group.take()
             && !group.is_empty()
         {
+            // See the matching comment in `push`: a save point ahead of the
+            // current position can never be reached again once the redo
+            // stack backing it is cleared here.
+            if inner.save_point.is_some_and(|sp| sp > inner.undo_stack.len()) {
+                inner.save_point = None;
+            }
+
             // Clear redo stack
             inner.redo_stack.clear();
 
@@ -528,6 +543,65 @@ mod tests {
         history.push(Box::new(cmd2));
 
         assert!(history.is_modified()); // Modified again
+    }
+
+    #[test]
+    fn test_save_point_invalidated_after_undo_then_diverging_edit() {
+        // Regression test: save -> undo -> push a new (different) command
+        // must never be reported as "not modified", even if the undo stack
+        // happens to return to the same length as the save point.
+        let mut buffer = TextBuffer::new("hello");
+        let mut cursor = (0, 5);
+        let history = CommandHistory::new(10);
+
+        // Type 'A' and mark the document as saved (undo depth 1).
+        let mut cmd_a = InsertCharCommand::new(0, 5, 'A', cursor);
+        cmd_a.execute(&mut buffer, &mut cursor);
+        history.push(Box::new(cmd_a));
+        history.mark_saved();
+        assert!(!history.is_modified());
+
+        // Undo it (undo depth 0), then type a *different* character 'B'.
+        history.undo(&mut buffer, &mut cursor);
+        assert!(history.is_modified());
+        let mut cmd_b = InsertCharCommand::new(0, 5, 'B', cursor);
+        cmd_b.execute(&mut buffer, &mut cursor);
+        history.push(Box::new(cmd_b));
+
+        // The undo depth (1) matches the save point again, but the buffer
+        // content ("helloB") differs from what was actually saved
+        // ("helloA"): the document must still be reported as modified.
+        assert_eq!(buffer.line(0), "helloB");
+        assert!(history.is_modified());
+    }
+
+    #[test]
+    fn test_save_point_invalidated_after_undo_then_group_diverges() {
+        // Same regression as above, but through `begin_group`/`end_group`
+        // (composite commands), which has its own save-point handling.
+        let mut buffer = TextBuffer::new("hello");
+        let mut cursor = (0, 5);
+        let history = CommandHistory::new(10);
+
+        history.begin_group("typing");
+        let mut cmd_a = InsertCharCommand::new(0, 5, 'A', cursor);
+        cmd_a.execute(&mut buffer, &mut cursor);
+        history.push(Box::new(cmd_a));
+        history.end_group();
+        history.mark_saved();
+        assert!(!history.is_modified());
+
+        history.undo(&mut buffer, &mut cursor);
+        assert!(history.is_modified());
+
+        history.begin_group("typing");
+        let mut cmd_b = InsertCharCommand::new(0, 5, 'B', cursor);
+        cmd_b.execute(&mut buffer, &mut cursor);
+        history.push(Box::new(cmd_b));
+        history.end_group();
+
+        assert_eq!(buffer.line(0), "helloB");
+        assert!(history.is_modified());
     }
 
     #[test]

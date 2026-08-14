@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: **`is_modified()` could report a modified document as saved after an undo**
+  - Marking a document saved records the undo-stack depth at that moment. Undoing past that point and then making a *different* edit could grow the undo stack back to the same depth, so `is_modified()` returned `false` even though the buffer no longer matched what was actually saved on disk — a host application could let the user close the document without a save prompt while real changes were pending
+  - The save point is now invalidated as soon as a new command is pushed (or a composite command ends) after the undo stack has been unwound past it, since the exact path back to the saved state has just been discarded
+
 - fix: **Undo of a line-merging Backspace duplicated the merged line**
   - Pressing Backspace at column 0 merges a line into the previous one. Undo split the merged line back at the join point — which already restores both lines — and then re-inserted the line content on top of it, so `hello\nworld` came back as `hello\nworldworld`
   - The redundant re-insertion (and the now-unused `merged_content` field) has been removed; undo now restores the exact original buffer
