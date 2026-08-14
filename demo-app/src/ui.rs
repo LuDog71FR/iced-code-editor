@@ -422,6 +422,8 @@ pub fn view_editor_pane<'a>(
     let show_whitespace = editor.show_whitespace();
     let bracket_match_highlight_enabled =
         editor.bracket_match_highlight_enabled();
+    let bracket_pair_colorization_enabled =
+        editor.bracket_pair_colorization_enabled();
     let vim_enabled = editor.vim_enabled();
 
     // Template picker using pick_list
@@ -488,6 +490,15 @@ pub fn view_editor_pane<'a>(
             .label("Highlight matching bracket")
             .on_toggle(move |b| {
                 Message::ToggleBracketMatchHighlight(editor_id, b)
+            })
+            .text_size(14);
+
+    // Bracket-pair colorization (rainbow brackets) checkbox
+    let bracket_pair_colorization_checkbox =
+        checkbox(bracket_pair_colorization_enabled)
+            .label("Rainbow brackets")
+            .on_toggle(move |b| {
+                Message::ToggleBracketPairColorization(editor_id, b)
             })
             .text_size(14);
 
@@ -637,6 +648,7 @@ pub fn view_editor_pane<'a>(
                 line_numbers_checkbox,
                 show_whitespace_checkbox,
                 bracket_match_highlight_checkbox,
+                bracket_pair_colorization_checkbox,
                 vim_checkbox,
                 lsp_enabled_checkbox,
             ]

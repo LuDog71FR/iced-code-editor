@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- feat: **Bracket-pair colorization** (rainbow brackets)
+  - Each `(`, `)`, `[`, `]`, `{`, `}` is colored by its nesting depth, so a matching pair always shares the same color, cycling through a fixed gold/orchid/light-sky-blue palette as depth increases
+  - Depth is tracked with a sequential per-line cache (mirrors the syntax-highlight cache), so edits only invalidate depths from the changed line onward instead of rescanning the file
+  - Enabled by default; toggle via `set_bracket_pair_colorization_enabled(bool)` / `bracket_pair_colorization_enabled()`, with a checkbox in the demo app toolbar
+
 - feat: **Matching bracket/quote highlight**
   - Placing the cursor next to a bracket (`(`, `)`, `[`, `]`, `{`, `}`) or a quote (`"`, `'`) highlights it and its matching pair
   - Brackets are matched by scanning the buffer with nesting-depth tracking; quotes on the same line are paired sequentially (1st with 2nd, 3rd with 4th, ...)

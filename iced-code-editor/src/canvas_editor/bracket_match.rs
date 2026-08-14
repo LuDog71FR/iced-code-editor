@@ -193,6 +193,71 @@ pub(crate) fn find_matching_pair(
     Some((target_pos, match_pos))
 }
 
+/// Returns the nesting depth after scanning all of `line`, starting from
+/// `start_depth`.
+///
+/// Used to build the per-line "depth at line start" cache that drives
+/// bracket-pair colorization. Depth saturates at `0` for unbalanced closing
+/// brackets rather than underflowing, consistent with the plain textual scan
+/// used elsewhere in this module (no string/comment awareness).
+///
+/// # Examples
+///
+/// ```ignore
+/// assert_eq!(bracket_depth_after_line("fn main() {", 0), 1);
+/// assert_eq!(bracket_depth_after_line("}", 1), 0);
+/// ```
+pub(crate) fn bracket_depth_after_line(
+    line: &str,
+    start_depth: usize,
+) -> usize {
+    let mut depth = start_depth;
+    for ch in line.chars() {
+        if is_opening_bracket(ch) {
+            depth += 1;
+        } else if is_closing_bracket(ch) {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    depth
+}
+
+/// Returns the palette depth index for each bracket character on `line`,
+/// starting from `start_depth` (the nesting depth entering the line).
+///
+/// For an opening bracket the returned index is its own nesting depth
+/// (0-based) and depth increases afterward; for a closing bracket depth
+/// decreases first and the returned index is the resulting depth, so a
+/// matching pair always shares the same index. Quotes are not included -
+/// only `( ) [ ] { }` participate in bracket-pair colorization.
+///
+/// # Examples
+///
+/// ```ignore
+/// // "a(b[c])" -> '(' at depth 0, '[' at depth 1, ']' at depth 1, ')' at depth 0
+/// assert_eq!(
+///     bracket_depth_indices("a(b[c])", 0),
+///     vec![(1, 0), (3, 1), (5, 1), (6, 0)]
+/// );
+/// ```
+pub(crate) fn bracket_depth_indices(
+    line: &str,
+    start_depth: usize,
+) -> Vec<(usize, usize)> {
+    let mut depth = start_depth;
+    let mut result = Vec::new();
+    for (col, ch) in line.chars().enumerate() {
+        if is_opening_bracket(ch) {
+            result.push((col, depth));
+            depth += 1;
+        } else if is_closing_bracket(ch) {
+            depth = depth.saturating_sub(1);
+            result.push((col, depth));
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,5 +346,35 @@ mod tests {
     fn unterminated_quote_returns_none() {
         let buffer = buffer_from(&[r#"let s = "hello;"#]);
         assert_eq!(find_matching_pair(&buffer, (0, 8)), None);
+    }
+
+    #[test]
+    fn depth_after_line_tracks_nesting() {
+        assert_eq!(bracket_depth_after_line("fn main() {", 0), 1);
+        assert_eq!(bracket_depth_after_line("    let x = 1;", 1), 1);
+        assert_eq!(bracket_depth_after_line("}", 1), 0);
+    }
+
+    #[test]
+    fn depth_after_line_saturates_on_unbalanced_closer() {
+        assert_eq!(bracket_depth_after_line(")))", 0), 0);
+    }
+
+    #[test]
+    fn depth_indices_pairs_share_same_index() {
+        assert_eq!(
+            bracket_depth_indices("a(b[c])", 0),
+            vec![(1, 0), (3, 1), (5, 1), (6, 0)]
+        );
+    }
+
+    #[test]
+    fn depth_indices_ignores_quotes() {
+        assert_eq!(bracket_depth_indices(r#"("hi")"#, 0), vec![(0, 0), (5, 0)]);
+    }
+
+    #[test]
+    fn depth_indices_starts_from_given_depth() {
+        assert_eq!(bracket_depth_indices("a)b(c", 1), vec![(1, 0), (3, 0)]);
     }
 }

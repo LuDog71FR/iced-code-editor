@@ -170,6 +170,9 @@ impl CodeEditor {
         // before the edit; the extra line of margin covers edits that merge
         // with the preceding line (e.g. backspace at column 0).
         self.invalidate_highlight_from(self.pre_edit_line.saturating_sub(1));
+        self.bracket_depth_cache
+            .borrow_mut()
+            .truncate_from(self.pre_edit_line.saturating_sub(1));
         self.content_cache.clear();
         self.overlay_cache.clear();
         self.enqueue_incremental_lsp_change();

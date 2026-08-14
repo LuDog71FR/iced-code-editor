@@ -195,6 +195,16 @@ use iced::widget::canvas::Action;
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
 static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
 
+/// Fixed color cycle for bracket-pair colorization, indexed by nesting depth
+/// modulo its length so a matching pair always shares a color. Matches the
+/// well-known VS Code default rainbow-bracket palette (gold, orchid, light
+/// sky blue) for a look users are likely already familiar with.
+const BRACKET_PAIR_COLORS: [Color; 3] = [
+    Color { r: 1.0, g: 0.843, b: 0.0, a: 1.0 }, // gold
+    Color { r: 0.855, g: 0.439, b: 0.839, a: 1.0 }, // orchid
+    Color { r: 0.529, g: 0.808, b: 0.980, a: 1.0 }, // light sky blue
+];
+
 /// Context for canvas rendering operations.
 ///
 /// This struct packages commonly used rendering parameters to reduce
@@ -665,6 +675,72 @@ impl CodeEditor {
                     ..canvas::Text::default()
                 });
             }
+        }
+    }
+
+    /// Draws bracket-pair colorization (rainbow brackets) for `visual_line`.
+    ///
+    /// Each `( ) [ ] { }` character on the line is redrawn on top of the
+    /// already-rendered syntax-highlighted text, colored by its nesting
+    /// depth (see [`super::bracket_match::bracket_depth_indices`]) so a
+    /// matching pair always shares the same color, cycling through
+    /// [`BRACKET_PAIR_COLORS`] as depth increases. No-op when the feature is
+    /// disabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `frame` - The canvas frame to draw on
+    /// * `ctx` - Rendering context containing visual lines and metrics
+    /// * `visual_line` - The visual line to render
+    /// * `y` - Y position for rendering
+    fn draw_bracket_pair_colors(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext,
+        visual_line: &VisualLine,
+        y: f32,
+    ) {
+        if !self.bracket_pair_colorization_enabled {
+            return;
+        }
+
+        let logical_line = visual_line.logical_line;
+        let start_depth = self
+            .bracket_depth_cache
+            .borrow_mut()
+            .depth_at_line_start(&self.buffer, logical_line);
+
+        let line_content = self.buffer.line(logical_line);
+        let indices = super::bracket_match::bracket_depth_indices(
+            line_content,
+            start_depth,
+        );
+
+        for (col, depth) in indices {
+            if col < visual_line.start_col || col >= visual_line.end_col {
+                continue;
+            }
+            let Some(ch) = line_content.chars().nth(col) else {
+                continue;
+            };
+
+            let (x, _width) = calculate_segment_geometry(
+                line_content,
+                visual_line.start_col,
+                col,
+                col + 1,
+                ctx.gutter_width + 5.0,
+                ctx.full_char_width,
+                ctx.char_width,
+            );
+            frame.fill_text(canvas::Text {
+                content: ch.to_string(),
+                position: Point::new(x - ctx.horizontal_scroll_offset, y + 2.0),
+                color: BRACKET_PAIR_COLORS[depth % BRACKET_PAIR_COLORS.len()],
+                size: ctx.font_size.into(),
+                font: ctx.font,
+                ..canvas::Text::default()
+            });
         }
     }
 
@@ -2207,6 +2283,7 @@ impl canvas::Program<Message> for CodeEditor {
                             syntax_set,
                             syntax_theme,
                         );
+                        self.draw_bracket_pair_colors(f, &ctx, visual_line, y);
                         self.draw_fold_collapsed_marker(
                             f,
                             &ctx,

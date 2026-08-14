@@ -181,6 +181,8 @@ pub enum Message {
     ToggleShowWhitespace(EditorId, bool),
     /// Toggle matching-bracket-pair highlight
     ToggleBracketMatchHighlight(EditorId, bool),
+    /// Toggle bracket-pair colorization (rainbow brackets)
+    ToggleBracketPairColorization(EditorId, bool),
     /// Toggle Vim behavior
     ToggleVim(EditorId, bool),
     /// Toggle LSP support
@@ -844,6 +846,18 @@ greet("World")
         Task::none()
     }
 
+    /// Handles toggling bracket-pair colorization for a specific editor.
+    fn handle_toggle_bracket_pair_colorization(
+        &mut self,
+        editor_id: EditorId,
+        enabled: bool,
+    ) -> Task<Message> {
+        if let Some(tab) = self.get_tab(editor_id) {
+            tab.editor.set_bracket_pair_colorization_enabled(enabled);
+        }
+        Task::none()
+    }
+
     /// Handles toggling Vim behavior for a specific editor.
     fn handle_toggle_vim(
         &mut self,
@@ -1368,6 +1382,9 @@ greet("World")
             }
             Message::ToggleBracketMatchHighlight(editor_id, enabled) => {
                 self.handle_toggle_bracket_match_highlight(editor_id, enabled)
+            }
+            Message::ToggleBracketPairColorization(editor_id, enabled) => {
+                self.handle_toggle_bracket_pair_colorization(editor_id, enabled)
             }
             Message::ToggleVim(editor_id, enabled) => {
                 self.handle_toggle_vim(editor_id, enabled)

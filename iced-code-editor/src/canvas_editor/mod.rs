@@ -461,6 +461,8 @@ pub struct CodeEditor {
     pub(crate) show_whitespace: bool,
     /// Whether the matching-bracket/quote-pair highlight overlay is enabled.
     pub(crate) bracket_match_highlight_enabled: bool,
+    /// Whether bracket-pair colorization (rainbow brackets) is enabled.
+    pub(crate) bracket_pair_colorization_enabled: bool,
     /// Whether LSP support is enabled
     pub(crate) lsp_enabled: bool,
     /// Active LSP client connection, if configured.
@@ -541,6 +543,10 @@ pub struct CodeEditor {
     /// Remaining syntax lines that may be parsed during the current content
     /// render. `usize::MAX` keeps direct non-render uses (notably tests) uncapped.
     pub(crate) highlight_lines_remaining: Cell<usize>,
+    /// Sequential per-line bracket-nesting-depth cache (see [`BracketDepthCache`]),
+    /// used by bracket-pair colorization. Stored behind a `RefCell` for the same
+    /// reason as `highlight_cache`: it is memoized during rendering (`&self`).
+    pub(crate) bracket_depth_cache: RefCell<BracketDepthCache>,
     /// Topmost logical line touched by the cursors/selections before the
     /// current edit, captured at the top of `update()`.
     ///
@@ -709,6 +715,68 @@ impl HighlightCache {
     /// * `line` - First logical line to invalidate.
     pub(crate) fn truncate(&mut self, line: usize) {
         self.lines.truncate(line);
+    }
+}
+
+/// Sequential per-line bracket-nesting-depth cache used by bracket-pair
+/// colorization.
+///
+/// `depths[i]` is the bracket nesting depth entering logical line `i`;
+/// `depths[0]` is always `0`. Like [`HighlightCache`], the prefix is
+/// extended lazily as deeper lines are drawn and truncated after an edit, so
+/// an edit never forces a full rescan of the file. Unlike [`HighlightCache`],
+/// no syntect state is involved: depth only depends on bracket characters, so
+/// extending the prefix is a cheap plain-text scan.
+pub(crate) struct BracketDepthCache {
+    /// Dense valid prefix of "depth entering line `i`" (vector index = logical line).
+    depths: Vec<usize>,
+}
+
+impl BracketDepthCache {
+    /// Creates a cache seeded with `depths[0] == 0` (the file starts unnested).
+    pub(crate) fn new() -> Self {
+        Self { depths: vec![0] }
+    }
+
+    /// Returns the bracket nesting depth entering `line`, extending the
+    /// cached prefix as needed.
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - The text buffer to scan for missing lines.
+    /// * `line` - Logical line whose entering depth is requested.
+    pub(crate) fn depth_at_line_start(
+        &mut self,
+        buffer: &TextBuffer,
+        line: usize,
+    ) -> usize {
+        let target = line.min(buffer.line_count().saturating_sub(1));
+        while self.depths.len() <= target {
+            let idx = self.depths.len() - 1;
+            let start = self.depths[idx];
+            let end = bracket_match::bracket_depth_after_line(
+                buffer.line(idx),
+                start,
+            );
+            self.depths.push(end);
+        }
+        self.depths[target]
+    }
+
+    /// Truncates the cached prefix so depths entering `line` and beyond are
+    /// recomputed on next access.
+    ///
+    /// Depths before `line` are unaffected since they only depend on earlier,
+    /// unedited lines. Has no effect when the cache is already shorter.
+    ///
+    /// # Arguments
+    ///
+    /// * `line` - First logical line whose entering depth may have changed.
+    pub(crate) fn truncate_from(&mut self, line: usize) {
+        let keep = line.saturating_add(1).max(1);
+        if self.depths.len() > keep {
+            self.depths.truncate(keep);
+        }
     }
 }
 
@@ -966,6 +1034,7 @@ impl CodeEditor {
             line_numbers_enabled: true,
             show_whitespace: true,
             bracket_match_highlight_enabled: true,
+            bracket_pair_colorization_enabled: true,
             lsp_enabled: true,
             lsp_client: None,
             lsp_document: None,
@@ -997,6 +1066,7 @@ impl CodeEditor {
             visual_lines_cache: RefCell::new(None),
             highlight_cache: RefCell::new(None),
             highlight_lines_remaining: Cell::new(usize::MAX),
+            bracket_depth_cache: RefCell::new(BracketDepthCache::new()),
             pre_edit_line: 0,
             pre_edit_last_line: 0,
         };
@@ -1611,6 +1681,7 @@ impl CodeEditor {
         self.pre_edit_line = 0;
         self.pre_edit_last_line = usize::MAX;
         self.invalidate_highlight_from(0);
+        *self.bracket_depth_cache.borrow_mut() = BracketDepthCache::new();
         self.enqueue_lsp_change();
 
         // Scroll to top to force a redraw
@@ -1981,6 +2052,37 @@ impl CodeEditor {
     /// Returns whether the matching-bracket/quote-pair highlight overlay is enabled.
     pub fn bracket_match_highlight_enabled(&self) -> bool {
         self.bracket_match_highlight_enabled
+    }
+
+    /// Enables or disables bracket-pair colorization (rainbow brackets).
+    ///
+    /// When enabled, each `( ) [ ] { }` is colored by its nesting depth, so a
+    /// matching pair always shares the same color, cycling through a fixed
+    /// palette as depth increases. When disabled, brackets render with their
+    /// normal syntax-highlight color.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable bracket-pair colorization
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_bracket_pair_colorization_enabled(false); // Disable
+    /// ```
+    pub fn set_bracket_pair_colorization_enabled(&mut self, enabled: bool) {
+        if self.bracket_pair_colorization_enabled != enabled {
+            self.bracket_pair_colorization_enabled = enabled;
+            self.content_cache.clear();
+        }
+    }
+
+    /// Returns whether bracket-pair colorization (rainbow brackets) is enabled.
+    pub fn bracket_pair_colorization_enabled(&self) -> bool {
+        self.bracket_pair_colorization_enabled
     }
 
     /// Enables or disables code folding (collapse/expand blocks).
@@ -3002,6 +3104,34 @@ mod tests {
 
         editor.set_bracket_match_highlight_enabled(true);
         assert!(editor.bracket_match_highlight_enabled());
+    }
+
+    #[test]
+    fn test_bracket_pair_colorization_configuration() {
+        let mut editor = CodeEditor::new("", "rs");
+        assert!(editor.bracket_pair_colorization_enabled());
+
+        editor.set_bracket_pair_colorization_enabled(false);
+        assert!(!editor.bracket_pair_colorization_enabled());
+
+        editor.set_bracket_pair_colorization_enabled(true);
+        assert!(editor.bracket_pair_colorization_enabled());
+    }
+
+    #[test]
+    fn test_bracket_depth_cache_extends_and_truncates() {
+        let buffer = TextBuffer::new("fn main() {\n    let x = (1);\n}");
+        let mut cache = BracketDepthCache::new();
+
+        assert_eq!(cache.depth_at_line_start(&buffer, 0), 0);
+        assert_eq!(cache.depth_at_line_start(&buffer, 1), 1);
+        assert_eq!(cache.depth_at_line_start(&buffer, 2), 1);
+
+        // Truncating from line 1 keeps depth entering line 1 but forces line 2
+        // (and beyond) to be recomputed on next access.
+        cache.truncate_from(1);
+        assert_eq!(cache.depth_at_line_start(&buffer, 1), 1);
+        assert_eq!(cache.depth_at_line_start(&buffer, 2), 1);
     }
 
     #[test]

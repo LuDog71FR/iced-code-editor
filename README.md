@@ -40,6 +40,7 @@ Screenshot of the demo application:
 - **Auto indentation** with custom indent style
 - **Auto-closing brackets/quotes** with surround selection
 - **Matching bracket/quote highlight** — highlights the paired bracket or quote next to the cursor
+- **Bracket-pair colorization** — colors each bracket by nesting depth (rainbow brackets)
 - **Multiple cursors** for simultaneous editing at multiple positions
 - **Move and duplicate lines** with keyboard shortcuts
 - **Toggle comment** on the current line or selection (`Ctrl+/`)
@@ -626,6 +627,20 @@ editor.set_bracket_match_highlight_enabled(false);
 // Check current state
 if editor.bracket_match_highlight_enabled() {
     println!("Matching bracket/quote highlight is active");
+}
+```
+
+### Bracket-pair colorization
+
+Bracket-pair colorization is **enabled by default**. Each `(`, `)`, `[`, `]`, `{`, `}` is colored by its nesting depth, so a matching pair always shares the same color, cycling through a fixed palette (gold, orchid, light sky blue) as depth increases.
+
+```rust
+// Disable bracket-pair colorization
+editor.set_bracket_pair_colorization_enabled(false);
+
+// Check current state
+if editor.bracket_pair_colorization_enabled() {
+    println!("Bracket-pair colorization is active");
 }
 ```
 

@@ -22,6 +22,7 @@
    - [Auto-Indentation](#auto-indentation)
    - [Auto-Closing Brackets/Quotes](#auto-closing-bracketsquotes)
    - [Matching Bracket/Quote Highlight](#matching-bracketquote-highlight)
+   - [Bracket-Pair Colorization](#bracket-pair-colorization)
    - [Cursor Blinking](#cursor-blinking)
    - [Focus Management](#focus-management)
    - [Selection Rendering](#selection-rendering)
@@ -85,7 +86,7 @@ iced-code-editor/
 ├── i18n.rs                   # Internationalization (rust-i18n)
 └── canvas_editor/            # Core editor implementation
     ├── mod.rs                # Main editor struct, builder API, constants
-    ├── bracket_match.rs      # Matching bracket/quote detection
+    ├── bracket_match.rs      # Matching bracket/quote detection + bracket-pair depth scanning
     ├── canvas_impl.rs        # Canvas rendering (Iced Canvas trait)
     ├── clipboard.rs          # Clipboard operations
     ├── command.rs            # Command pattern for undo/redo
@@ -131,10 +132,12 @@ pub struct CodeEditor {
     auto_indent_enabled: bool,           // Auto-indent on newline
     auto_close_brackets: bool,           // Auto-close brackets/quotes + surround selection
     bracket_match_highlight_enabled: bool, // Matching bracket/quote highlight overlay
+    bracket_pair_colorization_enabled: bool, // Rainbow-bracket depth coloring
     indent_style: IndentStyle,           // Spaces(n) or Tab
     search_state: search::SearchState,   // Search/replace state
     lsp_client: Option<Box<dyn LspClient>>, // Optional LSP connection
     highlight_cache: RefCell<Option<HighlightCache>>, // Sequential span cache
+    bracket_depth_cache: RefCell<BracketDepthCache>, // Sequential nesting-depth cache
     visual_lines_cache: RefCell<Option<VisualLinesCache>>, // Wrapping cache
     // ... revisions, viewport metrics, font metrics, IME state, etc.
 }
@@ -648,6 +651,74 @@ recomputed fresh on the next relevant redraw.
 `set_bracket_match_highlight_enabled()` toggles the whole feature (and clears
 `overlay_cache` immediately so the change is visible without waiting for the next
 cursor move); the demo app exposes it as a toolbar checkbox next to "Show whitespace".
+
+### Bracket-Pair Colorization
+
+**Location:** `canvas_editor/bracket_match.rs` (depth logic), `canvas_editor/mod.rs`
+(`BracketDepthCache`, toggle field), `canvas_editor/canvas_impl.rs` (draw pass, palette)
+
+Unlike [Matching Bracket/Quote Highlight](#matching-bracketquote-highlight), which
+only reacts to the cursor, this feature colors **every** `( ) [ ] { }` in the visible
+text by its nesting depth, so a matching pair always shares a color:
+
+```rust
+// bracket_match.rs
+pub(crate) fn bracket_depth_indices(
+    line: &str,
+    start_depth: usize,
+) -> Vec<(usize, usize)>; // (column, palette depth index)
+
+pub(crate) fn bracket_depth_after_line(line: &str, start_depth: usize) -> usize;
+```
+
+For an opener the returned index *is* the depth entering it, then depth increases;
+for a closer, depth decreases first and the returned index is the result — so `(` and
+its `)` always compute the same index. Depth saturates at `0` on an unbalanced closer
+instead of underflowing. Like the other bracket helpers, this is a plain textual
+scan with no string/comment awareness.
+
+**Per-line depth cache:** Knowing the color of a bracket also requires knowing the
+nesting depth *entering* its line, which depends on every bracket before it in the
+file. `BracketDepthCache` (`mod.rs`) memoizes this as a dense prefix — `depths[i]` is
+the depth entering logical line `i` — mirroring `HighlightCache`'s sequential
+extend/truncate shape, but without any syntect state (bracket counting is a cheap
+plain-text scan, so there's no need for `HIGHLIGHT_LINES_PER_FRAME`-style budget
+throttling):
+
+```rust
+pub(crate) fn depth_at_line_start(
+    &mut self,
+    buffer: &TextBuffer,
+    line: usize,
+) -> usize; // extends the prefix as needed, then returns depths[line]
+
+pub(crate) fn truncate_from(&mut self, line: usize); // keeps depths[0..=line]
+```
+
+`finish_edit_operation()` truncates it from `pre_edit_line - 1` right alongside
+`invalidate_highlight_from()` (see [Highlight Cache Anchor](#7-highlight-cache-anchor-pre_edit_line)),
+and `reset()` replaces it wholesale on full content swap.
+
+**Rendering:** `draw_bracket_pair_colors()` runs in the `content_cache` layer (not
+`overlay_cache` — like syntax highlighting, this depends on buffer content, not
+cursor/selection state), right after `draw_text_with_syntax_highlighting()` for each
+visual line. Rather than threading override colors through the token-splitting
+loop (which would have to replicate tab-expansion math), it redraws just the bracket
+characters *on top of* the already-rendered glyphs, at the same pixel position
+computed by `calculate_segment_geometry()` — the same geometry helper selection/search
+highlighting uses:
+
+```rust
+const BRACKET_PAIR_COLORS: [Color; 3] = [
+    /* gold */ Color { r: 1.0, g: 0.843, b: 0.0, a: 1.0 },
+    /* orchid */ Color { r: 0.855, g: 0.439, b: 0.839, a: 1.0 },
+    /* light sky blue */ Color { r: 0.529, g: 0.808, b: 0.980, a: 1.0 },
+];
+```
+
+The palette matches VS Code's default rainbow-bracket colors. `set_bracket_pair_colorization_enabled()`
+toggles the whole feature and clears `content_cache`; the demo app exposes it as a
+toolbar checkbox ("Rainbow brackets") next to "Highlight matching bracket".
 
 ### Cursor Blinking
 
@@ -1496,6 +1567,8 @@ bumps the revision (and clears the canvas caches and the highlight prefix):
 self.buffer_revision = self.buffer_revision.wrapping_add(1);
 *self.visual_lines_cache.borrow_mut() = None;
 self.invalidate_highlight_from(self.pre_edit_line.saturating_sub(1));
+self.bracket_depth_cache.borrow_mut()
+    .truncate_from(self.pre_edit_line.saturating_sub(1));
 self.content_cache.clear();
 self.overlay_cache.clear();
 ```
