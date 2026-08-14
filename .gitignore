@@ -8,3 +8,5 @@ ocx.*
 opencode.*
 demo-app/dist
 demo-app/target
+.claude/skills/
+
