@@ -12,6 +12,7 @@ iced_aw = "0.13.0"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 opener = { version = "0.8.5", features = ["reveal"] }
 rfd = "0.17"
+url = "2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

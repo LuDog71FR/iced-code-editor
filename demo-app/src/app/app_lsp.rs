@@ -17,6 +17,7 @@ use iced_code_editor::{
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+use url::Url;
 
 /// Returns the LSP language for a built-in template (all use Lua).
 fn lsp_language_for_template(template: Template) -> Option<LspLanguage> {
@@ -56,12 +57,29 @@ fn virtual_uri_for_template(editor_id: EditorId, template: Template) -> String {
     format!("untitled://{}/{}.lua", editor_id_label(editor_id), name)
 }
 
-/// Converts a filesystem path to a file:// URI
+/// Converts a filesystem path to a `file://` URI.
+///
+/// Percent-encoding is delegated to [`Url`], so every character that is
+/// reserved in a URI (space, `#`, `?`, `%`, non-ASCII) is encoded and survives
+/// the round-trip through [`file_uri_to_path`].
+///
+/// [`Url::from_file_path`] requires an absolute path. A relative one falls
+/// back to plain concatenation, which is what the language server received in
+/// every case before.
 fn path_to_file_uri(path: &Path) -> String {
-    let mut uri = String::from("file://");
-    let path_str = path.to_string_lossy().replace(' ', "%20");
-    uri.push_str(&path_str);
-    uri
+    Url::from_file_path(path).map_or_else(
+        |()| format!("file://{}", path.display()),
+        |uri| uri.into(),
+    )
+}
+
+/// Converts a `file://` URI back to a filesystem path.
+///
+/// Returns `None` when the URI does not use the `file` scheme or does not map
+/// to a path on this platform. Percent-encoded sequences are decoded, which a
+/// bare `strip_prefix("file://")` would leave in the path as literal `%20`.
+fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
+    Url::parse(uri).ok()?.to_file_path().ok()
 }
 
 impl DemoApp {
@@ -521,9 +539,7 @@ impl DemoApp {
                     }
                     // Handle definition response from LSP server
                     LspEvent::Definition { uri, range } => {
-                        if let Some(path) =
-                            uri.strip_prefix("file://").map(PathBuf::from)
-                        {
+                        if let Some(path) = file_uri_to_path(&uri) {
                             messages.push(Message::JumpToFile(
                                 path,
                                 range.start.line as usize,
@@ -593,7 +609,46 @@ impl DemoApp {
 
 #[cfg(test)]
 mod tests {
-    use super::DemoApp;
+    use super::{DemoApp, file_uri_to_path, path_to_file_uri};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn test_file_uri_round_trip() {
+        // `#` and `?` are legal in POSIX file names but reserved in a URI.
+        for path in
+            ["/tmp/simple.rs", "/tmp/mon dossier/héllo.rs", "/tmp/a#b?c/d.rs"]
+        {
+            let original = PathBuf::from(path);
+            let uri = path_to_file_uri(&original);
+            assert_eq!(
+                file_uri_to_path(&uri),
+                Some(original),
+                "round-trip failed for {uri}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_file_uri_percent_encodes_reserved_characters() {
+        let uri = path_to_file_uri(Path::new("/tmp/mon dossier/a.rs"));
+        assert!(uri.contains("%20"), "space must be encoded, got {uri}");
+    }
+
+    #[test]
+    fn test_file_uri_unchanged_for_plain_ascii_path() {
+        // The common case must keep producing exactly what it did before.
+        assert_eq!(
+            path_to_file_uri(Path::new("/home/user/demo.lua")),
+            "file:///home/user/demo.lua"
+        );
+    }
+
+    #[test]
+    fn test_file_uri_to_path_rejects_other_schemes() {
+        // Template buffers use `untitled://`; they have no filesystem path.
+        assert_eq!(file_uri_to_path("untitled://editor_0/untitled.lua"), None);
+        assert_eq!(file_uri_to_path("not a uri"), None);
+    }
 
     #[test]
     fn test_current_word_at_ascii() {

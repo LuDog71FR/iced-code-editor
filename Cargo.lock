@@ -835,6 +835,7 @@ dependencies = [
  "iced_aw",
  "opener",
  "rfd",
+ "url",
  "wasm-bindgen",
 ]
 

@@ -25,6 +25,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Typing an opening bracket/quote while text is selected wraps the selection in the pair instead of replacing it
   - Enabled by default; toggle via `set_auto_close_brackets(bool)` / `auto_close_brackets()`, with a checkbox in the demo app toolbar
 
+### Fixed
+
+- fix: **Panic when filtering LSP completions on lines with multi-byte characters** (demo app)
+  - The completion filter sliced the current line using character offsets as byte offsets; when the boundary fell inside a character the application panicked (e.g. `aé` or `汉字` with the cursor at end of line), and when it happened to fall on a valid boundary it silently returned a truncated word
+  - The word is now rebuilt from `chars()`, so accented, CJK and emoji content is handled correctly
+
+- fix: **`file://` URIs are percent-encoded and decoded correctly** (demo app)
+  - Encoding escaped only spaces and decoding escaped nothing, so "go to definition" into a path containing a space, `#`, `?` or a non-ASCII character opened a path that does not exist
+  - Both directions now go through the `url` crate; URIs generated for plain ASCII paths are unchanged
+
+- fix: **Bounded allocation for LSP server messages**
+  - The LSP client allocated a buffer of whatever size the language server announced in `Content-Length`. Since the server binary is resolved through `PATH` or an environment variable, a malformed or hostile server could announce a multi-gigabyte frame and exhaust memory
+  - Frames are now capped at 64 MiB, well above any realistic LSP payload; an oversized frame stops the read loop, because the announced length is precisely what cannot be trusted to resynchronise on
+  - Message framing was extracted into a dedicated helper and is now covered by unit tests
+
 ## [0.3.11] - 2026-08-03
 
 ### Added

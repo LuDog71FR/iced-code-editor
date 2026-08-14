@@ -14,6 +14,14 @@ const METHOD_PROGRESS: &str = "$/progress";
 const METHOD_WORK_DONE_PROGRESS_CREATE: &str = "window/workDoneProgress/create";
 /// Progress `kind` value that signals the end of a work-done sequence.
 const PROGRESS_KIND_END: &str = "end";
+/// Maximum accepted `Content-Length` for a single LSP frame (64 MiB).
+///
+/// The body length is attacker-controlled input: it comes from the language
+/// server process, whose binary is resolved through `PATH` or an environment
+/// variable. Without a cap, a malformed or hostile server announcing a
+/// multi-gigabyte frame would force an unbounded allocation and take the
+/// editor down. Real LSP payloads stay orders of magnitude below this.
+const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 
 use self::config::{
     LspCommand, ensure_rust_analyzer_config, lsp_server_config,
@@ -25,7 +33,7 @@ use crate::canvas_editor::lsp::{
 use crate::text_utils::char_to_byte_index;
 use serde_json::json;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -330,37 +338,7 @@ impl LspProcessClient {
 
         let reader_thread = thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
-            loop {
-                let mut content_length: Option<usize> = None;
-                let mut line = String::new();
-
-                loop {
-                    line.clear();
-                    if reader
-                        .read_line(&mut line)
-                        .ok()
-                        .filter(|n| *n > 0)
-                        .is_none()
-                    {
-                        return;
-                    }
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() {
-                        break;
-                    }
-                    if let Some(value) = trimmed.strip_prefix("Content-Length:")
-                        && let Ok(len) = value.trim().parse::<usize>()
-                    {
-                        content_length = Some(len);
-                    }
-                }
-
-                let Some(len) = content_length else { continue };
-                let mut buf = vec![0u8; len];
-                if reader.read_exact(&mut buf).is_err() {
-                    return;
-                }
-
+            while let Some(buf) = read_message(&mut reader) {
                 if let Ok(value) =
                     serde_json::from_slice::<serde_json::Value>(&buf)
                 {
@@ -502,6 +480,48 @@ impl LspProcessClient {
 // =============================================================================
 // Reader thread helper functions
 // =============================================================================
+
+/// Reads one `Content-Length`-framed message body from `reader`.
+///
+/// Returns `None` when the stream ends, when the body cannot be read in full,
+/// or when the announced frame exceeds [`MAX_MESSAGE_BYTES`]. An oversized
+/// frame cannot be skipped reliably — the body length is exactly what is not
+/// trustworthy — so the caller must stop reading the stream rather than try to
+/// resynchronise mid-message.
+///
+/// Header lines other than `Content-Length` are ignored. A header block
+/// carrying no `Content-Length` yields an empty body, which the caller then
+/// discards as invalid JSON.
+fn read_message(reader: &mut impl BufRead) -> Option<Vec<u8>> {
+    let mut content_length: Option<usize> = None;
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        // A zero-length read means end of stream, not an empty header line.
+        reader.read_line(&mut line).ok().filter(|n| *n > 0)?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some(value) = trimmed.strip_prefix("Content-Length:")
+            && let Ok(len) = value.trim().parse::<usize>()
+        {
+            content_length = Some(len);
+        }
+    }
+
+    let len = content_length.unwrap_or(0);
+    if len > MAX_MESSAGE_BYTES {
+        return None;
+    }
+
+    let mut buf = vec![0u8; len];
+    if reader.read_exact(&mut buf).is_err() {
+        return None;
+    }
+    Some(buf)
+}
 
 /// Handles an LSP server request that requires a JSON-RPC response.
 ///
@@ -930,6 +950,72 @@ mod tests {
             .expect("missing header separator");
         let body = &data[header_end + 4..];
         serde_json::from_slice(body).expect("invalid JSON body")
+    }
+
+    // -------------------------------------------------------------------------
+    // read_message
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_read_message_reads_framed_body() {
+        let mut stream = std::io::Cursor::new(
+            b"Content-Length: 9\r\n\r\n{\"id\":42}".to_vec(),
+        );
+        assert_eq!(
+            read_message(&mut stream).as_deref(),
+            Some(&b"{\"id\":42}"[..])
+        );
+    }
+
+    #[test]
+    fn test_read_message_ignores_other_headers() {
+        let mut stream = std::io::Cursor::new(
+            b"Content-Type: application/vscode-jsonrpc\r\nContent-Length: 2\r\n\r\n{}"
+                .to_vec(),
+        );
+        assert_eq!(read_message(&mut stream).as_deref(), Some(&b"{}"[..]));
+    }
+
+    #[test]
+    fn test_read_message_reads_consecutive_frames() {
+        let mut stream = std::io::Cursor::new(
+            b"Content-Length: 2\r\n\r\n{}Content-Length: 4\r\n\r\n[1,]"
+                .to_vec(),
+        );
+        assert_eq!(read_message(&mut stream).as_deref(), Some(&b"{}"[..]));
+        assert_eq!(read_message(&mut stream).as_deref(), Some(&b"[1,]"[..]));
+        assert!(read_message(&mut stream).is_none(), "stream is exhausted");
+    }
+
+    #[test]
+    fn test_read_message_rejects_oversized_frame() {
+        // The announced length exceeds MAX_MESSAGE_BYTES: the frame must be
+        // refused without allocating it.
+        let header =
+            format!("Content-Length: {}\r\n\r\n", MAX_MESSAGE_BYTES + 1);
+        let mut stream = std::io::Cursor::new(header.into_bytes());
+        assert!(read_message(&mut stream).is_none());
+    }
+
+    #[test]
+    fn test_read_message_rejects_truncated_body() {
+        let mut stream =
+            std::io::Cursor::new(b"Content-Length: 10\r\n\r\nabc".to_vec());
+        assert!(read_message(&mut stream).is_none());
+    }
+
+    #[test]
+    fn test_read_message_ends_on_empty_stream() {
+        let mut stream = std::io::Cursor::new(Vec::new());
+        assert!(read_message(&mut stream).is_none());
+    }
+
+    #[test]
+    fn test_read_message_without_content_length_yields_empty_body() {
+        // No Content-Length: the caller gets an empty body and discards it as
+        // invalid JSON, then keeps reading.
+        let mut stream = std::io::Cursor::new(b"X-Unknown: 1\r\n\r\n".to_vec());
+        assert_eq!(read_message(&mut stream).as_deref(), Some(&b""[..]));
     }
 
     // -------------------------------------------------------------------------
