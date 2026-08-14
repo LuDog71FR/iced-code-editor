@@ -1883,18 +1883,6 @@ impl CodeEditor {
         self.handle_character_input(key, modifiers, text_str)
     }
 
-    /// Handles mouse events (button presses, movement, releases).
-    ///
-    /// # Arguments
-    ///
-    /// * `event` - The mouse event to handle
-    /// * `bounds` - The rectangle bounds of the canvas widget
-    /// * `cursor` - The current mouse cursor position and status
-    ///
-    /// # Returns
-    ///
-    /// `Some(Action<Message>)` if the event was handled, `None` otherwise
-    #[allow(clippy::unused_self)]
     /// Returns the logical line of the fold header whose chevron is at `point`,
     /// if any.
     ///
@@ -1926,6 +1914,18 @@ impl CodeEditor {
             .then_some(visual_line.logical_line)
     }
 
+    /// Handles mouse events (button presses, movement, releases).
+    ///
+    /// # Arguments
+    ///
+    /// * `event` - The mouse event to handle
+    /// * `bounds` - The rectangle bounds of the canvas widget
+    /// * `cursor` - The current mouse cursor position and status
+    ///
+    /// # Returns
+    ///
+    /// `Some(Action<Message>)` if the event was handled, `None` otherwise
+    #[allow(clippy::unused_self)]
     fn handle_mouse_event(
         &self,
         event: &mouse::Event,

@@ -1,3 +1,9 @@
+//! Core application state and update logic for the demo app.
+//!
+//! Defines [`DemoApp`], the root Iced application state (open editor tabs,
+//! LSP session state, UI preferences), the [`Message`] enum driving its
+//! update loop, and the associated `view`/`update` implementations.
+
 use crate::file_ops;
 use crate::types::{EditorId, FontOption, LanguageOption, Template};
 #[cfg(not(target_arch = "wasm32"))]

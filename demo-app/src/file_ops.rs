@@ -1,3 +1,8 @@
+//! File open/save dialogs and disk I/O helpers for the demo app.
+//!
+//! Provides native (via `rfd`) and WASM-compatible variants for picking a
+//! file to open and for saving editor contents back to disk.
+
 use std::path::PathBuf;
 
 /// Opens a file dialog.

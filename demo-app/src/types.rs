@@ -1,3 +1,8 @@
+//! Small shared value types used across the demo app.
+//!
+//! Includes editor/tab identifiers and `Display`-wrapping newtypes needed
+//! to populate `pick_list` widgets with fonts, languages, and templates.
+
 use iced::Font;
 use iced_code_editor::Language;
 

@@ -65,7 +65,7 @@ pub struct WrappingCalculator {
     wrap_enabled: bool,
     /// Fixed wrap column (None = wrap at viewport width)
     wrap_column: Option<usize>,
-    /// Full chat with for wide characters
+    /// Full character width for wide characters
     full_char_width: f32,
     /// Character width for narrow characters
     char_width: f32,
@@ -78,7 +78,7 @@ impl WrappingCalculator {
     ///
     /// * `wrap_enabled` - Whether line wrapping is enabled
     /// * `wrap_column` - Fixed wrap column, or None for viewport-based wrapping
-    /// * `full_char_width` - Full chat with in pixels
+    /// * `full_char_width` - Full character width in pixels
     /// * `char_width` - Character width in pixels
     ///
     /// # Example

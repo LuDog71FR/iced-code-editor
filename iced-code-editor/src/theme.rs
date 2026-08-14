@@ -1,3 +1,9 @@
+//! Theming support for the code editor widget.
+//!
+//! Defines the [`Style`] appearance record, the [`Catalog`] trait used to
+//! derive a `Style` from an `iced::Theme`, and helpers to build a default
+//! style from any Iced theme's palette.
+
 use iced::Color;
 
 /// The appearance of a code editor.

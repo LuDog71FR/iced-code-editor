@@ -1,3 +1,9 @@
+//! Vim emulation for the canvas editor.
+//!
+//! This module parses key sequences into motions, operators, and actions,
+//! and tracks the modal state (normal/insert/visual/visual-line) needed to
+//! reproduce Vim-style editing behavior.
+
 /// The active editing mode when Vim behavior is enabled.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum VimMode {

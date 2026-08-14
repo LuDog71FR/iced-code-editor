@@ -1,4 +1,9 @@
-// Imports for LSP (Language Server Protocol) functionality
+//! LSP (Language Server Protocol) integration for [`DemoApp`].
+//!
+//! Wires the editor to a language server: starting/stopping the process
+//! client, forwarding buffer changes, debouncing and dispatching hover
+//! requests, and applying completions and diagnostics to the UI.
+
 use super::{DemoApp, EditorId, LspProgress, Template};
 use crate::app::Message;
 
