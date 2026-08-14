@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: **Undo of a line-merging Backspace duplicated the merged line**
+  - Pressing Backspace at column 0 merges a line into the previous one. Undo split the merged line back at the join point — which already restores both lines — and then re-inserted the line content on top of it, so `hello\nworld` came back as `hello\nworldworld`
+  - The redundant re-insertion (and the now-unused `merged_content` field) has been removed; undo now restores the exact original buffer
+
+- fix: **Undo of a Vim paste (`p` / `P`) deleted the wrong text, or nothing at all**
+  - `InsertTextCommand` removes pasted text by walking backwards from the cursor position it restores. Vim paste overrides that position to rest the caret *on* the pasted text instead of after it, so the backward walk started at the wrong place — `P` on a characterwise register left the paste in place entirely (`abc` → `aabc` → `aabc` after undo)
+  - The end of the insertion is now tracked separately from the caret's resting position, so undo always removes exactly the inserted characters regardless of where the caret is left
+
 - fix: **Panic when filtering LSP completions on lines with multi-byte characters** (demo app)
   - The completion filter sliced the current line using character offsets as byte offsets; when the boundary fell inside a character the application panicked (e.g. `aé` or `汉字` with the cursor at end of line), and when it happened to fall on a valid boundary it silently returned a truncated word
   - The word is now rebuilt from `chars()`, so accented, CJK and emoji content is handled correctly

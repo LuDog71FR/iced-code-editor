@@ -86,7 +86,6 @@ pub struct DeleteCharCommand {
     col: usize,
     deleted_char: Option<char>,
     merged_line: bool,
-    merged_content: Option<String>,
     cursor_before: (usize, usize),
     cursor_after: (usize, usize),
 }
@@ -106,21 +105,18 @@ impl DeleteCharCommand {
         col: usize,
         cursor: (usize, usize),
     ) -> Self {
-        let (deleted_char, merged_line, merged_content, cursor_after) = if col
-            > 0
-        {
+        let (deleted_char, merged_line, cursor_after) = if col > 0 {
             // Deleting character before cursor
             let line_str = buffer.line(line);
             let ch = line_str.chars().nth(col - 1);
-            (ch, false, None, (line, col - 1))
+            (ch, false, (line, col - 1))
         } else if line > 0 {
             // Merging with previous line
             let prev_line_len = buffer.line_len(line - 1);
-            let current_line_content = buffer.line(line).to_string();
-            (None, true, Some(current_line_content), (line - 1, prev_line_len))
+            (None, true, (line - 1, prev_line_len))
         } else {
             // At beginning of document, nothing to delete
-            (None, false, None, cursor)
+            (None, false, cursor)
         };
 
         Self {
@@ -128,7 +124,6 @@ impl DeleteCharCommand {
             col,
             deleted_char,
             merged_line,
-            merged_content,
             cursor_before: cursor,
             cursor_after,
         }
@@ -147,14 +142,10 @@ impl Command for DeleteCharCommand {
 
     fn undo(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) {
         if self.merged_line {
-            // Restore the line that was merged
-            if let Some(content) = &self.merged_content {
-                buffer.insert_newline(self.cursor_after.0, self.cursor_after.1);
-                // Replace the new line with the original content
-                for (i, ch) in content.chars().enumerate() {
-                    buffer.insert_char(self.line, i, ch);
-                }
-            }
+            // Splitting the merged line back at the join point is enough: the
+            // text after the split is exactly the line that was merged in.
+            // Re-inserting it on top would duplicate it.
+            buffer.insert_newline(self.cursor_after.0, self.cursor_after.1);
         } else if let Some(ch) = self.deleted_char {
             // Re-insert the deleted character
             buffer.insert_char(self.line, self.col - 1, ch);
@@ -326,6 +317,14 @@ pub struct InsertTextCommand {
     text: String,
     cursor_before: (usize, usize),
     cursor_after: (usize, usize),
+    /// Position immediately after the last inserted character.
+    ///
+    /// This is deliberately separate from `cursor_after`, which callers may
+    /// override to rest the caret somewhere else (Vim paste leaves it on the
+    /// first pasted character). [`Command::undo`] deletes the inserted text by
+    /// walking backwards from this position, so it must always describe the end
+    /// of the insertion, never where the caret happens to end up.
+    insert_end: (usize, usize),
 }
 
 impl InsertTextCommand {
@@ -343,22 +342,32 @@ impl InsertTextCommand {
         text: String,
         cursor: (usize, usize),
     ) -> Self {
-        // Calculate final cursor position
+        // Position right after the inserted text; also the default resting
+        // place for the cursor.
         let lines: Vec<&str> = text.split('\n').collect();
-        let cursor_after = if lines.len() == 1 {
+        let insert_end = if lines.len() == 1 {
             (line, col + text.chars().count())
         } else {
             let last_line_len = lines.last().map_or(0, |l| l.chars().count());
             (line + lines.len() - 1, last_line_len)
         };
 
-        Self { line, col, text, cursor_before: cursor, cursor_after }
+        Self {
+            line,
+            col,
+            text,
+            cursor_before: cursor,
+            cursor_after: insert_end,
+            insert_end,
+        }
     }
 
     /// Overrides the cursor position restored when this insertion is redone.
     ///
     /// Most paste operations leave the cursor after the inserted text, while
-    /// Vim paste leaves it on the first inserted character or line.
+    /// Vim paste leaves it on the first inserted character or line. Only the
+    /// resting position changes; `insert_end` keeps describing the end of the
+    /// insertion so undo still removes exactly the inserted characters.
     pub(crate) fn with_cursor_after(
         mut self,
         cursor_after: (usize, usize),
@@ -392,9 +401,10 @@ impl Command for InsertTextCommand {
     }
 
     fn undo(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) {
-        // Delete characters in reverse
-        let mut current_line = self.cursor_after.0;
-        let mut current_col = self.cursor_after.1;
+        // Delete characters in reverse, starting from the end of the inserted
+        // text rather than from wherever the caret was left to rest.
+        let mut current_line = self.insert_end.0;
+        let mut current_col = self.insert_end.1;
 
         for ch in self.text.chars().rev() {
             if ch == '\n' {
@@ -1012,6 +1022,43 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_char_command_merge_undo_restores_both_lines() {
+        // Backspace at column 0 merges the line into the previous one; undo
+        // must split it back without duplicating the merged content.
+        let mut buffer = TextBuffer::new("hello\nworld");
+        let mut cursor = (1, 0);
+        let mut cmd = DeleteCharCommand::new(&buffer, 1, 0, cursor);
+
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "helloworld");
+        assert_eq!(cursor, (0, 5));
+
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "hello\nworld");
+        assert_eq!(cursor, (1, 0));
+    }
+
+    #[test]
+    fn test_delete_char_command_merge_undo_with_empty_lines() {
+        // Merging an empty line into a non-empty one, and vice versa.
+        let mut buffer = TextBuffer::new("text\n");
+        let mut cursor = (1, 0);
+        let mut cmd = DeleteCharCommand::new(&buffer, 1, 0, cursor);
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "text");
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "text\n");
+
+        let mut buffer = TextBuffer::new("\ntext");
+        let mut cursor = (1, 0);
+        let mut cmd = DeleteCharCommand::new(&buffer, 1, 0, cursor);
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "text");
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "\ntext");
+    }
+
+    #[test]
     fn test_insert_newline_command() {
         let mut buffer = TextBuffer::new("hello world");
         let mut cursor = (0, 5);
@@ -1096,6 +1143,41 @@ mod tests {
         cmd.undo(&mut buffer, &mut cursor);
         assert_eq!(buffer.line(0), "hello");
         assert_eq!(cursor, (0, 5));
+    }
+
+    #[test]
+    fn test_insert_text_command_undo_ignores_overridden_cursor_after() {
+        // Vim paste rests the caret on the first pasted character. Undo must
+        // still delete the inserted text, which starts at the caret.
+        let mut buffer = TextBuffer::new("abc");
+        let mut cursor = (0, 0);
+        let mut cmd = InsertTextCommand::new(0, 0, "a".to_string(), cursor)
+            .with_cursor_after((0, 0));
+
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.line(0), "aabc");
+        assert_eq!(cursor, (0, 0), "caret rests on the pasted character");
+
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.line(0), "abc");
+        assert_eq!(cursor, (0, 0));
+    }
+
+    #[test]
+    fn test_insert_text_command_undo_multiline_with_overridden_cursor_after() {
+        // Linewise Vim paste: the caret rests at the start of the pasted line.
+        let mut buffer = TextBuffer::new("one\ntwo");
+        let mut cursor = (0, 0);
+        let mut cmd = InsertTextCommand::new(1, 0, "one\n".to_string(), cursor)
+            .with_cursor_after((1, 0));
+
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "one\none\ntwo");
+        assert_eq!(cursor, (1, 0));
+
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "one\ntwo");
+        assert_eq!(cursor, (0, 0));
     }
 
     #[test]

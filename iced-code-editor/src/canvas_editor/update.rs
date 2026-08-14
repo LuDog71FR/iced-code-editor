@@ -3507,6 +3507,31 @@ mod tests {
     }
 
     #[test]
+    fn test_vim_editing_paste_undo_restores_buffer() {
+        // Vim paste rests the caret on the pasted text rather than after it;
+        // undo must still remove exactly what was pasted.
+        for keys in ["ylp", "ylP", "yl2lp", "yl2lP"] {
+            let mut editor =
+                CodeEditor::new("abc", "txt").with_vim_enabled(true);
+            vim_keys(&mut editor, keys);
+            assert_ne!(editor.content(), "abc", "keys: {keys}");
+
+            vim_keys(&mut editor, "u");
+            assert_eq!(editor.content(), "abc", "keys: {keys}");
+        }
+
+        for keys in ["yyp", "yyP"] {
+            let mut editor =
+                CodeEditor::new("one\ntwo", "txt").with_vim_enabled(true);
+            vim_keys(&mut editor, keys);
+            assert_ne!(editor.content(), "one\ntwo", "keys: {keys}");
+
+            vim_keys(&mut editor, "u");
+            assert_eq!(editor.content(), "one\ntwo", "keys: {keys}");
+        }
+    }
+
+    #[test]
     fn test_vim_editing_operator_counts_multiply() {
         let mut editor =
             CodeEditor::new("one two three four five six seven", "txt")
@@ -4251,6 +4276,22 @@ mod tests {
         let _ = editor.update(&Message::Undo);
         assert_eq!(editor.buffer.line(0), "hello");
         assert_eq!(editor.cursors.primary_position(), (0, 5));
+    }
+
+    #[test]
+    fn test_undo_backspace_line_merge() {
+        // Backspace at column 0 merges two lines; undo must restore both
+        // without duplicating the merged line.
+        let mut editor = CodeEditor::new("hello\nworld", "py");
+        editor.cursors.set_single((1, 0));
+
+        let _ = editor.update(&Message::Backspace);
+        assert_eq!(editor.content(), "helloworld");
+        assert_eq!(editor.cursors.primary_position(), (0, 5));
+
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.content(), "hello\nworld");
+        assert_eq!(editor.cursors.primary_position(), (1, 0));
     }
 
     #[test]
