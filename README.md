@@ -47,12 +47,6 @@ Screenshot of the demo application:
 - **Visible whitespace rendering** — spaces shown as `·`, tabs as `→`
 - **Optional Vim mode** with Normal, Insert, Visual, and Visual Line modes
 
-## Planned features
-
-- [ ] Find references / Rename symbol
-- [ ] Command palette
-- [ ] Minimap
-
 ## Quick Start
 
 Add this to your `Cargo.toml`:
