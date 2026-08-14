@@ -1037,11 +1037,8 @@ greet("World")
                     let content = tab.editor.content();
                     let (line, col) = tab.editor.cursor_position();
                     if let Some(line_content) = content.lines().nth(line) {
-                        let word_start =
-                            Self::find_word_start(line_content, col);
-                        let current_word = &line_content[word_start..col];
                         self.lsp_overlay.completion_filter =
-                            current_word.to_string();
+                            Self::current_word_at(line_content, col);
                         self.lsp_overlay.filter_completions();
                     }
                 }

@@ -99,6 +99,29 @@ impl DemoApp {
         }
     }
 
+    /// Returns the word currently being typed, ending at `cursor_col`.
+    ///
+    /// `cursor_col` is a character offset, as reported by
+    /// `CodeEditor::cursor_position`. The word is rebuilt from `chars()`
+    /// rather than sliced by byte index, so lines holding multi-byte
+    /// characters (accents, CJK, emoji) are handled correctly.
+    ///
+    /// Returns an empty string when no word character precedes the cursor.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// assert_eq!(DemoApp::current_word_at("foo.ba", 6), "ba");
+    /// assert_eq!(DemoApp::current_word_at("héllo", 5), "héllo");
+    /// ```
+    pub(super) fn current_word_at(line: &str, cursor_col: usize) -> String {
+        let word_start = Self::find_word_start(line, cursor_col);
+        line.chars()
+            .skip(word_start)
+            .take(cursor_col.saturating_sub(word_start))
+            .collect()
+    }
+
     /// Finds the start column of the current word being typed
     pub(super) fn find_word_start(line: &str, cursor_col: usize) -> usize {
         let chars: Vec<char> = line.chars().collect();
@@ -565,5 +588,37 @@ impl DemoApp {
                     .map(|msg| Task::perform(async move { msg }, |m| m)),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DemoApp;
+
+    #[test]
+    fn test_current_word_at_ascii() {
+        assert_eq!(DemoApp::current_word_at("foo.ba", 6), "ba");
+        assert_eq!(DemoApp::current_word_at("let value", 9), "value");
+        assert_eq!(DemoApp::current_word_at("snake_case", 10), "snake_case");
+    }
+
+    #[test]
+    fn test_current_word_at_multibyte() {
+        // Regression: character offsets must never be used as byte offsets.
+        // These two sliced mid-character and panicked before the fix.
+        assert_eq!(DemoApp::current_word_at("aé", 2), "aé");
+        assert_eq!(DemoApp::current_word_at("汉字", 2), "汉字");
+
+        // These landed on char boundaries but returned a truncated word.
+        assert_eq!(DemoApp::current_word_at("héllo", 5), "héllo");
+        assert_eq!(DemoApp::current_word_at("héllo wor", 9), "wor");
+        assert_eq!(DemoApp::current_word_at("汉字 ab", 5), "ab");
+    }
+
+    #[test]
+    fn test_current_word_at_without_word() {
+        assert_eq!(DemoApp::current_word_at("foo ", 4), "");
+        assert_eq!(DemoApp::current_word_at("", 0), "");
+        assert_eq!(DemoApp::current_word_at("a.", 2), "");
     }
 }
