@@ -609,7 +609,12 @@ impl DemoApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{DemoApp, file_uri_to_path, path_to_file_uri};
+    // A handful of tests below carry an `#[allow(clippy::unwrap_used)]` on
+    // `mpsc::Sender::send(..).unwrap()`. The channel is created and drained
+    // within the same test, so a failed send means the test setup itself is
+    // broken — a panic is the right failure report there, matching the
+    // existing per-test allows in `history.rs`/`command.rs`.
+    use super::*;
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -675,5 +680,191 @@ mod tests {
         assert_eq!(DemoApp::current_word_at("foo ", 4), "");
         assert_eq!(DemoApp::current_word_at("", 0), "");
         assert_eq!(DemoApp::current_word_at("a.", 2), "");
+    }
+
+    // ---- drain_lsp_events ----
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_drain_lsp_events_shows_hover_text() {
+        let (mut app, _) = DemoApp::new();
+        let (tx, rx) = mpsc::channel();
+        app.lsp_events = Some(rx);
+        tx.send(LspEvent::Hover { text: "docs".to_string() }).unwrap();
+
+        let _ = app.drain_lsp_events();
+
+        assert!(app.lsp_overlay.hover_visible);
+        assert_eq!(app.lsp_overlay_editor, Some(app.active_tab_id));
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_drain_lsp_events_empty_hover_clears_overlay() {
+        let (mut app, _) = DemoApp::new();
+        app.lsp_overlay.show_hover("stale".to_string());
+        app.lsp_hover_anchor =
+            Some((app.active_tab_id, LspPosition { line: 0, character: 0 }));
+        let (tx, rx) = mpsc::channel();
+        app.lsp_events = Some(rx);
+        tx.send(LspEvent::Hover { text: String::new() }).unwrap();
+
+        let _ = app.drain_lsp_events();
+
+        assert!(!app.lsp_overlay.hover_visible);
+        assert!(app.lsp_hover_anchor.is_none());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_drain_lsp_events_completion_shows_overlay() {
+        let (mut app, _) = DemoApp::new();
+        let (tx, rx) = mpsc::channel();
+        app.lsp_events = Some(rx);
+        tx.send(LspEvent::Completion {
+            items: vec!["foo".to_string(), "bar".to_string()],
+        })
+        .unwrap();
+
+        let _ = app.drain_lsp_events();
+
+        assert!(app.lsp_overlay.completion_visible);
+        assert_eq!(app.lsp_overlay_editor, Some(app.active_tab_id));
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_drain_lsp_events_progress_done_removes_entry() {
+        let (mut app, _) = DemoApp::new();
+        app.lsp_progress
+            .entry("rust-analyzer".to_string())
+            .or_default()
+            .insert(
+                "token-1".to_string(),
+                LspProgress {
+                    title: "Indexing".to_string(),
+                    message: None,
+                    percentage: Some(50),
+                },
+            );
+        let (tx, rx) = mpsc::channel();
+        app.lsp_events = Some(rx);
+        tx.send(LspEvent::Progress {
+            token: "token-1".to_string(),
+            server_key: "rust-analyzer".to_string(),
+            title: "Indexing".to_string(),
+            message: None,
+            percentage: None,
+            done: true,
+        })
+        .unwrap();
+
+        let _ = app.drain_lsp_events();
+
+        assert!(!app.lsp_progress.contains_key("rust-analyzer"));
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_drain_lsp_events_log_appends_message() {
+        let (mut app, _) = DemoApp::new();
+        let (tx, rx) = mpsc::channel();
+        app.lsp_events = Some(rx);
+        tx.send(LspEvent::Log {
+            server_key: "gopls".to_string(),
+            message: "started".to_string(),
+        })
+        .unwrap();
+
+        let _ = app.drain_lsp_events();
+
+        assert_eq!(
+            app.log_messages.last().map(String::as_str),
+            Some("[LSP] [gopls] started")
+        );
+    }
+
+    #[test]
+    fn test_drain_lsp_events_disconnected_sender_clears_receiver() {
+        let (mut app, _) = DemoApp::new();
+        let (tx, rx) = mpsc::channel::<LspEvent>();
+        app.lsp_events = Some(rx);
+        drop(tx);
+
+        let _ = app.drain_lsp_events();
+
+        assert!(app.lsp_events.is_none());
+    }
+
+    // ---- process_lsp_hover_timers ----
+
+    #[test]
+    fn test_process_lsp_hover_timers_clears_pending_when_ready() {
+        let (mut app, _) = DemoApp::new();
+        let editor_id = app.active_tab_id;
+        let position = LspPosition { line: 0, character: 0 };
+        app.lsp_hover_anchor = Some((editor_id, position));
+        app.lsp_hover_pending = Some(LspHoverPending {
+            editor_id,
+            position,
+            point: Point::new(10.0, 10.0),
+            ready_at: Instant::now() - Duration::from_millis(1),
+        });
+
+        app.process_lsp_hover_timers();
+
+        assert!(app.lsp_hover_pending.is_none());
+        // A fresh DemoApp has no LSP client attached, so the request cannot
+        // be sent and the stale anchor is cleared instead of showing the
+        // tooltip.
+        assert!(app.lsp_hover_anchor.is_none());
+    }
+
+    #[test]
+    fn test_process_lsp_hover_timers_keeps_pending_before_ready() {
+        let (mut app, _) = DemoApp::new();
+        let editor_id = app.active_tab_id;
+        let position = LspPosition { line: 0, character: 0 };
+        app.lsp_hover_pending = Some(LspHoverPending {
+            editor_id,
+            position,
+            point: Point::new(10.0, 10.0),
+            ready_at: Instant::now() + Duration::from_secs(60),
+        });
+
+        app.process_lsp_hover_timers();
+
+        assert!(app.lsp_hover_pending.is_some());
+    }
+
+    #[test]
+    fn test_process_lsp_hover_timers_hides_overlay_after_deadline() {
+        let (mut app, _) = DemoApp::new();
+        app.lsp_overlay.show_hover("docs".to_string());
+        app.lsp_overlay_editor = Some(app.active_tab_id);
+        app.lsp_hover_anchor =
+            Some((app.active_tab_id, LspPosition { line: 0, character: 0 }));
+        app.lsp_hover_hide_deadline =
+            Some(Instant::now() - Duration::from_millis(1));
+
+        app.process_lsp_hover_timers();
+
+        assert!(!app.lsp_overlay.hover_visible);
+        assert!(app.lsp_hover_anchor.is_none());
+        assert!(app.lsp_hover_hide_deadline.is_none());
+    }
+
+    #[test]
+    fn test_process_lsp_hover_timers_keeps_overlay_while_interactive() {
+        let (mut app, _) = DemoApp::new();
+        app.lsp_overlay.show_hover("docs".to_string());
+        app.lsp_overlay.hover_interactive = true;
+        app.lsp_overlay_editor = Some(app.active_tab_id);
+        app.lsp_hover_hide_deadline =
+            Some(Instant::now() - Duration::from_millis(1));
+
+        app.process_lsp_hover_timers();
+
+        assert!(app.lsp_overlay.hover_visible);
     }
 }

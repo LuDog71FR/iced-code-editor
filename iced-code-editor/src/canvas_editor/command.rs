@@ -1231,6 +1231,36 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_range_command_multiline() {
+        let mut buffer = TextBuffer::new("hello\nworld\nfoo\nbar");
+        let mut cursor = (0, 0);
+        let mut cmd = DeleteRangeCommand::new(&buffer, (0, 2), (2, 1), cursor);
+
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "heoo\nbar");
+        assert_eq!(cursor, (0, 2));
+
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "hello\nworld\nfoo\nbar");
+        assert_eq!(cursor, (0, 0));
+    }
+
+    #[test]
+    fn test_delete_range_command_range_ending_at_column_zero() {
+        let mut buffer = TextBuffer::new("ab\ncd");
+        let mut cursor = (0, 0);
+        let mut cmd = DeleteRangeCommand::new(&buffer, (0, 1), (1, 0), cursor);
+
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "acd");
+        assert_eq!(cursor, (0, 1));
+
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "ab\ncd");
+        assert_eq!(cursor, (0, 0));
+    }
+
+    #[test]
     fn test_composite_command() {
         let mut buffer = TextBuffer::new("hello");
         let mut cursor = (0, 5);

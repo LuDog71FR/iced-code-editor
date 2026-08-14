@@ -565,40 +565,86 @@ fn find_matches_in_range(
             continue;
         }
 
-        let search_line = if case_sensitive {
-            Cow::Borrowed(line)
+        if case_sensitive {
+            find_matches_case_sensitive(
+                line,
+                search_query.as_ref(),
+                line_idx,
+                &mut matches,
+            );
         } else {
-            Cow::Owned(line.to_lowercase())
-        };
-
-        // Find all occurrences in this line
-        let mut start_pos = 0;
-        while let Some(relative_pos) =
-            search_line[start_pos..].find(search_query.as_ref())
-        {
-            let absolute_pos = start_pos + relative_pos;
-
-            // Convert byte position to character position
-            // Note: In case-insensitive mode, absolute_pos is in the lowercased string.
-            // Using it to slice the original line is only safe if byte lengths match.
-            // We use get() to be safe against panics for weird unicode cases.
-            let col = if let Some(slice) = line.get(..absolute_pos) {
-                slice.chars().count()
-            } else {
-                // Fallback: use the position in the search line if mapping fails
-                // This assumes column in search_line is "close enough"
-                search_line[..absolute_pos].chars().count()
-            };
-
-            matches.push(SearchMatch { line: line_idx, col });
-
-            // Move past this match to find next occurrence
-            // Use search_query.len() to avoid overlapping matches and ensure we land on UTF-8 character boundary
-            start_pos = absolute_pos + search_query.len();
+            find_matches_case_insensitive(
+                line,
+                search_query.as_ref(),
+                line_idx,
+                &mut matches,
+            );
         }
     }
 
     matches
+}
+
+/// Appends every case-sensitive occurrence of `search_query` in `line` to `matches`.
+///
+/// The searched string is `line` itself, so byte offsets from `str::find`
+/// always land on `line`'s own character boundaries and can be converted to
+/// a character column directly.
+fn find_matches_case_sensitive(
+    line: &str,
+    search_query: &str,
+    line_idx: usize,
+    matches: &mut Vec<SearchMatch>,
+) {
+    let mut start_pos = 0;
+    while let Some(relative_pos) = line[start_pos..].find(search_query) {
+        let absolute_pos = start_pos + relative_pos;
+        let col = line[..absolute_pos].chars().count();
+        matches.push(SearchMatch { line: line_idx, col });
+        start_pos = absolute_pos + search_query.len();
+    }
+}
+
+/// Appends every case-insensitive occurrence of `search_query` (already
+/// lowercased) in `line` to `matches`.
+///
+/// `to_lowercase()` can change both the byte *and* character length of a
+/// character (e.g. 'İ' U+0130 becomes "i" + a combining dot above, one
+/// character turning into two), so a byte offset found in the lowercased
+/// line cannot be converted to a column by re-slicing the original line —
+/// that silently drifts once such a character precedes the match. Instead,
+/// `boundaries` records, for every original character, the byte offset at
+/// which its lowercased form starts in the lowercased line, so a match's
+/// byte offset maps back to the original character it belongs to.
+fn find_matches_case_insensitive(
+    line: &str,
+    search_query: &str,
+    line_idx: usize,
+    matches: &mut Vec<SearchMatch>,
+) {
+    let mut search_line = String::with_capacity(line.len());
+    let mut boundaries: Vec<(usize, usize)> =
+        Vec::with_capacity(line.len() + 1);
+    for (char_idx, ch) in line.chars().enumerate() {
+        boundaries.push((search_line.len(), char_idx));
+        for lower_ch in ch.to_lowercase() {
+            search_line.push(lower_ch);
+        }
+    }
+    boundaries.push((search_line.len(), line.chars().count()));
+
+    let mut start_pos = 0;
+    while let Some(relative_pos) = search_line[start_pos..].find(search_query) {
+        let absolute_pos = start_pos + relative_pos;
+        let col = match boundaries
+            .binary_search_by_key(&absolute_pos, |&(byte, _)| byte)
+        {
+            Ok(idx) => boundaries[idx].1,
+            Err(idx) => boundaries[idx.saturating_sub(1)].1,
+        };
+        matches.push(SearchMatch { line: line_idx, col });
+        start_pos = absolute_pos + search_query.len();
+    }
 }
 
 #[cfg(test)]
@@ -625,6 +671,49 @@ mod tests {
         assert_eq!(matches[0].col, 0);
         assert_eq!(matches[1].line, 1);
         assert_eq!(matches[1].col, 0);
+    }
+
+    #[test]
+    fn test_find_matches_case_insensitive_unicode_length_changing() {
+        // 'İ' (U+0130) lowercases to "i" + a combining dot above (U+0307):
+        // one character becomes two. Searching for "tanbul" still matches
+        // (the combining mark only affects the leading "İ"/"i"), which lets
+        // us check that the reported column is computed against the
+        // *original* line ("İstanbul": İ=0, s=1, t=2) rather than drifting
+        // by the length the lowercased prefix gained.
+        let buffer = TextBuffer::new("İstanbul");
+        let matches = find_matches(&buffer, "tanbul", false, None);
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line, 0);
+        assert_eq!(matches[0].col, 2);
+    }
+
+    #[test]
+    fn test_find_matches_case_insensitive_unicode_match_starts_after_expansion()
+    {
+        // The character whose lowercase form changes length ('İ') sits right
+        // before the match itself, so the reported column must point at the
+        // first lowercased character of the match, not the lowercased 'İ'.
+        let buffer = TextBuffer::new("İSTANBUL");
+        let matches = find_matches(&buffer, "istanbul", false, None);
+
+        // "İstanbul".to_lowercase() is "i\u{307}stanbul" (combining dot),
+        // which does not literally contain "istanbul" — so there is no match.
+        // This documents that behavior rather than assuming a match exists.
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn test_find_matches_case_insensitive_unicode_byte_shrinking() {
+        // 'ẞ' (U+1E9E, capital sharp S) lowercases to 'ß' — same character
+        // count, but fewer bytes (3 -> 2). This exercises the opposite
+        // direction of length change from the 'İ' case above.
+        let buffer = TextBuffer::new("StraẞE");
+        let matches = find_matches(&buffer, "e", false, None);
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].col, 5);
     }
 
     #[test]

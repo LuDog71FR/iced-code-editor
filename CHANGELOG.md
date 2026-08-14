@@ -68,6 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Frames are now capped at 64 MiB, well above any realistic LSP payload; an oversized frame stops the read loop, because the announced length is precisely what cannot be trusted to resynchronise on
   - Message framing was extracted into a dedicated helper and is now covered by unit tests
 
+- fix: **Case-insensitive search reported the wrong column for a match after a length-changing Unicode character** (e.g. `İ` lowercasing to two characters)
+  - The match's byte offset, found in the lowercased line, was re-sliced against the original line; this silently drifted once an earlier character's case-folding changed the character count
+  - Column is now computed via an explicit character-boundary map back to the original line instead of re-slicing it
+
 ## [0.3.11] - 2026-08-03
 
 ### Added
