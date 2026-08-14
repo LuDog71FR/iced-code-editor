@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Typing an opening bracket/quote while text is selected wraps the selection in the pair instead of replacing it
   - Enabled by default; toggle via `set_auto_close_brackets(bool)` / `auto_close_brackets()`, with a checkbox in the demo app toolbar
 
+### Changed
+
+- ci: **Continuous integration now covers the whole workspace and every feature**
+  - `build`, `clippy` and `test` run with `--workspace --all-features`; they previously used the default members with no feature enabled, so `demo-app`, `simple-example` and everything behind the `lsp-process` and `two-face` features was never built, linted or tested
+  - Raises the number of tests actually executed in CI from 428 to 491
+  - Closing this gap surfaced 23 pre-existing clippy errors in feature-gated test modules: `decode_sent` now borrows its input instead of taking it by value, and the `expect`/`panic!`/`unwrap` used to report test failures carry a scoped `#[allow]` on the individual test, matching the existing convention in `update.rs` and `selection.rs`
+
 ### Fixed
 
 - fix: **Panic when filtering LSP completions on lines with multi-byte characters** (demo app)

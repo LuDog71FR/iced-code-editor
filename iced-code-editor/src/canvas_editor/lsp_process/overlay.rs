@@ -846,6 +846,11 @@ mod tests {
     }
 
     #[test]
+    // The asserted offsets are `0.0` and exact multiples of
+    // `COMPLETION_ITEM_HEIGHT` produced by a single multiplication, never by
+    // accumulation, so they are bit-for-bit reproducible. An epsilon
+    // comparison here would hide that exactness rather than protect anything.
+    #[allow(clippy::float_cmp)]
     fn test_scroll_offset_for_selected() {
         let mut state = LspOverlayState::new();
         assert_eq!(state.scroll_offset_for_selected(), 0.0);

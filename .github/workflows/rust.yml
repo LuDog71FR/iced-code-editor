@@ -17,14 +17,17 @@ jobs:
           sudo apt-get install -y fonts-noto-cjk fonts-noto-cjk-extra fontconfig
           fc-cache -fv
       
+      # --workspace covers demo-app and simple-example, which the default
+      # members alone leave out. --all-features enables lsp-process and
+      # two-face, whose code and tests are otherwise never compiled here.
       - name: Build
-        run: cargo build --verbose
-      
+        run: cargo build --verbose --workspace --all-features
+
       - name: Clippy
-        run: cargo clippy --verbose --all-targets
-      
+        run: cargo clippy --verbose --workspace --all-targets --all-features
+
       - name: Test
-        run: cargo test --verbose
+        run: cargo test --verbose --workspace --all-features
       
       - name: Format Check
         run: cargo fmt -- --check

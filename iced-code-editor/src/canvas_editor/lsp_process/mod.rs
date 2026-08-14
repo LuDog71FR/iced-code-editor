@@ -940,10 +940,18 @@ impl LspClient for LspProcessClient {
 
 #[cfg(test)]
 mod tests {
+    // Several helpers and tests below carry an `#[allow]` for `expect_used`,
+    // `panic` or `unwrap_used`. In test code a panic *is* the failure report:
+    // `expect("expected a Hover event")` names the broken expectation far more
+    // precisely than an `assert!(false)` workaround would. The workspace denies
+    // these lints to protect production code, not tests — this mirrors the
+    // existing per-test allows in `update.rs` and `selection.rs`.
     use super::*;
 
-    /// Returns a `Content-Length`-framed JSON string from raw bytes sent on the channel.
-    fn decode_sent(data: Vec<u8>) -> serde_json::Value {
+    /// Returns the JSON body of a `Content-Length`-framed message taken from
+    /// the writer channel.
+    #[allow(clippy::expect_used)]
+    fn decode_sent(data: &[u8]) -> serde_json::Value {
         let header_end = data
             .windows(4)
             .position(|w| w == b"\r\n\r\n")
@@ -1023,12 +1031,13 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
+    #[allow(clippy::expect_used)]
     fn test_handle_server_request_work_done_progress_create() {
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         handle_server_request(42, METHOD_WORK_DONE_PROGRESS_CREATE, &tx);
 
         let bytes = rx.try_recv().expect("expected a response on the channel");
-        let value = decode_sent(bytes);
+        let value = decode_sent(&bytes);
         assert_eq!(value["id"], 42);
         assert_eq!(value["jsonrpc"], "2.0");
         assert!(value["result"].is_null());
@@ -1049,6 +1058,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
+    #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
     fn test_handle_client_response_hover() {
         let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
         let pending = Arc::new(Mutex::new(HashMap::new()));
@@ -1068,6 +1078,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
     fn test_handle_client_response_completion() {
         let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
         let pending = Arc::new(Mutex::new(HashMap::new()));
@@ -1088,6 +1099,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
     fn test_handle_client_response_definition() {
         let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
         let pending = Arc::new(Mutex::new(HashMap::new()));
@@ -1131,6 +1143,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
+    #[allow(clippy::expect_used, clippy::panic)]
     fn test_handle_server_notification_progress_done() {
         let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
         let params = serde_json::json!({
@@ -1160,6 +1173,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::expect_used, clippy::panic)]
     fn test_handle_server_notification_progress_not_done() {
         let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
         let params = serde_json::json!({
