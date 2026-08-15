@@ -339,7 +339,8 @@ fn resolve_rust_analyzer_command_with(
 /// 1. GOPLS / GOPLS_PATH environment variables
 /// 2. Direct gopls command on PATH
 /// 3. `$GOBIN/gopls`
-/// 4. `$GOPATH/bin/gopls` for each colon-separated GOPATH entry
+/// 4. `$GOPATH/bin/gopls` for each `GOPATH` entry (platform path-list
+///    separator: `;` on Windows, `:` elsewhere)
 fn resolve_gopls_command() -> Result<String, String> {
     resolve_gopls_command_with(
         |var| std::env::var(var).ok(),
@@ -386,12 +387,13 @@ fn resolve_gopls_command_with(
         }
     }
     if let Some(gopath_value) = gopath() {
-        for path in gopath_value.split(':') {
-            let path = path.trim();
-            if path.is_empty() {
+        // Platform path-list separator (`;` on Windows, `:` elsewhere), not a
+        // literal colon: `GOPATH` follows the same convention as `PATH`.
+        for path in std::env::split_paths(&gopath_value) {
+            if path.as_os_str().is_empty() {
                 continue;
             }
-            let candidate = PathBuf::from(path).join("bin").join("gopls");
+            let candidate = path.join("bin").join("gopls");
             if exists(&candidate) {
                 return Ok(candidate.to_string_lossy().to_string());
             }

@@ -1501,6 +1501,13 @@ impl CodeEditor {
 
     /// Sends a `did_save` notification with the current buffer contents.
     pub fn lsp_did_save(&mut self) {
+        // Skip serializing the whole buffer when no client/document is
+        // attached: `with_lsp` would just discard the closure unused, but the
+        // full-document `to_string()` allocation would still happen on every
+        // save for hosts that never enable LSP.
+        if self.lsp_client.is_none() || self.lsp_document.is_none() {
+            return;
+        }
         let text = self.buffer.to_string();
         self.with_lsp(|client, document| client.did_save(document, &text));
     }
@@ -3933,6 +3940,30 @@ mod tests {
         let mut editor = CodeEditor::new("hello", "rs");
         let ran = editor.with_lsp(|_client, _document| {});
         assert!(ran.is_none());
+    }
+
+    #[test]
+    fn test_lsp_did_save_sends_current_buffer_contents() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let client = RecordingLspClient { calls: Rc::clone(&calls) };
+        let mut editor = CodeEditor::new("hello", "rs");
+        editor.attach_lsp(
+            Box::new(client),
+            lsp::LspDocument::new("file:///test.rs", "rust"),
+        );
+        calls.borrow_mut().clear(); // attach_lsp itself already logged did_open
+
+        editor.lsp_did_save();
+
+        assert_eq!(calls.borrow().as_slice(), ["did_save"]);
+    }
+
+    #[test]
+    fn test_lsp_did_save_is_a_noop_without_an_attached_client() {
+        // Regression: this used to serialize the whole buffer via
+        // `to_string()` even with no client/document attached.
+        let mut editor = CodeEditor::new("hello", "rs");
+        editor.lsp_did_save(); // must not panic
     }
 
     #[test]

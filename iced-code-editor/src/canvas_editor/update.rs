@@ -336,17 +336,34 @@ impl CodeEditor {
 
     /// Deletes all active selections across every cursor and performs cleanup.
     ///
+    /// When more than one cursor holds a selection, every cursor's deletion
+    /// is grouped into one composite command so a single undo restores all
+    /// of them, instead of requiring one undo per cursor. A lone selection
+    /// is left ungrouped, as before: some callers (e.g. backspace during a
+    /// Vim insert-mode session) rely on grouping state carrying across this
+    /// call, and a single deletion doesn't need its own group to already
+    /// undo as one step.
+    ///
     /// # Returns
     ///
     /// `true` if at least one selection was deleted, `false` if no cursor had a selection
     fn delete_selection_if_present(&mut self) -> bool {
-        if self.cursors.iter().any(|c| c.has_selection()) {
-            self.delete_selection();
-            self.finish_edit_operation();
-            true
-        } else {
-            false
+        let selection_count =
+            self.cursors.iter().filter(|c| c.has_selection()).count();
+        if selection_count == 0 {
+            return false;
         }
+
+        let multi = selection_count > 1;
+        if multi {
+            self.ensure_grouping_started();
+        }
+        self.delete_selection();
+        if multi {
+            self.end_grouping_if_active();
+        }
+        self.finish_edit_operation();
+        true
     }
 
     // =========================================================================
@@ -1035,9 +1052,7 @@ impl CodeEditor {
         // End grouping on delete selection
         self.end_grouping_if_active();
 
-        if self.cursors.iter().any(|c| c.has_selection()) {
-            self.delete_selection();
-            self.finish_edit_operation();
+        if self.delete_selection_if_present() {
             self.scroll_to_cursor()
         } else {
             Task::none()
@@ -1480,8 +1495,19 @@ impl CodeEditor {
                 Task::done(Message::Paste(clipboard_text))
             })
         } else {
-            // We have the text, paste it
+            // We have the text, paste it. `paste_text` already pushes a
+            // single command on its single-cursor fast path; group the
+            // multi-cursor path's per-cursor commands (and any selection
+            // deletions it performs first) into one composite, so a single
+            // undo restores every cursor's paste instead of just the last.
+            let multi = self.cursors.len() > 1;
+            if multi {
+                self.ensure_grouping_started();
+            }
             self.paste_text(text);
+            if multi {
+                self.end_grouping_if_active();
+            }
             self.finish_edit_operation();
             self.scroll_to_cursor()
         }
@@ -3430,6 +3456,40 @@ mod tests {
 
         assert_eq!(editor.buffer.line(0), "ac");
         assert_eq!(editor.buffer.line(1), "df");
+    }
+
+    #[test]
+    fn test_multi_cursor_delete_selection_undoes_in_one_step() {
+        // Regression: each cursor's deletion used to be its own undo
+        // command, so one undo only restored the last cursor's selection.
+        // Grouped, a single undo must restore every cursor's text.
+        let mut editor = CodeEditor::new("abc\ndef", "rs");
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 2);
+        editor.cursors.add_cursor((1, 2));
+        editor.cursors.as_mut_slice()[1].anchor = Some((1, 0));
+
+        let _ = editor.update(&Message::DeleteSelection);
+        assert_eq!(editor.buffer.to_string(), "c\nf");
+
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.to_string(), "abc\ndef");
+    }
+
+    #[test]
+    fn test_multi_cursor_paste_undoes_in_one_step() {
+        // Regression: each cursor's insertion used to be its own undo
+        // command, so one undo only removed the last cursor's paste.
+        // Grouped, a single undo must remove every cursor's inserted text.
+        let mut editor = CodeEditor::new("a\nb", "rs");
+        editor.cursors.primary_mut().position = (0, 1);
+        editor.cursors.add_cursor((1, 1));
+
+        let _ = editor.update(&Message::Paste("X".to_string()));
+        assert_eq!(editor.buffer.to_string(), "aX\nbX");
+
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.to_string(), "a\nb");
     }
 
     #[test]

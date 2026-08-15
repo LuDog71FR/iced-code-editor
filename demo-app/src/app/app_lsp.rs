@@ -91,6 +91,9 @@ impl DemoApp {
     /// Applies a completion item by inserting the text at the current cursor position
     /// and replacing the current word being typed
     pub(super) fn apply_completion(&mut self, completion_text: &str) {
+        if completion_text.is_empty() {
+            return;
+        }
         if let Some(tab) =
             self.tabs.iter_mut().find(|t| t.id == self.active_tab_id)
         {
@@ -105,14 +108,16 @@ impl DemoApp {
             let chars_to_delete = col - word_start_col;
 
             // Delete the current word being typed and insert the completion
+            // as a single `Paste`, which inserts the text verbatim: unlike
+            // `CharacterInput`, it neither runs it through auto-close
+            // (spurious `)`/`"` for labels containing `(`/quotes) nor
+            // re-triggers LSP completion requests mid-insertion.
             for _ in 0..chars_to_delete {
                 let _ = tab.editor.update(&EditorMessage::Backspace);
             }
-
-            // Insert the completion text character by character
-            for ch in completion_text.chars() {
-                let _ = tab.editor.update(&EditorMessage::CharacterInput(ch));
-            }
+            let _ = tab
+                .editor
+                .update(&EditorMessage::Paste(completion_text.to_string()));
 
             tab.is_dirty = tab.editor.is_modified();
             self.log(
@@ -685,6 +690,98 @@ mod tests {
         assert_eq!(DemoApp::current_word_at("foo ", 4), "");
         assert_eq!(DemoApp::current_word_at("", 0), "");
         assert_eq!(DemoApp::current_word_at("a.", 2), "");
+    }
+
+    // ---- apply_completion ----
+
+    #[test]
+    fn test_apply_completion_replaces_the_word_being_typed() {
+        // `reset` + `set_cursor` rather than `CharacterInput`: character
+        // input is gated on the editor holding the process-global canvas
+        // focus, which is unrelated to what this test checks and flaky
+        // under `cargo test`'s parallel execution (another test's editor
+        // can steal focus between statements).
+        let (mut app, _) = DemoApp::new();
+        if let Some(tab) = app.get_active_tab() {
+            let _ = tab.editor.reset("fo");
+            let _ = tab.editor.set_cursor(0, 2);
+        }
+
+        app.apply_completion("foobar");
+
+        // `.map()` instead of `if let` for the assertion: a missing tab must
+        // fail the comparison against `Some(...)` rather than silently skip it.
+        let content = app.get_active_tab().map(|tab| tab.editor.content());
+        assert_eq!(content.as_deref(), Some("foobar"));
+    }
+
+    #[test]
+    fn test_apply_completion_does_not_trigger_auto_close() {
+        // Regression: inserting a completion label containing '(' through
+        // the character-input pipeline used to trigger auto-close, leaving
+        // a spurious extra ')'. Applying it as a single paste must not.
+        let (mut app, _) = DemoApp::new();
+        if let Some(tab) = app.get_active_tab() {
+            let _ = tab.editor.reset("f");
+            let _ = tab.editor.set_cursor(0, 1);
+        }
+
+        app.apply_completion("foo()");
+
+        let content = app.get_active_tab().map(|tab| tab.editor.content());
+        assert_eq!(content.as_deref(), Some("foo()"));
+    }
+
+    #[test]
+    fn test_apply_completion_leaves_cursor_after_inserted_text() {
+        let (mut app, _) = DemoApp::new();
+        if let Some(tab) = app.get_active_tab() {
+            let _ = tab.editor.reset("");
+        }
+
+        app.apply_completion("value");
+
+        let cursor =
+            app.get_active_tab().map(|tab| tab.editor.cursor_position());
+        assert_eq!(cursor, Some((0, 5)));
+    }
+
+    #[test]
+    fn test_apply_completion_undoes_in_one_step_not_per_character() {
+        // Regression: inserting the completion character by character made
+        // each character its own undo command, so removing a 6-character
+        // completion took 6 undos. As a single `Paste`, one undo must remove
+        // the whole inserted completion text in one step.
+        let (mut app, _) = DemoApp::new();
+        if let Some(tab) = app.get_active_tab() {
+            let _ = tab.editor.reset("x.f");
+            let _ = tab.editor.set_cursor(0, 3);
+        }
+
+        app.apply_completion("foobar");
+
+        let after_completion =
+            app.get_active_tab().map(|tab| tab.editor.content());
+        assert_eq!(after_completion.as_deref(), Some("x.foobar"));
+
+        if let Some(tab) = app.get_active_tab() {
+            let _ = tab.editor.update(&EditorMessage::Undo);
+        }
+        let after_undo = app.get_active_tab().map(|tab| tab.editor.content());
+        assert_eq!(after_undo.as_deref(), Some("x."));
+    }
+
+    #[test]
+    fn test_apply_completion_ignores_empty_text() {
+        let (mut app, _) = DemoApp::new();
+        if let Some(tab) = app.get_active_tab() {
+            let _ = tab.editor.reset("word");
+        }
+
+        app.apply_completion("");
+
+        let content = app.get_active_tab().map(|tab| tab.editor.content());
+        assert_eq!(content.as_deref(), Some("word"));
     }
 
     // ---- drain_lsp_events ----

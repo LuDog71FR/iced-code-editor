@@ -58,6 +58,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: **LSP completion was inserted character by character, triggering auto-close and re-entrant completion requests** (demo app)
+  - `apply_completion` deleted the word being typed with individual `Backspace`s (fine) but then inserted the completion text one `CharacterInput` at a time, running each character through the full input pipeline: auto-close inserted a spurious `)`/`"` for any label containing `(` or a quote, and `.`/identifier characters re-triggered a new completion request mid-insertion
+  - The insertion now goes through a single `EditorMessage::Paste`, which inserts the text verbatim (no auto-close, no re-triggered request) and is one undo step instead of one per character
+
+- fix: **`current_match_index` could go stale after an edit shrank the match list without emptying it**
+  - `update_matches_after_edit` only reset the current-match index when the match list became fully empty; an edit that removed some (but not all) matches could leave the index pointing past the end, making `current_match()` return `None` even though matches still exist
+  - The index is now clamped to the last valid entry when it falls out of range, matching the full-search path in `update_matches`
+
+- fix: **`gopls` discovery via `$GOPATH` only recognized `:` as the path-list separator**
+  - `GOPATH` follows the same platform convention as `PATH` (`;` on Windows, `:` elsewhere); the hardcoded `:` split silently failed to find `gopls` under `$GOPATH/bin` on Windows
+  - Now uses `std::env::split_paths`, which picks the correct separator for the target platform
+
+- fix: **Multi-cursor selection deletion and paste were not grouped in the undo history**
+  - With N cursors holding selections, deleting or pasting pushed N separate undo commands instead of one; a single undo only reverted the last cursor's edit instead of all of them, unlike the single-cursor case and unlike Cut (which already grouped)
+  - Deleting/pasting across more than one cursor now groups every cursor's command into one composite, so a single undo restores all of them
+
+- fix: **`lsp_did_save` serialized the whole buffer even when no LSP client was attached**
+  - The `with_lsp` refactor moved the full-document `to_string()` call ahead of the attached-client check, so every save allocated a complete copy of the document even for hosts that never enable LSP
+  - The call now returns early when no client/document is attached, before paying for the allocation
+
 - fix: **`TextBuffer` round-trip dropped the trailing newline and normalized CRLF to LF on save**
   - Lines are stored without their terminator (`str::lines()` strips both a final `\n` and `\r` in `\r\n`), and `to_string()` used to reassemble them with a hardcoded `\n` and no trailing newline, so every POSIX-style file lost its final `\n` and every CRLF file was silently converted to LF on save — with no dirty-flag warning, since the history never saw an edit
   - `TextBuffer::new` now records the source's line-ending style (LF or CRLF, by majority vote) and whether it ended with a trailing newline; `to_string()` and the LSP incremental-sync helper `line_range_to_string` both honor this so a load/save round trip reproduces the exact bytes

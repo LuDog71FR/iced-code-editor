@@ -224,8 +224,16 @@ impl SearchState {
         self.matches.truncate(MAX_MATCHES);
         self.buffer_line_count = new_line_count;
 
+        // Clamp the current index, mirroring `update_matches`: the edit may
+        // have shrunk the match list without emptying it, leaving a stale
+        // index past the end that would make `current_match()` return `None`
+        // despite matches still existing.
         if self.matches.is_empty() {
             self.current_match_index = None;
+        } else if let Some(idx) = self.current_match_index
+            && idx >= self.matches.len()
+        {
+            self.current_match_index = Some(self.matches.len() - 1);
         }
     }
 
@@ -845,6 +853,30 @@ mod tests {
                 SearchMatch { line: 1, col: 0 },
                 SearchMatch { line: 3, col: 0 },
             ]
+        );
+    }
+
+    #[test]
+    fn test_incremental_match_update_clamps_index_when_list_shrinks() {
+        // Regression: `current_match_index` was only reset when the match
+        // list became fully empty. When an edit shrinks it without emptying
+        // it, a stale index past the end made `current_match()` return
+        // `None` even though matches still exist.
+        let mut buffer = TextBuffer::new("foo\nfoo\nfoo");
+        let mut state = SearchState::new();
+        state.set_query("foo".to_string(), &buffer);
+        assert_eq!(state.matches.len(), 3);
+        state.current_match_index = Some(2);
+
+        // Line 2's "foo" is edited away; only two matches remain.
+        buffer.replace_range(2, 0, 3, "bar");
+        state.update_matches_after_edit(&buffer, 2, 3);
+
+        assert_eq!(state.matches.len(), 2);
+        assert_eq!(state.current_match_index, Some(1));
+        assert_eq!(
+            state.current_match(),
+            Some(SearchMatch { line: 1, col: 0 })
         );
     }
 
