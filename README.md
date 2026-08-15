@@ -54,7 +54,7 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 iced = "0.14"
-iced-code-editor = "0.3"
+iced-code-editor = "0.4"
 ```
 
 ### Basic Example
