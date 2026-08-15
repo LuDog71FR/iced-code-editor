@@ -251,7 +251,6 @@ greet("World")
         let active_tab_id = tab_id;
         let next_tab_id = 1;
 
-        let startup_task = Task::none();
         #[cfg(not(target_arch = "wasm32"))]
         let (lsp_event_sender, lsp_events) = {
             let (event_tx, event_rx) = mpsc::channel();
@@ -296,21 +295,16 @@ greet("World")
             spinner_frame: 0,
         };
 
+        // Auto-attach an LSP server for the initial demo buffer, if one is
+        // available for its language. This spawns a real subprocess, so it
+        // must run through the async Task/Message flow (like the manual LSP
+        // toggle) rather than synchronously here: `new()` is also called by
+        // unit tests, and a synchronous spawn would make their behavior
+        // depend on whether a language server happens to be on `PATH`.
         #[cfg(not(target_arch = "wasm32"))]
-        let mut app = app;
+        let startup_task = Task::done(Message::ToggleLsp(active_tab_id, true));
         #[cfg(target_arch = "wasm32")]
-        let app = app;
-
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let root_dir = std::env::current_dir().ok();
-            if let Some(root_dir) = root_dir {
-                let path = root_dir.join("demo.lua");
-                app.sync_lsp_for_path(active_tab_id, &path);
-            } else {
-                app.log("ERROR", "LSP failed: cwd unavailable");
-            }
-        }
+        let startup_task = Task::none();
 
         (app, startup_task)
     }

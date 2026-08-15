@@ -58,6 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: **`DemoApp::new()` spawned a real LSP server subprocess as a constructor side effect, making unit tests behave differently depending on `PATH`** (demo app)
+  - Startup synchronously tried to auto-attach a `lua-language-server` client for the bundled demo script. On a machine without that server on `PATH` this silently failed and was invisible; on a machine with it installed (e.g. via Neovim's Mason), every `DemoApp::new()` call — including in unit tests — got a real attached LSP client, which broke `test_process_lsp_hover_timers_clears_pending_when_ready`'s assumption that a fresh app has none
+  - The auto-attach now goes through the same async `Task`/`Message::ToggleLsp` flow as the manual LSP toggle instead of running synchronously in the constructor; unit tests discard the returned `Task`, so they no longer spawn a process at all
+
 - fix: **Reveal-in-file-manager was incorrectly enabled on wasm32 when opening a file via "jump to definition"** (demo app)
   - One of the three duplicated tab-creation code paths hardcoded the flag to `true` instead of checking the target platform; unified during the refactor above
 
