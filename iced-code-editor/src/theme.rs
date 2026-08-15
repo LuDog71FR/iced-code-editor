@@ -27,6 +27,16 @@ pub struct Style {
     pub current_line_highlight: Color,
     /// Color for visible whitespace characters (spaces as `·`, tabs as `→`)
     pub whitespace_color: Color,
+    /// Highlight fill color for non-current search matches
+    pub search_match_color: Color,
+    /// Highlight fill color for the currently active search match
+    pub search_match_current_color: Color,
+    /// Fill color for text selection ranges
+    pub selection_color: Color,
+    /// Fill color used to highlight a matching bracket pair
+    pub bracket_match_color: Color,
+    /// Background fill color for the IME preedit (composition) region
+    pub ime_preedit_background_color: Color,
 }
 
 /// The theme catalog of a code editor.
@@ -137,6 +147,22 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         blend_colors(text_color, background, 0.65)
     };
 
+    // Search matches: orange for the current match, yellow for the rest.
+    // Fixed values (not palette-derived) to preserve the conventional
+    // search-highlight look regardless of the active theme.
+    let search_match_color = Color { r: 1.0, g: 1.0, b: 0.0, a: 0.3 };
+    let search_match_current_color = Color { r: 1.0, g: 0.6, b: 0.0, a: 0.4 };
+
+    // Text selection fill.
+    let selection_color = Color { r: 0.3, g: 0.5, b: 0.8, a: 0.3 };
+
+    // Matching bracket/quote pair highlight.
+    let bracket_match_color = Color { r: 0.5, g: 0.5, b: 0.5, a: 0.4 };
+
+    // IME preedit (composition) background.
+    let ime_preedit_background_color =
+        Color { r: 1.0, g: 1.0, b: 1.0, a: 0.08 };
+
     Style {
         background,
         text_color,
@@ -147,6 +173,11 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         scroller_color,
         current_line_highlight,
         whitespace_color,
+        search_match_color,
+        search_match_current_color,
+        selection_color,
+        bracket_match_color,
+        ime_preedit_background_color,
     }
 }
 
@@ -259,6 +290,63 @@ mod tests {
                 "Current line highlight should be semi-transparent for theme: {:?}",
                 theme
             );
+
+            // New overlay colors should have valid components and visible
+            // (but not opaque) alpha for every theme.
+            for (name, color) in [
+                ("search_match_color", style.search_match_color),
+                (
+                    "search_match_current_color",
+                    style.search_match_current_color,
+                ),
+                ("selection_color", style.selection_color),
+                ("bracket_match_color", style.bracket_match_color),
+                (
+                    "ime_preedit_background_color",
+                    style.ime_preedit_background_color,
+                ),
+            ] {
+                assert!(
+                    color.r >= 0.0 && color.r <= 1.0,
+                    "{name}.r out of range for theme: {theme:?}"
+                );
+                assert!(
+                    color.g >= 0.0 && color.g <= 1.0,
+                    "{name}.g out of range for theme: {theme:?}"
+                );
+                assert!(
+                    color.b >= 0.0 && color.b <= 1.0,
+                    "{name}.b out of range for theme: {theme:?}"
+                );
+                assert!(
+                    color.a > 0.0 && color.a < 1.0,
+                    "{name} should be semi-transparent for theme: {theme:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_overlay_colors_are_theme_independent() {
+        // The 5 overlay colors are fixed constants (not palette-derived), so
+        // they must be identical across very different themes.
+        let light = from_iced_theme(&iced::Theme::Light);
+        let dark = from_iced_theme(&iced::Theme::Dark);
+
+        for (light_color, dark_color) in [
+            (light.search_match_color, dark.search_match_color),
+            (light.search_match_current_color, dark.search_match_current_color),
+            (light.selection_color, dark.selection_color),
+            (light.bracket_match_color, dark.bracket_match_color),
+            (
+                light.ime_preedit_background_color,
+                dark.ime_preedit_background_color,
+            ),
+        ] {
+            assert!((light_color.r - dark_color.r).abs() < f32::EPSILON);
+            assert!((light_color.g - dark_color.g).abs() < f32::EPSILON);
+            assert!((light_color.b - dark_color.b).abs() < f32::EPSILON);
+            assert!((light_color.a - dark_color.a).abs() < f32::EPSILON);
         }
     }
 
@@ -405,6 +493,10 @@ mod tests {
         );
         assert!(
             (style1.gutter_background.r - style2.gutter_background.r).abs()
+                < f32::EPSILON
+        );
+        assert!(
+            (style1.selection_color.r - style2.selection_color.r).abs()
                 < f32::EPSILON
         );
     }

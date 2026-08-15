@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Demo app tab-creation logic (open file, jump-to-definition, new tab) now shares one `open_content_in_tab` helper instead of three copies
   - No functional changes intended, aside from the fix below; all new helpers are unit-tested
 
+- refactor: **Overlay colors (search matches, selection, bracket match, IME preedit) moved into `Style`**
+  - Search-match, text-selection, bracket-match and IME-preedit-background colors were hard-coded `Color` literals in the canvas rendering code instead of living on `theme::Style` like every other editor color, so they could not be customized and, in the case of the selection color, were duplicated verbatim in two places
+  - `Style` gains `search_match_color`, `search_match_current_color`, `selection_color`, `bracket_match_color` and `ime_preedit_background_color`, set by `from_iced_theme` to the same values as before (theme-independent by design, to preserve the conventional orange/yellow search-highlight look); no visual change
+
 ### Fixed
 
 - fix: **Reveal-in-file-manager was incorrectly enabled on wasm32 when opening a file via "jump to definition"** (demo app)

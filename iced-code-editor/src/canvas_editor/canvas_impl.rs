@@ -844,11 +844,9 @@ impl CodeEditor {
                     self.search_state.current_match_index == Some(match_idx);
 
                 let highlight_color = if is_current {
-                    // Orange for current match
-                    Color { r: 1.0, g: 0.6, b: 0.0, a: 0.4 }
+                    self.style.search_match_current_color
                 } else {
-                    // Yellow for other matches
-                    Color { r: 1.0, g: 1.0, b: 0.0, a: 0.3 }
+                    self.style.search_match_color
                 };
 
                 // Convert logical position to visual line
@@ -926,7 +924,7 @@ impl CodeEditor {
         start: (usize, usize),
         end: (usize, usize),
     ) {
-        let selection_color = Color { r: 0.3, g: 0.5, b: 0.8, a: 0.3 };
+        let selection_color = self.style.selection_color;
 
         if start.0 == end.0 {
             // Single line selection - need to handle wrapped segments
@@ -1054,7 +1052,7 @@ impl CodeEditor {
             return;
         };
 
-        let bracket_color = Color { r: 0.5, g: 0.5, b: 0.5, a: 0.4 };
+        let bracket_color = self.style.bracket_match_color;
 
         for (line, col) in [bracket_pos, match_pos] {
             if let Some(visual_idx) = WrappingCalculator::logical_to_visual(
@@ -1159,7 +1157,7 @@ impl CodeEditor {
                     frame.fill_rectangle(
                         Point::new(cursor_x, cursor_y + 2.0),
                         Size::new(preedit_width, ctx.line_height - 4.0),
-                        Color { r: 1.0, g: 1.0, b: 1.0, a: 0.08 },
+                        self.style.ime_preedit_background_color,
                     );
 
                     // 2. Draw preedit selection (if any)
@@ -1192,7 +1190,7 @@ impl CodeEditor {
                             frame.fill_rectangle(
                                 Point::new(selection_x, cursor_y + 2.0),
                                 Size::new(selection_w, ctx.line_height - 4.0),
-                                Color { r: 0.3, g: 0.5, b: 0.8, a: 0.3 },
+                                self.style.selection_color,
                             );
                         }
                     }
