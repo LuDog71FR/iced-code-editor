@@ -7,6 +7,40 @@
 
 use crate::text_utils::{char_range_to_byte_range, char_to_byte_index};
 
+/// The line-ending style a buffer was loaded with, and reproduces on
+/// [`TextBuffer::to_string`].
+///
+/// Lines are always stored without their terminator (see [`TextBuffer`]), so
+/// this is the only record of whether the source text used `\n` or `\r\n`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineEnding {
+    Lf,
+    CrLf,
+}
+
+impl LineEnding {
+    /// Detects the dominant line ending in `content` by majority vote: if at
+    /// least half of the newlines are part of a `\r\n` pair, the buffer is
+    /// treated as CRLF, otherwise LF. Content with no newlines defaults to LF.
+    fn detect(content: &str) -> Self {
+        let crlf_count = content.matches("\r\n").count();
+        let lf_count = content.matches('\n').count();
+        if crlf_count > 0 && crlf_count * 2 >= lf_count {
+            Self::CrLf
+        } else {
+            Self::Lf
+        }
+    }
+
+    /// The literal terminator string for this line ending.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Lf => "\n",
+            Self::CrLf => "\r\n",
+        }
+    }
+}
+
 /// A line-based text buffer optimized for editor operations.
 ///
 /// Lines are stored around a movable gap:
@@ -18,12 +52,23 @@ use crate::text_utils::{char_range_to_byte_range, char_to_byte_index};
 /// inserting/removing nearby lines is O(1) instead of shifting the entire tail
 /// of a `Vec<String>`. This mirrors the locality principle behind piece-table
 /// editors while preserving the editor's existing borrowed `&str` line API.
+///
+/// Line terminators are stripped from every stored line (`str::lines()`
+/// already discards a final `\n` and normalizes `\r\n`/`\n`), so the buffer
+/// separately records the source's line-ending style and whether it ended
+/// with a trailing newline. [`Self::to_string`] reproduces both, so loading
+/// and saving a file round-trips its exact line endings instead of silently
+/// converting CRLF to LF or dropping the final newline.
 #[derive(Debug, Clone)]
 pub struct TextBuffer {
     /// Lines before the gap, in document order.
     lines_before: Vec<String>,
     /// Lines after the gap, in reverse document order.
     lines_after: Vec<String>,
+    /// Line ending style to use when joining lines in [`Self::to_string`].
+    line_ending: LineEnding,
+    /// Whether the source content ended with a trailing line terminator.
+    trailing_newline: bool,
 }
 
 impl TextBuffer {
@@ -44,7 +89,12 @@ impl TextBuffer {
         };
         lines_after.reverse();
 
-        Self { lines_before: Vec::new(), lines_after }
+        Self {
+            lines_before: Vec::new(),
+            lines_after,
+            line_ending: LineEnding::detect(content),
+            trailing_newline: content.ends_with('\n'),
+        }
     }
 
     /// Returns the number of lines in the buffer.
@@ -221,18 +271,28 @@ impl TextBuffer {
     }
 
     /// Returns the entire buffer content as a single string.
+    ///
+    /// Lines are joined with the line ending the buffer was loaded with
+    /// (`\n` or `\r\n`), and a trailing terminator is appended if the source
+    /// content had one — both recorded by [`Self::new`] — so this is a true
+    /// inverse of `new` for the whole-document round trip.
     #[must_use]
     #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self) -> String {
+        let eol = self.line_ending.as_str();
         let line_count = self.line_count();
         let content_len = self.iter_lines().map(String::len).sum::<usize>()
-            + line_count.saturating_sub(1);
+            + line_count.saturating_sub(1) * eol.len()
+            + if self.trailing_newline { eol.len() } else { 0 };
         let mut content = String::with_capacity(content_len);
         for (index, line) in self.iter_lines().enumerate() {
             if index > 0 {
-                content.push('\n');
+                content.push_str(eol);
             }
             content.push_str(line);
+        }
+        if self.trailing_newline {
+            content.push_str(eol);
         }
         content
     }
@@ -242,23 +302,29 @@ impl TextBuffer {
     /// When `end_exclusive` is before the end of the buffer, the returned text
     /// includes the newline that separates the range from the following line.
     /// This form maps directly to an LSP range ending at column zero.
+    ///
+    /// Uses the buffer's own line-ending style so this stays consistent with
+    /// [`Self::to_string`] — the two feed the same LSP document sync, and a
+    /// CRLF file must not have some change payloads joined with `\n` while
+    /// the full-text sync path (via `to_string`) uses `\r\n`.
     pub(crate) fn line_range_to_string(
         &self,
         start: usize,
         end_exclusive: usize,
     ) -> String {
+        let eol = self.line_ending.as_str();
         let line_count = self.line_count();
         let start = start.min(line_count);
         let end_exclusive = end_exclusive.min(line_count).max(start);
         let mut content = String::new();
         for line_index in start..end_exclusive {
             if line_index > start {
-                content.push('\n');
+                content.push_str(eol);
             }
             content.push_str(self.line(line_index));
         }
         if end_exclusive < line_count && start < end_exclusive {
-            content.push('\n');
+            content.push_str(eol);
         }
         content
     }
@@ -370,6 +436,55 @@ mod tests {
     }
 
     #[test]
+    fn test_to_string_round_trips_trailing_newline() {
+        // A POSIX-style file ending in a newline must not lose it on save.
+        let buffer = TextBuffer::new("a\n");
+        assert_eq!(buffer.to_string(), "a\n");
+
+        // No trailing newline in, none out.
+        let buffer = TextBuffer::new("a");
+        assert_eq!(buffer.to_string(), "a");
+    }
+
+    #[test]
+    fn test_to_string_round_trips_crlf() {
+        // A CRLF file must not be silently normalized to LF on save.
+        let buffer = TextBuffer::new("a\r\nb");
+        assert_eq!(buffer.to_string(), "a\r\nb");
+        assert_eq!(buffer.line(0), "a");
+        assert_eq!(buffer.line(1), "b");
+
+        // CRLF with a trailing newline preserves both.
+        let buffer = TextBuffer::new("a\r\nb\r\n");
+        assert_eq!(buffer.to_string(), "a\r\nb\r\n");
+    }
+
+    #[test]
+    fn test_to_string_round_trips_empty_content() {
+        let buffer = TextBuffer::new("");
+        assert_eq!(buffer.to_string(), "");
+    }
+
+    #[test]
+    fn test_to_string_lf_by_default_for_single_line_content() {
+        // No newlines to infer a style from: defaults to LF once a newline
+        // actually gets typed, rather than surprising the user with CRLF.
+        let mut buffer = TextBuffer::new("hello");
+        buffer.insert_newline(0, 5);
+        assert_eq!(buffer.to_string(), "hello\n");
+    }
+
+    #[test]
+    fn test_to_string_edits_after_load_use_the_loaded_line_ending() {
+        // Editing a CRLF-loaded buffer must keep emitting CRLF, not switch
+        // to LF just because a new line was created by an edit rather than
+        // present in the original content.
+        let mut buffer = TextBuffer::new("a\r\nb");
+        buffer.insert_newline(0, 1);
+        assert_eq!(buffer.to_string(), "a\r\n\r\nb");
+    }
+
+    #[test]
     fn test_replace_range() {
         let mut buffer = TextBuffer::new("hello world");
         // Replace "world" with "rust"
@@ -454,5 +569,26 @@ mod tests {
         assert_eq!(buffer.line_range_to_string(1, 3), "one\ntwo\n");
         assert_eq!(buffer.line_range_to_string(2, 4), "two\nthree");
         assert_eq!(buffer.line_range_to_string(99, 100), "");
+    }
+
+    #[test]
+    fn test_line_range_to_string_uses_the_buffer_line_ending() {
+        // The LSP incremental-sync path (`line_range_to_string`) must join
+        // with the same line ending as the full-text sync path
+        // (`to_string`), or the two would disagree about a CRLF document's
+        // text mid-sync.
+        let buffer = TextBuffer::new("zero\r\none\r\ntwo\r\nthree");
+        assert_eq!(buffer.line_range_to_string(1, 3), "one\r\ntwo\r\n");
+    }
+
+    #[test]
+    fn test_line_ending_detect_majority_vote() {
+        assert_eq!(LineEnding::detect("a\nb\nc"), LineEnding::Lf);
+        assert_eq!(LineEnding::detect("a\r\nb\r\nc"), LineEnding::CrLf);
+        assert_eq!(LineEnding::detect("a"), LineEnding::Lf);
+        // Mixed content: majority of newlines are CRLF.
+        assert_eq!(LineEnding::detect("a\r\nb\r\nc\nd"), LineEnding::CrLf);
+        // Mixed content: majority of newlines are plain LF.
+        assert_eq!(LineEnding::detect("a\nb\nc\r\nd"), LineEnding::Lf);
     }
 }

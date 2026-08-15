@@ -1102,13 +1102,18 @@ mod tests {
     #[test]
     fn test_delete_char_command_merge_undo_with_empty_lines() {
         // Merging an empty line into a non-empty one, and vice versa.
-        let mut buffer = TextBuffer::new("text\n");
+        // `"text\n\n"` parses to two lines ("text", ""): `str::lines()` does
+        // not emit a trailing empty line for a single trailing `\n`. Backspace
+        // at (1, 0) deletes exactly the newline separating them, so the
+        // result keeps the second `\n` (the one terminating the now-merged
+        // line) rather than dropping both.
+        let mut buffer = TextBuffer::new("text\n\n");
         let mut cursor = (1, 0);
         let mut cmd = DeleteCharCommand::new(&buffer, 1, 0, cursor);
         cmd.execute(&mut buffer, &mut cursor);
-        assert_eq!(buffer.to_string(), "text");
-        cmd.undo(&mut buffer, &mut cursor);
         assert_eq!(buffer.to_string(), "text\n");
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "text\n\n");
 
         let mut buffer = TextBuffer::new("\ntext");
         let mut cursor = (1, 0);
@@ -1155,14 +1160,17 @@ mod tests {
     fn test_delete_forward_command_merge_undo_with_empty_lines() {
         // Merging an empty line into a non-empty one, and vice versa.
         // `"text\n\n"` parses to two lines ("text", ""): `str::lines()` does
-        // not emit a trailing empty line for a single trailing `\n`.
+        // not emit a trailing empty line for a single trailing `\n`. Forward
+        // delete at (0, 4) deletes exactly the newline separating them, so
+        // the result keeps the second `\n` (the one terminating the
+        // now-merged line) rather than dropping both.
         let mut buffer = TextBuffer::new("text\n\n");
         let mut cursor = (0, 4);
         let mut cmd = DeleteForwardCommand::new(&buffer, 0, 4, cursor);
         cmd.execute(&mut buffer, &mut cursor);
-        assert_eq!(buffer.to_string(), "text");
-        cmd.undo(&mut buffer, &mut cursor);
         assert_eq!(buffer.to_string(), "text\n");
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "text\n\n");
 
         let mut buffer = TextBuffer::new("\ntext");
         let mut cursor = (0, 0);

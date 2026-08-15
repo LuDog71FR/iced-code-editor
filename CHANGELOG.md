@@ -58,6 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: **`TextBuffer` round-trip dropped the trailing newline and normalized CRLF to LF on save**
+  - Lines are stored without their terminator (`str::lines()` strips both a final `\n` and `\r` in `\r\n`), and `to_string()` used to reassemble them with a hardcoded `\n` and no trailing newline, so every POSIX-style file lost its final `\n` and every CRLF file was silently converted to LF on save — with no dirty-flag warning, since the history never saw an edit
+  - `TextBuffer::new` now records the source's line-ending style (LF or CRLF, by majority vote) and whether it ended with a trailing newline; `to_string()` and the LSP incremental-sync helper `line_range_to_string` both honor this so a load/save round trip reproduces the exact bytes
+
 - fix: **`DemoApp::new()` spawned a real LSP server subprocess as a constructor side effect, making unit tests behave differently depending on `PATH`** (demo app)
   - Startup synchronously tried to auto-attach a `lua-language-server` client for the bundled demo script. On a machine without that server on `PATH` this silently failed and was invisible; on a machine with it installed (e.g. via Neovim's Mason), every `DemoApp::new()` call — including in unit tests — got a real attached LSP client, which broke `test_process_lsp_hover_timers_clears_pending_when_ready`'s assumption that a fresh app has none
   - The auto-attach now goes through the same async `Task`/`Message::ToggleLsp` flow as the manual LSP toggle instead of running synchronously in the constructor; unit tests discard the returned `Task`, so they no longer spawn a process at all
