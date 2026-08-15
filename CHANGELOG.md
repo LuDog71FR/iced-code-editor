@@ -52,10 +52,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `update.rs` shrinks from ~5000 to ~3500 lines; the corresponding unit tests moved with their handlers into each new file's own test module
   - No functional changes; a few purely-internal helpers (`finish_edit_operation`, `finish_navigation_operation`, `ensure_grouping_started`, `end_grouping_if_active`, `capture_lsp_edit_snapshot`, `handle_goto_position`) went from private to `pub(crate)` so the moved handlers can still call them across the new file boundary
 
+- refactor: **Minor cleanups found during review**
+  - `lsp_language_for_extension` lowercased its input and then compared it with `eq_ignore_ascii_case`, which is already case-insensitive; dropped the redundant allocation
+  - `Ctrl+/` line-comment toggling now recognizes C, C++, Java, C#, shell scripts, Ruby, TOML and YAML in addition to the languages already covered (Rust, JS/TS, Go, Python, Lua); it was previously a silent no-op for all of them
+
 ### Fixed
 
 - fix: **Reveal-in-file-manager was incorrectly enabled on wasm32 when opening a file via "jump to definition"** (demo app)
   - One of the three duplicated tab-creation code paths hardcoded the flag to `true` instead of checking the target platform; unified during the refactor above
+
+- fix: **Matching-bracket highlight could scan the entire document on every redraw**
+  - Placing the cursor next to an unmatched opening/closing bracket in a very large file made `scan_forward`/`scan_backward` walk the whole buffer looking for a counterpart that doesn't exist, on every overlay redraw
+  - Both scans now give up after 5,000 lines; a genuine match further away is treated the same as "no match"
+
+- fix: **Tab-overflow width estimate overestimated for non-ASCII (e.g. CJK) file names** (demo app)
+  - `check_tabs_overflow` measured a tab label's width using its UTF-8 byte length, so a file name with multi-byte characters could trigger the overflow layout well before the tab bar was actually full
+  - Width is now estimated from the label's character count instead
 
 - fix: **`is_modified()` could report a modified document as saved after an undo**
   - Marking a document saved records the undo-stack depth at that moment. Undoing past that point and then making a *different* edit could grow the undo stack back to the same depth, so `is_modified()` returned `false` even though the buffer no longer matched what was actually saved on disk — a host application could let the user close the document without a save prompt while real changes were pending

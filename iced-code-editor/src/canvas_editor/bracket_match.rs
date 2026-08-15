@@ -38,12 +38,20 @@ fn bracket_pair(ch: char) -> Option<char> {
     }
 }
 
+/// Maximum number of lines [`scan_forward`]/[`scan_backward`] will scan
+/// before giving up on finding a bracket's match. Bounds the cost of the
+/// overlay redraw when the cursor touches an unmatched opener/closer in a
+/// very large file; a genuine match more than this many lines away is
+/// treated the same as "no match".
+const MAX_SCAN_LINES: usize = 5_000;
+
 /// Scans forward from just after `(line, col)` for the closing bracket that
 /// matches the opening bracket `open` (which sits at `(line, col)`).
 ///
 /// Tracks nesting depth for same-family brackets only, so `(` inside a `[]`
 /// pair is ignored while looking for a `)`. This is a plain textual scan —
-/// it does not skip over brackets found inside strings or comments.
+/// it does not skip over brackets found inside strings or comments. Gives up
+/// after [`MAX_SCAN_LINES`] lines.
 fn scan_forward(
     buffer: &TextBuffer,
     open: char,
@@ -53,8 +61,10 @@ fn scan_forward(
 ) -> Option<(usize, usize)> {
     let mut depth = 1usize;
     let mut start_col = col + 1;
+    let scan_limit =
+        buffer.line_count().min(line.saturating_add(MAX_SCAN_LINES));
 
-    for l in line..buffer.line_count() {
+    for l in line..scan_limit {
         let text = buffer.line(l);
         for (c, ch) in text.chars().enumerate().skip(start_col) {
             if ch == open {
@@ -76,7 +86,7 @@ fn scan_forward(
 /// that matches the closing bracket `close` (which sits at `(line, col)`).
 ///
 /// Mirrors [`scan_forward`]: tracks same-family nesting depth, no
-/// string/comment awareness.
+/// string/comment awareness, gives up after [`MAX_SCAN_LINES`] lines.
 fn scan_backward(
     buffer: &TextBuffer,
     open: char,
@@ -86,6 +96,7 @@ fn scan_backward(
 ) -> Option<(usize, usize)> {
     let mut depth = 1usize;
     let mut l = line;
+    let scan_floor = line.saturating_sub(MAX_SCAN_LINES);
 
     loop {
         let text = buffer.line(l);
@@ -103,7 +114,7 @@ fn scan_backward(
             }
         }
 
-        if l == 0 {
+        if l == scan_floor {
             return None;
         }
         l -= 1;
@@ -312,6 +323,29 @@ mod tests {
             find_matching_pair(&buffer, (0, 10)),
             Some(((0, 10), (2, 0)))
         );
+    }
+
+    #[test]
+    fn scan_forward_gives_up_beyond_max_scan_lines() {
+        let mut lines = vec!["(".to_string()];
+        lines.extend((0..MAX_SCAN_LINES + 1).map(|_| String::new()));
+        lines.push(")".to_string());
+        let buffer = TextBuffer::new(&lines.join("\n"));
+
+        // The matching ')' sits just past the scan budget, so it's treated
+        // as unmatched rather than scanning the whole document.
+        assert_eq!(find_matching_pair(&buffer, (0, 0)), None);
+    }
+
+    #[test]
+    fn scan_backward_gives_up_beyond_max_scan_lines() {
+        let mut lines = vec!["(".to_string()];
+        lines.extend((0..MAX_SCAN_LINES + 1).map(|_| String::new()));
+        lines.push(")".to_string());
+        let buffer = TextBuffer::new(&lines.join("\n"));
+        let last_line = lines.len() - 1;
+
+        assert_eq!(find_matching_pair(&buffer, (last_line, 1)), None);
     }
 
     #[test]

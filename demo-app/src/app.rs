@@ -1290,9 +1290,9 @@ greet("World")
                 // - Padding: 10 * 2 = 20
                 // - Close button: 20
                 // - Spacing inside tab: 5
-                // - Text: len * 9 (approximate char width for size 14)
+                // - Text: char count * 9 (approximate char width for size 14)
                 // - Extra space for indicator/border: 2
-                let text_width = label.len() as f32 * 9.0;
+                let text_width = label.chars().count() as f32 * 9.0;
                 text_width + 45.0
             })
             .sum();

@@ -167,14 +167,13 @@ const LSP_SERVER_CONFIGS: &[LspServerConfig] = &[
 /// assert!(unknown.is_none());
 /// ```
 pub fn lsp_language_for_extension(extension: &str) -> Option<LspLanguage> {
-    let extension = extension.to_lowercase();
     LSP_LANGUAGE_MAPPINGS
         .iter()
         .find(|mapping| {
             mapping
                 .extensions
                 .iter()
-                .any(|ext| ext.eq_ignore_ascii_case(extension.as_str()))
+                .any(|ext| ext.eq_ignore_ascii_case(extension))
         })
         .map(|mapping| LspLanguage {
             language_id: mapping.language_id,

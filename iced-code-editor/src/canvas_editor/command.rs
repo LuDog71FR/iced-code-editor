@@ -859,8 +859,10 @@ impl Command for DuplicateLinesCommand {
 pub(crate) fn line_comment_token(syntax: &str) -> Option<&'static str> {
     match syntax {
         "rs" | "rust" | "js" | "javascript" | "ts" | "typescript" | "jsx"
-        | "tsx" | "go" => Some("//"),
-        "py" | "python" => Some("#"),
+        | "tsx" | "go" | "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "c++"
+        | "java" | "cs" | "csharp" => Some("//"),
+        "py" | "python" | "sh" | "bash" | "shell" | "zsh" | "rb" | "ruby"
+        | "toml" | "yaml" | "yml" => Some("#"),
         "lua" => Some("--"),
         _ => None,
     }
@@ -1600,6 +1602,17 @@ mod tests {
         assert_eq!(line_comment_token("py"), Some("#"));
         assert_eq!(line_comment_token("python"), Some("#"));
         assert_eq!(line_comment_token("lua"), Some("--"));
+        assert_eq!(line_comment_token("c"), Some("//"));
+        assert_eq!(line_comment_token("cpp"), Some("//"));
+        assert_eq!(line_comment_token("java"), Some("//"));
+        assert_eq!(line_comment_token("cs"), Some("//"));
+        assert_eq!(line_comment_token("sh"), Some("#"));
+        assert_eq!(line_comment_token("bash"), Some("#"));
+        assert_eq!(line_comment_token("rb"), Some("#"));
+        assert_eq!(line_comment_token("ruby"), Some("#"));
+        assert_eq!(line_comment_token("toml"), Some("#"));
+        assert_eq!(line_comment_token("yaml"), Some("#"));
+        assert_eq!(line_comment_token("yml"), Some("#"));
         assert_eq!(line_comment_token("html"), None);
         assert_eq!(line_comment_token("txt"), None);
     }
