@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Search-match, text-selection, bracket-match and IME-preedit-background colors were hard-coded `Color` literals in the canvas rendering code instead of living on `theme::Style` like every other editor color, so they could not be customized and, in the case of the selection color, were duplicated verbatim in two places
   - `Style` gains `search_match_color`, `search_match_current_color`, `selection_color`, `bracket_match_color` and `ime_preedit_background_color`, set by `from_iced_theme` to the same values as before (theme-independent by design, to preserve the conventional orange/yellow search-highlight look); no visual change
 
+- refactor: **Removed dead and vestigial code found during review**
+  - `Message::FocusNavigationTab` was declared and matched but never actually produced (only `FocusNavigationShiftTab` is ever dispatched, from Shift+Tab); the unused variant and its match arm are removed (a breaking change for any host constructing it directly, though none in this workspace did)
+  - `CompositeCommand::new` took a `description: String` that was immediately discarded (composite-command descriptions were never implemented); the parameter is dropped, along with the now-meaningless `description`/`label` arguments on `HistoryManager::begin_group` and the internal `ensure_grouping_started` helper that only forwarded it
+  - No functional changes
+
 ### Fixed
 
 - fix: **Reveal-in-file-manager was incorrectly enabled on wasm32 when opening a file via "jump to definition"** (demo app)
@@ -54,6 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fix: **Undo of a line-merging Backspace duplicated the merged line**
   - Pressing Backspace at column 0 merges a line into the previous one. Undo split the merged line back at the join point — which already restores both lines — and then re-inserted the line content on top of it, so `hello\nworld` came back as `hello\nworldworld`
   - The redundant re-insertion (and the now-unused `merged_content` field) has been removed; undo now restores the exact original buffer
+
+- fix: **Undo of a line-merging Delete (forward delete) did unnecessary rework, same class of bug as the Backspace fix above**
+  - `DeleteForwardCommand::undo` split the merged line back at the join point, then cleared the newly split-off line character by character and re-inserted the same content — the split alone already restores the exact original text, same as `DeleteCharCommand::undo` was already fixed to do
+  - The redundant clear/re-insert loop (and the now-unused `next_line_content` field) has been removed
 
 - fix: **Undo of a Vim paste (`p` / `P`) deleted the wrong text, or nothing at all**
   - `InsertTextCommand` removes pasted text by walking backwards from the cursor position it restores. Vim paste overrides that position to rest the caret *on* the pasted text instead of after it, so the backward walk started at the wrong place — `P` on a characterwise register left the paste in place entirely (`abc` → `aabc` → `aabc` after undo)

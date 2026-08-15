@@ -311,17 +311,13 @@ impl CodeEditor {
         self.overlay_cache.clear();
     }
 
-    /// Starts command grouping with the given label if not already grouping.
+    /// Starts command grouping if not already grouping.
     ///
     /// This is used for smart undo functionality, allowing multiple related
     /// operations to be undone as a single unit.
-    ///
-    /// # Arguments
-    ///
-    /// * `label` - A descriptive label for the group of commands
-    fn ensure_grouping_started(&mut self, label: &str) {
+    fn ensure_grouping_started(&mut self) {
         if !self.is_grouping {
-            self.history.begin_group(label);
+            self.history.begin_group();
             self.is_grouping = true;
         }
     }
@@ -392,7 +388,7 @@ impl CodeEditor {
         }
 
         // Start grouping if not already grouping (for smart undo)
-        self.ensure_grouping_started("Typing");
+        self.ensure_grouping_started();
 
         let has_any_selection =
             self.cursors.iter().any(|cursor| cursor.has_selection());
@@ -611,7 +607,7 @@ impl CodeEditor {
     /// A `Task<Message>` that scrolls to keep the cursor visible (including
     /// horizontal scroll when wrap is disabled)
     fn handle_tab(&mut self) -> Task<Message> {
-        self.ensure_grouping_started("Tab");
+        self.ensure_grouping_started();
 
         // A plain click leaves a zero-length anchor in place (see
         // `handle_enter`); clear it so it isn't mistaken for a real selection
@@ -669,23 +665,22 @@ impl CodeEditor {
         self.scroll_to_cursor()
     }
 
-    /// Handles Tab/Shift+Tab key presses for focus navigation (when the
-    /// search dialog is not open).
+    /// Handles Shift+Tab key presses for focus navigation (when the search
+    /// dialog is not open).
+    ///
+    /// Relinquishes this editor's own focus; the `FocusNavigationShiftTab`
+    /// message is also published to the host application (see
+    /// `canvas_impl.rs`), which owns moving focus to another widget.
     ///
     /// # Returns
     ///
-    /// A `Task<Message>` that may navigate focus to another editor
+    /// Always `Task::none()`
     fn handle_focus_navigation(&mut self) -> Task<Message> {
-        // Only handle focus navigation if search dialog is not open
         if !self.search_state.is_open {
-            // Lose focus from current editor
             self.has_canvas_focus = false;
             self.show_cursor = false;
         }
 
-        // Return a task that could potentially focus another editor
-        // This implements focus chain management by allowing the parent application
-        // to handle focus navigation between multiple editors
         Task::none()
     }
 
@@ -712,7 +707,7 @@ impl CodeEditor {
         let replaces_selection =
             self.cursors.iter().any(|cursor| cursor.has_selection());
         if replaces_selection {
-            self.ensure_grouping_started("Enter");
+            self.ensure_grouping_started();
             self.delete_selection();
         } else {
             self.clear_selection();
@@ -1395,7 +1390,7 @@ impl CodeEditor {
 
         self.end_grouping_if_active();
         if operator == VimOperator::Change {
-            self.ensure_grouping_started("Vim change");
+            self.ensure_grouping_started();
         }
 
         self.pre_edit_line = start.0.min(end.0);
@@ -1619,7 +1614,7 @@ impl CodeEditor {
         self.vim_state.clear_visual();
         let current = self.vim_normal_position(current);
         self.cursors.set_single(current);
-        self.ensure_grouping_started("Vim insert");
+        self.ensure_grouping_started();
 
         match position {
             VimInsertPosition::BeforeCursor => {}
@@ -2044,7 +2039,7 @@ impl CodeEditor {
         }
 
         self.end_grouping_if_active();
-        self.ensure_grouping_started("Cut");
+        self.ensure_grouping_started();
         let clipboard_task = self.copy_selection();
         self.delete_selection();
         self.end_grouping_if_active();
@@ -2401,8 +2396,7 @@ impl CodeEditor {
             let replace_text = self.search_state.replace_with.clone();
 
             // Create composite command for undo
-            let mut composite =
-                CompositeCommand::new("Replace All".to_string());
+            let mut composite = CompositeCommand::new();
 
             // Process matches in reverse order (to preserve positions)
             for match_pos in all_matches.iter().rev() {
@@ -2558,7 +2552,7 @@ impl CodeEditor {
             return Task::none();
         }
 
-        self.ensure_grouping_started("Typing");
+        self.ensure_grouping_started();
 
         self.paste_text(text);
         self.finish_edit_operation();
@@ -2974,7 +2968,6 @@ impl CodeEditor {
             Message::SearchDialogShiftTab => {
                 self.handle_search_dialog_tab(false)
             }
-            Message::FocusNavigationTab => self.handle_focus_navigation(),
             Message::FocusNavigationShiftTab => self.handle_focus_navigation(),
 
             // Focus and IME operations

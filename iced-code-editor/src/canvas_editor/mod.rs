@@ -885,8 +885,6 @@ pub enum Message {
     SearchDialogTab,
     /// Shift+Tab pressed in search dialog (cycle backward)
     SearchDialogShiftTab,
-    /// Tab pressed for focus navigation (when search dialog is not open)
-    FocusNavigationTab,
     /// Shift+Tab pressed for focus navigation (when search dialog is not open)
     FocusNavigationShiftTab,
     /// Canvas gained focus (mouse click)

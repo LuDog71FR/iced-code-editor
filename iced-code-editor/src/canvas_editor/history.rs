@@ -307,15 +307,10 @@ impl CommandHistory {
     /// All commands added via `push()` will be grouped together until
     /// `end_group()` is called. This is useful for grouping consecutive
     /// typing operations.
-    ///
-    /// # Arguments
-    ///
-    /// * `description` - Description for the composite command
-    pub fn begin_group(&self, description: &str) {
+    pub fn begin_group(&self) {
         let mut inner = self.inner.lock().unwrap();
         if inner.current_group.is_none() {
-            inner.current_group =
-                Some(CompositeCommand::new(description.to_string()));
+            inner.current_group = Some(CompositeCommand::new());
         }
     }
 
@@ -572,7 +567,7 @@ mod tests {
         let mut cursor = (0, 5);
         let history = CommandHistory::new(10);
 
-        history.begin_group("typing");
+        history.begin_group();
         let mut cmd_a = InsertCharCommand::new(0, 5, 'A', cursor);
         cmd_a.execute(&mut buffer, &mut cursor);
         history.push(Box::new(cmd_a));
@@ -583,7 +578,7 @@ mod tests {
         history.undo(&mut buffer, &mut cursor);
         assert!(history.is_modified());
 
-        history.begin_group("typing");
+        history.begin_group();
         let mut cmd_b = InsertCharCommand::new(0, 5, 'B', cursor);
         cmd_b.execute(&mut buffer, &mut cursor);
         history.push(Box::new(cmd_b));
@@ -633,7 +628,7 @@ mod tests {
         let mut cursor = (0, 5);
         let history = CommandHistory::new(10);
 
-        history.begin_group("typing");
+        history.begin_group();
 
         // Add multiple characters
         for ch in "!!!".chars() {

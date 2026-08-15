@@ -197,7 +197,6 @@ pub struct DeleteForwardCommand {
     col: usize,
     deleted_char: Option<char>,
     merged_next_line: bool,
-    next_line_content: Option<String>,
     cursor_before: (usize, usize),
 }
 
@@ -217,26 +216,23 @@ impl DeleteForwardCommand {
         cursor: (usize, usize),
     ) -> Self {
         let line_len = buffer.line_len(line);
-        let (deleted_char, merged_next_line, next_line_content) =
-            if col < line_len {
-                // Deleting character at cursor
-                let ch = buffer.line(line).chars().nth(col);
-                (ch, false, None)
-            } else if line + 1 < buffer.line_count() {
-                // Merging with next line
-                let next_content = buffer.line(line + 1).to_string();
-                (None, true, Some(next_content))
-            } else {
-                // At end of document
-                (None, false, None)
-            };
+        let (deleted_char, merged_next_line) = if col < line_len {
+            // Deleting character at cursor
+            let ch = buffer.line(line).chars().nth(col);
+            (ch, false)
+        } else if line + 1 < buffer.line_count() {
+            // Merging with next line
+            (None, true)
+        } else {
+            // At end of document
+            (None, false)
+        };
 
         Self {
             line,
             col,
             deleted_char,
             merged_next_line,
-            next_line_content,
             cursor_before: cursor,
         }
     }
@@ -254,19 +250,10 @@ impl Command for DeleteForwardCommand {
 
     fn undo(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) {
         if self.merged_next_line {
-            // Restore the newline and next line
-            if let Some(content) = &self.next_line_content {
-                buffer.insert_newline(self.line, self.col);
-                // The content is already in the next line after insert_newline
-                // We need to clear it and restore the original
-                let next_line_len = buffer.line_len(self.line + 1);
-                for _ in 0..next_line_len {
-                    buffer.delete_forward(self.line + 1, 0);
-                }
-                for (i, ch) in content.chars().enumerate() {
-                    buffer.insert_char(self.line + 1, i, ch);
-                }
-            }
+            // Splitting the merged line back at the join point is enough: the
+            // text after the split is exactly the line that was merged in.
+            // Re-inserting it on top would duplicate it.
+            buffer.insert_newline(self.line, self.col);
         } else if let Some(ch) = self.deleted_char {
             // Re-insert the deleted character
             buffer.insert_char(self.line, self.col, ch);
@@ -608,8 +595,8 @@ pub struct CompositeCommand {
 }
 
 impl CompositeCommand {
-    /// Creates a new composite command.
-    pub fn new(_description: String) -> Self {
+    /// Creates a new, empty composite command.
+    pub fn new() -> Self {
         Self { commands: Vec::new() }
     }
 
@@ -1131,6 +1118,60 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_forward_command() {
+        let mut buffer = TextBuffer::new("hello");
+        let mut cursor = (0, 4);
+        let mut cmd = DeleteForwardCommand::new(&buffer, 0, 4, cursor);
+
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.line(0), "hell");
+        assert_eq!(cursor, (0, 4));
+
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.line(0), "hello");
+        assert_eq!(cursor, (0, 4));
+    }
+
+    #[test]
+    fn test_delete_forward_command_merge_undo_restores_both_lines() {
+        // Delete at end of line merges the next line into it; undo must
+        // split it back without duplicating the merged content.
+        let mut buffer = TextBuffer::new("hello\nworld");
+        let mut cursor = (0, 5);
+        let mut cmd = DeleteForwardCommand::new(&buffer, 0, 5, cursor);
+
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "helloworld");
+        assert_eq!(cursor, (0, 5));
+
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "hello\nworld");
+        assert_eq!(cursor, (0, 5));
+    }
+
+    #[test]
+    fn test_delete_forward_command_merge_undo_with_empty_lines() {
+        // Merging an empty line into a non-empty one, and vice versa.
+        // `"text\n\n"` parses to two lines ("text", ""): `str::lines()` does
+        // not emit a trailing empty line for a single trailing `\n`.
+        let mut buffer = TextBuffer::new("text\n\n");
+        let mut cursor = (0, 4);
+        let mut cmd = DeleteForwardCommand::new(&buffer, 0, 4, cursor);
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "text");
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "text\n");
+
+        let mut buffer = TextBuffer::new("\ntext");
+        let mut cursor = (0, 0);
+        let mut cmd = DeleteForwardCommand::new(&buffer, 0, 0, cursor);
+        cmd.execute(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "text");
+        cmd.undo(&mut buffer, &mut cursor);
+        assert_eq!(buffer.to_string(), "\ntext");
+    }
+
+    #[test]
     fn test_insert_newline_command() {
         let mut buffer = TextBuffer::new("hello world");
         let mut cursor = (0, 5);
@@ -1362,7 +1403,7 @@ mod tests {
     fn test_composite_command() {
         let mut buffer = TextBuffer::new("hello");
         let mut cursor = (0, 5);
-        let mut composite = CompositeCommand::new("Multiple edits".to_string());
+        let mut composite = CompositeCommand::new();
 
         composite.add(Box::new(InsertCharCommand::new(0, 5, ' ', cursor)));
         cursor.1 += 1;
@@ -1425,7 +1466,7 @@ mod tests {
     fn test_replace_all_composite() {
         let mut buffer = TextBuffer::new("foo foo foo");
         let mut cursor = (0, 0);
-        let mut composite = CompositeCommand::new("Replace all".to_string());
+        let mut composite = CompositeCommand::new();
 
         // Replace all "foo" with "bar" (in reverse order to preserve positions)
         composite.add(Box::new(ReplaceTextCommand::new(
