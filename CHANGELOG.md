@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `CompositeCommand::new` took a `description: String` that was immediately discarded (composite-command descriptions were never implemented); the parameter is dropped, along with the now-meaningless `description`/`label` arguments on `HistoryManager::begin_group` and the internal `ensure_grouping_started` helper that only forwarded it
   - No functional changes
 
+- refactor: **Split `update.rs` by topic to make the message-handling code easier to navigate**
+  - The Vim key-dispatch handlers (`handle_vim_*`, ~600 lines) moved to a new `vim_update.rs`; the search/replace and go-to-line dialog handlers (~300 lines) moved to a new `search_update.rs`. Both are sibling `impl CodeEditor` blocks, the same pattern already used by `cursor.rs`, `clipboard.rs`, `selection.rs`, etc.
+  - `update.rs` shrinks from ~5000 to ~3500 lines; the corresponding unit tests moved with their handlers into each new file's own test module
+  - No functional changes; a few purely-internal helpers (`finish_edit_operation`, `finish_navigation_operation`, `ensure_grouping_started`, `end_grouping_if_active`, `capture_lsp_edit_snapshot`, `handle_goto_position`) went from private to `pub(crate)` so the moved handlers can still call them across the new file boundary
+
 ### Fixed
 
 - fix: **Reveal-in-file-manager was incorrectly enabled on wasm32 when opening a file via "jump to definition"** (demo app)

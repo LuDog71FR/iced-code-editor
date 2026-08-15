@@ -53,10 +53,12 @@ pub mod lsp;
 pub mod lsp_process;
 mod search;
 mod search_dialog;
+mod search_update;
 mod selection;
 mod update;
 mod view;
 mod vim;
+mod vim_update;
 mod wrapping;
 
 pub use context_menu::{ContextMenuEntry, ContextMenuItem};
