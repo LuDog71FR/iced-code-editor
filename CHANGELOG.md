@@ -74,6 +74,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `lsp_language_for_extension` lowercased its input and then compared it with `eq_ignore_ascii_case`, which is already case-insensitive; dropped the redundant allocation
   - `Ctrl+/` line-comment toggling now recognizes C, C++, Java, C#, shell scripts, Ruby, TOML and YAML in addition to the languages already covered (Rust, JS/TS, Go, Python, Lua); it was previously a silent no-op for all of them
 
+- refactor: **Reorganized `iced-code-editor/src/` into topic-focused module directories, completing the file-splitting work above**
+  - `canvas_editor/` was a flat directory of ~30 files with no grouping; it's now organized by concern: `editing/` (cursor, selection, clipboard, history, the `command/` undo-redo pattern), `input/` (keyboard/mouse/IME events, the `update/` message dispatch), `render/` (the `canvas::Program` impl and its gutter/text/overlay/wrapping/view layers), `features/` (bracket-match, context menu, folding, go-to-line, search, Vim — each in its own subdirectory), and `lsp/` (the `LspClient` trait, buffer sync, and the `process/` subprocess client). `text_buffer.rs`/`text_utils.rs` moved into a new crate-root `buffer/` module alongside them
+  - `mod.rs` itself (~3400 lines) was split by topic into `caches.rs` (visual-line/highlight/bracket-depth/max-width caches), `metrics.rs` (font/char/line/viewport dimensions), `config.rs` (the builder-style `set_*`/`with_*`/getter methods), `focus.rs` (focus management), and `bench_support.rs` (the `cfg(feature = "bench")` criterion harness, previously an inline module); it now holds only the `CodeEditor`/`Message` type definitions and `new()`/`reset()`, ~640 lines
+  - No public API change and no functional changes; `iced_code_editor::{CodeEditor, Message, ...}` re-export paths in `lib.rs` are unaffected, only internal `canvas_editor::` paths moved. 472 unit tests pass unchanged
+
 ### Fixed
 
 - fix: **LSP completion was inserted character by character, triggering auto-close and re-entrant completion requests** (demo app)
