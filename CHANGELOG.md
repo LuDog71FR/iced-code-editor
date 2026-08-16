@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- fix: **`Ctrl+.` (toggle fold at cursor) was unreachable on layouts where `.` requires Shift**
+  - `handle_keyboard_shortcuts` matched the fold-toggle binding against the base `key` only; on French AZERTY, `.` is `Shift+;`, so `key` reports `;` and the shortcut never fired, while `Ctrl+/` (toggle comment) already handled this correctly by also checking `modified_key`
+  - Both bindings now share a new `is_key_char(key, modified_key, ch)` helper that checks either key, so `Ctrl+.` works on AZERTY and future symbol shortcuts can't regress the same way
 
 
 ## [0.4.0] - 2026-08-16

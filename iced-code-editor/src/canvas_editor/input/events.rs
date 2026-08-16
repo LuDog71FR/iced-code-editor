@@ -10,6 +10,29 @@ use crate::canvas_editor::{
     ArrowDirection, CodeEditor, FOCUSED_EDITOR_ID, Message,
 };
 
+/// Returns `true` when either `key` or `modified_key` is the character `ch`.
+///
+/// Symbol shortcuts must consult `modified_key`, not just `key`: on layouts
+/// where the glyph needs Shift (e.g. `.` and `/` on French AZERTY), `key`
+/// reports the unshifted base key and only `modified_key` carries the
+/// layout-modified glyph. Letter shortcuts are unaffected either way, so
+/// this is safe to use uniformly for any single-character shortcut.
+///
+/// # Examples
+///
+/// ```ignore
+/// // On AZERTY, `.` is Shift+`;`: `key` is `;`, `modified_key` is `.`.
+/// assert!(is_key_char(&semicolon_key, &dot_key, "."));
+/// ```
+fn is_key_char(
+    key: &keyboard::Key,
+    modified_key: &keyboard::Key,
+    ch: &str,
+) -> bool {
+    matches!(key, keyboard::Key::Character(c) if c.as_str() == ch)
+        || matches!(modified_key, keyboard::Key::Character(c) if c.as_str() == ch)
+}
+
 impl CodeEditor {
     /// Checks if the editor has focus (both Iced focus and internal canvas focus).
     ///
@@ -182,16 +205,9 @@ impl CodeEditor {
             );
         }
 
-        // Handle Ctrl+/ (toggle line comment).
-        //
-        // Match against both the base key and `modified_key` so the shortcut
-        // works regardless of layout: on US/QWERTY `/` is unshifted (in `key`),
-        // while on French AZERTY it is Shift+`:` and only appears in
-        // `modified_key`.
-        if command_pressed
-            && (matches!(key, keyboard::Key::Character(c) if c.as_str() == "/")
-                || matches!(modified_key, keyboard::Key::Character(c) if c.as_str() == "/"))
-        {
+        // Handle Ctrl+/ (toggle line comment). On French AZERTY `/` is
+        // Shift+`:` and only appears in `modified_key`; see `is_key_char`.
+        if command_pressed && is_key_char(key, modified_key, "/") {
             return Some(Action::publish(Message::ToggleComment).and_capture());
         }
 
@@ -318,10 +334,10 @@ impl CodeEditor {
 
         // Code folding shortcuts (only when folding is enabled).
         if self.folding_enabled {
-            // Ctrl+. : toggle the fold of the block at the cursor.
-            if modifiers.control()
-                && matches!(key, keyboard::Key::Character(c) if c.as_str() == ".")
-            {
+            // Ctrl+. : toggle the fold of the block at the cursor. On French
+            // AZERTY `.` is Shift+`;` and only appears in `modified_key`;
+            // see `is_key_char`.
+            if modifiers.control() && is_key_char(key, modified_key, ".") {
                 return Some(
                     Action::publish(Message::ToggleFoldAtCursor).and_capture(),
                 );
@@ -809,5 +825,60 @@ mod tests {
             .map(|action| action.into_inner().0);
 
         assert!(matches!(message, Some(Some(Message::OpenGotoLine))));
+    }
+
+    #[test]
+    fn test_is_key_char_matches_base_or_modified_key() {
+        let dot = keyboard::Key::Character(".".into());
+        let semicolon = keyboard::Key::Character(";".into());
+        let g = keyboard::Key::Character("g".into());
+
+        // QWERTY: `.` is unshifted, so it shows up as the base key.
+        assert!(is_key_char(&dot, &dot, "."));
+        // AZERTY: `.` is Shift+`;`, so only `modified_key` carries it.
+        assert!(is_key_char(&semicolon, &dot, "."));
+        // Neither key matches.
+        assert!(!is_key_char(&g, &g, "."));
+    }
+
+    #[test]
+    fn test_ctrl_dot_toggles_fold_on_azerty_layout() {
+        let editor = CodeEditor::new("fn a() {\n}\n", "rs");
+        assert!(editor.folding_enabled);
+
+        // AZERTY: `.` requires Shift, so `key` reports the unshifted `;`
+        // and only `modified_key` reports `.`.
+        let base_key = keyboard::Key::Character(";".into());
+        let modified_key = keyboard::Key::Character(".".into());
+
+        let message = editor
+            .handle_keyboard_shortcuts(
+                &base_key,
+                &modified_key,
+                &keyboard::Modifiers::CTRL,
+            )
+            .map(|action| action.into_inner().0);
+
+        assert!(matches!(message, Some(Some(Message::ToggleFoldAtCursor))));
+    }
+
+    #[test]
+    fn test_ctrl_slash_toggles_comment_on_azerty_layout() {
+        let editor = CodeEditor::new("fn a() {}\n", "rs");
+
+        // AZERTY: `/` requires Shift, so `key` reports the unshifted `:`
+        // and only `modified_key` reports `/`.
+        let base_key = keyboard::Key::Character(":".into());
+        let modified_key = keyboard::Key::Character("/".into());
+
+        let message = editor
+            .handle_keyboard_shortcuts(
+                &base_key,
+                &modified_key,
+                &keyboard::Modifiers::CTRL,
+            )
+            .map(|action| action.into_inner().0);
+
+        assert!(matches!(message, Some(Some(Message::ToggleComment))));
     }
 }
