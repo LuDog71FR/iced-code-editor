@@ -11,8 +11,8 @@ use web_time::Instant;
 
 use super::cursor_set;
 use crate::buffer::TextBuffer;
+use crate::canvas_editor::features::vim::VimMotion;
 use crate::canvas_editor::render::wrapping::{VisualLine, WrappingCalculator};
-use crate::canvas_editor::vim::VimMotion;
 use crate::canvas_editor::{
     ArrowDirection, CodeEditor, Message, measure_char_width, measure_text_width,
 };

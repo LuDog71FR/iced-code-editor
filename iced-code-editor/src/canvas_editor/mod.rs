@@ -26,6 +26,7 @@ use crate::i18n::Translations;
 use crate::theme::Style;
 use editing::cursor_set;
 pub use editing::history::CommandHistory;
+use features::{bracket_match, folding, goto_line, search, vim};
 use render::wrapping;
 
 #[cfg(target_arch = "wasm32")]
@@ -38,23 +39,14 @@ static EDITOR_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static FOCUSED_EDITOR_ID: AtomicU64 = AtomicU64::new(0);
 
 // Re-export submodules
-mod bracket_match;
-mod context_menu;
 mod editing;
-pub mod folding;
-mod goto_line;
-mod goto_line_dialog;
+pub(crate) mod features;
 mod input;
 pub mod lsp;
 mod render;
-mod search;
-mod search_dialog;
-mod search_update;
-mod vim;
-mod vim_update;
 
-pub use context_menu::{ContextMenuEntry, ContextMenuItem};
-pub use vim::VimMode;
+pub use features::context_menu::{ContextMenuEntry, ContextMenuItem};
+pub use features::vim::VimMode;
 
 /// Hidden re-exports for the benchmark harness in `benches/`.
 ///

@@ -7,11 +7,11 @@ use iced::{Color, Point, Rectangle, Size};
 
 use super::text::{RenderContext, calculate_segment_geometry};
 use super::wrapping::{VisualLine, WrappingCalculator};
-use crate::canvas_editor::vim::VimMode;
+use crate::canvas_editor::features::vim::VimMode;
+use crate::canvas_editor::features::{bracket_match, search};
 use crate::canvas_editor::{
     CodeEditor, measure_char_width, measure_text_width,
 };
-use crate::canvas_editor::{bracket_match, search};
 
 impl CodeEditor {
     /// Draws the background highlight for the current line.

@@ -9,8 +9,8 @@ use iced::widget::{
 use iced::{Element, Length};
 use iced_font_awesome::fa_icon_solid;
 
-use super::Message;
-use super::search::{MAX_MATCHES, SearchState};
+use super::{MAX_MATCHES, SearchState};
+use crate::canvas_editor::Message;
 use crate::i18n::Translations;
 
 /// Creates the search/replace dialog UI element.

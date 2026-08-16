@@ -5,6 +5,9 @@
 //! - Multiple match detection
 //! - Position tracking for highlighting
 
+pub(crate) mod dialog;
+mod update;
+
 use crate::buffer::TextBuffer;
 use iced::widget::Id;
 use std::borrow::Cow;

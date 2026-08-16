@@ -3,14 +3,14 @@
 
 use iced::Task;
 
-use super::vim::{
-    VimAction, VimInsertPosition, VimMotion, VimOperator, VimPastePosition,
-    VimRegister, VimRegisterKind,
+use super::{
+    VimAction, VimInsertPosition, VimMode, VimMotion, VimOperator,
+    VimPastePosition, VimRegister, VimRegisterKind,
 };
-use super::{CodeEditor, Message, VimMode};
 use crate::canvas_editor::editing::command::{
     Command, DeleteRangeCommand, InsertTextCommand,
 };
+use crate::canvas_editor::{CodeEditor, Message};
 
 impl CodeEditor {
     /// Dispatches a parsed Vim key action to the corresponding handler.
@@ -827,7 +827,7 @@ mod tests {
         assert_eq!(editor.vim_state.register.text, "a");
         assert_eq!(
             editor.vim_state.register.kind,
-            super::super::vim::VimRegisterKind::Characterwise
+            VimRegisterKind::Characterwise
         );
 
         vim_keys(&mut editor, "2x");
@@ -890,10 +890,7 @@ mod tests {
         vim_keys(&mut deleted, "dd");
         assert_eq!(deleted.content(), "two\nthree");
         assert_eq!(deleted.vim_state.register.text, "one\n");
-        assert_eq!(
-            deleted.vim_state.register.kind,
-            super::super::vim::VimRegisterKind::Linewise
-        );
+        assert_eq!(deleted.vim_state.register.kind, VimRegisterKind::Linewise);
 
         let mut yanked =
             CodeEditor::new("one\ntwo\nthree", "txt").with_vim_enabled(true);
@@ -901,10 +898,7 @@ mod tests {
         vim_keys(&mut yanked, "yy");
         assert_eq!(yanked.content(), "one\ntwo\nthree");
         assert_eq!(yanked.vim_state.register.text, "two\n");
-        assert_eq!(
-            yanked.vim_state.register.kind,
-            super::super::vim::VimRegisterKind::Linewise
-        );
+        assert_eq!(yanked.vim_state.register.kind, VimRegisterKind::Linewise);
 
         let mut changed =
             CodeEditor::new("one\ntwo\nthree", "txt").with_vim_enabled(true);
@@ -947,7 +941,7 @@ mod tests {
         assert_eq!(deleted.vim_state.register.text, "bc");
         assert_eq!(
             deleted.vim_state.register.kind,
-            super::super::vim::VimRegisterKind::Characterwise
+            VimRegisterKind::Characterwise
         );
         assert_eq!(deleted.vim_mode(), Some(VimMode::Normal));
 
@@ -957,10 +951,7 @@ mod tests {
         vim_keys(&mut yanked, "Vjy");
         assert_eq!(yanked.content(), "one\ntwo\nthree");
         assert_eq!(yanked.vim_state.register.text, "two\nthree\n");
-        assert_eq!(
-            yanked.vim_state.register.kind,
-            super::super::vim::VimRegisterKind::Linewise
-        );
+        assert_eq!(yanked.vim_state.register.kind, VimRegisterKind::Linewise);
         assert_eq!(yanked.vim_mode(), Some(VimMode::Normal));
 
         let mut changed = CodeEditor::new("abcd", "txt").with_vim_enabled(true);

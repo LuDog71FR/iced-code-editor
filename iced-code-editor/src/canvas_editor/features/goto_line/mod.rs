@@ -1,5 +1,8 @@
 //! State for the go-to-line dialog.
 
+pub(crate) mod dialog;
+mod update;
+
 use iced::widget::Id;
 
 /// State owned by the compact go-to-line input.

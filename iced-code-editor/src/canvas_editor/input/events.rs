@@ -4,8 +4,8 @@ use iced::advanced::input_method;
 use iced::widget::canvas::Action;
 use iced::{Point, Rectangle, keyboard, mouse};
 
-use crate::canvas_editor::folding;
-use crate::canvas_editor::vim::VimMode;
+use crate::canvas_editor::features::folding;
+use crate::canvas_editor::features::vim::VimMode;
 use crate::canvas_editor::{
     ArrowDirection, CodeEditor, FOCUSED_EDITOR_ID, Message,
 };

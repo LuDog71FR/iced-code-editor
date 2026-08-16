@@ -3,7 +3,7 @@
 use iced::widget::{Space, button, column, container, row, text};
 use iced::{Background, Border, Color, Element, Length, Shadow, Theme, Vector};
 
-use super::Message;
+use crate::canvas_editor::Message;
 use crate::i18n::Translations;
 
 const MENU_WIDTH: f32 = 224.0;

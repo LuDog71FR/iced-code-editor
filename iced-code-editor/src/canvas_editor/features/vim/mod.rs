@@ -4,6 +4,8 @@
 //! and tracks the modal state (normal/insert/visual/visual-line) needed to
 //! reproduce Vim-style editing behavior.
 
+mod update;
+
 /// The active editing mode when Vim behavior is enabled.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum VimMode {

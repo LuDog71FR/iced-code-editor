@@ -6,7 +6,7 @@ use iced::widget::canvas;
 
 use super::text::RenderContext;
 use super::wrapping::VisualLine;
-use crate::canvas_editor::folding;
+use crate::canvas_editor::features::folding;
 use crate::canvas_editor::{CodeEditor, measure_text_width};
 
 impl CodeEditor {

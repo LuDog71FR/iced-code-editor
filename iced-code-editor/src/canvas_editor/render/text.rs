@@ -14,7 +14,7 @@ use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
 use crate::buffer::text_utils::char_range_to_byte_range;
 
 use super::wrapping::VisualLine;
-use crate::canvas_editor::bracket_match;
+use crate::canvas_editor::features::bracket_match;
 use crate::canvas_editor::{
     CodeEditor, HighlightCache, TAB_WIDTH, measure_char_width,
     measure_text_width,

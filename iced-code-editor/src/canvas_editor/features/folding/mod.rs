@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use crate::buffer::TextBuffer;
 
-use super::TAB_WIDTH;
+use crate::canvas_editor::TAB_WIDTH;
 
 /// A region of the buffer that can be collapsed into a single header line.
 ///

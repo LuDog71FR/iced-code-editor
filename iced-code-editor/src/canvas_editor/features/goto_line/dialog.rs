@@ -6,8 +6,8 @@ use iced::widget::{Space, Stack, button, container, row, text, text_input};
 use iced::{Element, Event, Length, Rectangle, Renderer, Theme, keyboard};
 use iced_font_awesome::fa_icon_solid;
 
-use super::Message;
-use super::goto_line::GotoLineState;
+use super::GotoLineState;
+use crate::canvas_editor::Message;
 
 /// Transparent top layer that lets Escape close the dialog before the focused
 /// text input consumes the key to merely unfocus itself.
