@@ -4,10 +4,10 @@
 use iced::Point;
 use iced::widget::canvas;
 
-use super::folding;
 use super::text::RenderContext;
 use super::wrapping::VisualLine;
-use super::{CodeEditor, measure_text_width};
+use crate::canvas_editor::folding;
+use crate::canvas_editor::{CodeEditor, measure_text_width};
 
 impl CodeEditor {
     /// Draws line numbers and wrap indicators in the gutter area.

@@ -7,7 +7,11 @@ use iced::{Color, Point, Rectangle, Size};
 
 use super::text::{RenderContext, calculate_segment_geometry};
 use super::wrapping::{VisualLine, WrappingCalculator};
-use super::{CodeEditor, measure_char_width, measure_text_width};
+use crate::canvas_editor::vim::VimMode;
+use crate::canvas_editor::{
+    CodeEditor, measure_char_width, measure_text_width,
+};
+use crate::canvas_editor::{bracket_match, search};
 
 impl CodeEditor {
     /// Draws the background highlight for the current line.
@@ -116,7 +120,7 @@ impl CodeEditor {
 
             // Optimization: Use get_visible_match_range to find matches in view
             // This uses binary search + early termination for O(log N) performance
-            let match_range = super::search::get_visible_match_range(
+            let match_range = search::get_visible_match_range(
                 &self.search_state.matches,
                 min_logical_line,
                 max_logical_line,
@@ -334,12 +338,10 @@ impl CodeEditor {
             return;
         }
 
-        let Some((bracket_pos, match_pos)) =
-            super::bracket_match::find_matching_pair(
-                &self.buffer,
-                self.cursors.primary_position(),
-            )
-        else {
+        let Some((bracket_pos, match_pos)) = bracket_match::find_matching_pair(
+            &self.buffer,
+            self.cursors.primary_position(),
+        ) else {
             return;
         };
 
@@ -562,7 +564,7 @@ impl CodeEditor {
     /// an empty line or end-of-line position uses one narrow character width.
     fn cursor_size_for_position(&self, position: (usize, usize)) -> Size {
         let uses_block =
-            self.vim_enabled && self.vim_state.mode() != super::VimMode::Insert;
+            self.vim_enabled && self.vim_state.mode() != VimMode::Insert;
         let width = if uses_block {
             self.buffer
                 .line(position.0)

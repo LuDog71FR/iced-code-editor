@@ -14,7 +14,11 @@ use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
 use crate::buffer::text_utils::char_range_to_byte_range;
 
 use super::wrapping::VisualLine;
-use super::{CodeEditor, measure_text_width};
+use crate::canvas_editor::bracket_match;
+use crate::canvas_editor::{
+    CodeEditor, HighlightCache, TAB_WIDTH, measure_char_width,
+    measure_text_width,
+};
 
 /// Computes geometry (x start and width) for a text segment used in rendering or highlighting.
 ///
@@ -57,7 +61,7 @@ pub(super) fn calculate_segment_geometry(
             break;
         }
 
-        let w = super::measure_char_width(c, full_char_width, char_width);
+        let w = measure_char_width(c, full_char_width, char_width);
 
         if i >= visual_start_col && i < segment_start_col {
             prefix_width += w;
@@ -258,7 +262,7 @@ impl CodeEditor {
         let needs_reset =
             guard.as_ref().is_none_or(|cache| cache.syntax() != self.syntax);
         if needs_reset {
-            *guard = Some(super::HighlightCache::new(self.syntax.clone()));
+            *guard = Some(HighlightCache::new(self.syntax.clone()));
         }
 
         let Some(cache) = guard.as_mut() else {
@@ -409,9 +413,9 @@ impl CodeEditor {
 
                     let segment_text = &text[start_byte..end_byte];
                     let display_text = if self.show_whitespace {
-                        expand_tabs_visible(segment_text, super::TAB_WIDTH)
+                        expand_tabs_visible(segment_text, TAB_WIDTH)
                     } else {
-                        expand_tabs(segment_text, super::TAB_WIDTH).into_owned()
+                        expand_tabs(segment_text, TAB_WIDTH).into_owned()
                     };
                     let display_width = measure_text_width(
                         &display_text,
@@ -468,9 +472,9 @@ impl CodeEditor {
             );
             let line_segment = &full_line_content[start_byte..end_byte];
             let display_text = if self.show_whitespace {
-                expand_tabs_visible(line_segment, super::TAB_WIDTH)
+                expand_tabs_visible(line_segment, TAB_WIDTH)
             } else {
-                expand_tabs(line_segment, super::TAB_WIDTH).into_owned()
+                expand_tabs(line_segment, TAB_WIDTH).into_owned()
             };
             let base_x = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset;
             if self.show_whitespace {
@@ -511,7 +515,7 @@ impl CodeEditor {
     ///
     /// Each `( ) [ ] { }` character on the line is redrawn on top of the
     /// already-rendered syntax-highlighted text, colored by its nesting
-    /// depth (see [`super::bracket_match::bracket_depth_indices`]) so a
+    /// depth (see [`bracket_match::bracket_depth_indices`]) so a
     /// matching pair always shares the same color, cycling through
     /// [`BRACKET_PAIR_COLORS`] as depth increases. No-op when the feature is
     /// disabled.
@@ -540,10 +544,8 @@ impl CodeEditor {
             .depth_at_line_start(&self.buffer, logical_line);
 
         let line_content = self.buffer.line(logical_line);
-        let indices = super::bracket_match::bracket_depth_indices(
-            line_content,
-            start_depth,
-        );
+        let indices =
+            bracket_match::bracket_depth_indices(line_content, start_depth);
 
         for (col, depth) in indices {
             if col < visual_line.start_col || col >= visual_line.end_col {
@@ -858,7 +860,7 @@ mod tests {
                 .highlight_cache
                 .borrow()
                 .as_ref()
-                .map(super::super::HighlightCache::valid_len),
+                .map(super::HighlightCache::valid_len),
             Some(2)
         );
         assert_eq!(editor.highlight_lines_remaining.get(), 0);

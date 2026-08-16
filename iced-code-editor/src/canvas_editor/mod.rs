@@ -25,6 +25,7 @@ use crate::buffer::TextBuffer;
 use crate::i18n::Translations;
 use crate::theme::Style;
 pub use history::CommandHistory;
+use render::wrapping;
 
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
@@ -37,7 +38,6 @@ static FOCUSED_EDITOR_ID: AtomicU64 = AtomicU64::new(0);
 
 // Re-export submodules
 mod bracket_match;
-mod canvas_impl;
 mod clipboard;
 pub mod command;
 mod context_menu;
@@ -47,21 +47,17 @@ mod events;
 pub mod folding;
 mod goto_line;
 mod goto_line_dialog;
-mod gutter;
 pub mod history;
 pub mod ime_requester;
 pub mod lsp;
-mod overlays;
+mod render;
 mod search;
 mod search_dialog;
 mod search_update;
 mod selection;
-mod text;
 mod update;
-mod view;
 mod vim;
 mod vim_update;
-mod wrapping;
 
 pub use context_menu::{ContextMenuEntry, ContextMenuItem};
 pub use vim::VimMode;
@@ -75,9 +71,9 @@ pub use vim::VimMode;
 #[cfg(feature = "bench")]
 pub mod bench_support {
     pub use super::folding::compute_foldable_regions;
+    pub use super::render::text::highlight_line_spans;
+    pub use super::render::wrapping::WrappingCalculator;
     pub use super::search::find_matches;
-    pub use super::text::highlight_line_spans;
-    pub use super::wrapping::WrappingCalculator;
     pub use crate::buffer::TextBuffer;
 
     /// Stateful harness for measuring the normal localized typing path.

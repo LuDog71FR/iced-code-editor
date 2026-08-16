@@ -9,12 +9,12 @@ use iced::widget::{
 use iced::{Background, Border, Color, Element, Length, Rectangle, Shadow};
 use iced_aw::ContextMenu;
 
-use super::context_menu;
-use super::goto_line_dialog;
-use super::ime_requester::ImeRequester;
-use super::search_dialog;
 use super::wrapping::{self, WrappingCalculator};
-use super::{CodeEditor, GUTTER_WIDTH, Message};
+use crate::canvas_editor::ime_requester::ImeRequester;
+use crate::canvas_editor::{
+    CodeEditor, GUTTER_WIDTH, Message, context_menu, goto_line_dialog,
+    scrollable_rail, search_dialog,
+};
 use std::rc::Rc;
 
 /// Builds the transparent-container scrollable style shared by the canvas
@@ -28,16 +28,8 @@ fn canvas_scrollbar_style(
             background: Some(Background::Color(Color::TRANSPARENT)),
             ..container::Style::default()
         },
-        vertical_rail: super::scrollable_rail(
-            scrollbar_bg,
-            scroller_color,
-            4.0,
-        ),
-        horizontal_rail: super::scrollable_rail(
-            scrollbar_bg,
-            scroller_color,
-            4.0,
-        ),
+        vertical_rail: scrollable_rail(scrollbar_bg, scroller_color, 4.0),
+        horizontal_rail: scrollable_rail(scrollbar_bg, scroller_color, 4.0),
         gap: None,
         auto_scroll: scrollable::AutoScroll {
             background: Color::TRANSPARENT.into(),
@@ -273,7 +265,7 @@ impl CodeEditor {
                 .collect();
             let cursor_x = self.gutter_width()
                 + 5.0
-                + super::measure_text_width(
+                + crate::canvas_editor::measure_text_width(
                     &prefix_text,
                     self.full_char_width,
                     self.char_width,
@@ -461,7 +453,7 @@ mod tests {
             style.container.background,
             Some(Background::Color(Color::TRANSPARENT))
         );
-        let expected_rail = super::super::scrollable_rail(bg, scroller, 4.0);
+        let expected_rail = scrollable_rail(bg, scroller, 4.0);
         assert_eq!(style.vertical_rail.background, expected_rail.background);
         assert_eq!(style.horizontal_rail.background, expected_rail.background);
     }

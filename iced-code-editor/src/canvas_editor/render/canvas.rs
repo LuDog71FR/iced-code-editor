@@ -10,7 +10,7 @@ use syntect::parsing::SyntaxSet;
 
 use super::text::RenderContext;
 use super::wrapping::VisualLine;
-use super::{CodeEditor, Message};
+use crate::canvas_editor::{CodeEditor, HIGHLIGHT_LINES_PER_FRAME, Message};
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
 static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
@@ -79,8 +79,7 @@ impl canvas::Program<Message> for CodeEditor {
                 // Bound sequential syntect catch-up work for this frame. This
                 // keeps a deep jump or a cache truncation in a huge file from
                 // blocking the UI while parsing every preceding line.
-                self.highlight_lines_remaining
-                    .set(super::HIGHLIGHT_LINES_PER_FRAME);
+                self.highlight_lines_remaining.set(HIGHLIGHT_LINES_PER_FRAME);
 
                 // syntect initialization is relatively expensive; keep it global.
                 let syntax_set = SYNTAX_SET.get_or_init(|| {

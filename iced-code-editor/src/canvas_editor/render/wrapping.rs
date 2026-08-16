@@ -9,7 +9,7 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::ops::Range;
 
-use super::compare_floats;
+use crate::canvas_editor::{compare_floats, measure_char_width};
 
 /// Represents a visual line segment in the editor.
 ///
@@ -183,7 +183,7 @@ impl WrappingCalculator {
 
             for (i, c) in line_content.chars().enumerate() {
                 // Compute pixel width for the current character
-                let char_width = super::measure_char_width(
+                let char_width = measure_char_width(
                     c,
                     self.full_char_width,
                     self.char_width,
