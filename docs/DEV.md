@@ -31,9 +31,9 @@
    - [CJK and Asian Character Support](#cjk-and-asian-character-support)
 5. [Language Server Protocol (LSP) Support](#language-server-protocol-lsp-support)
    - [Architecture](#architecture-1)
-   - [Layer 1 — LspClient trait](#layer-1--lspclient-trait-canvas_editorlsprs)
-   - [Layer 2 — LspProcessClient](#layer-2--lspprocessclient-canvas_editorlsp_processmodrs)
-   - [Layer 3 — LspOverlayState + view_lsp_overlay](#layer-3--lspoverlaystate--view_lsp_overlay-canvas_editorlsp_processoverlayrs)
+   - [Layer 1 — LspClient trait](#layer-1--lspclient-trait-canvas_editorlspmodrs)
+   - [Layer 2 — LspProcessClient](#layer-2--lspprocessclient-canvas_editorlspprocessmodrs)
+   - [Layer 3 — LspOverlayState + view_lsp_overlay](#layer-3--lspoverlaystate--view_lsp_overlay-canvas_editorlspprocessoverlayrs)
    - [Event flow](#event-flow)
 6. [Performance Considerations](#performance-considerations)
    - [Canvas Caching](#1-canvas-caching)
@@ -81,31 +81,71 @@ The widget follows a modular architecture with clear separation of concerns:
 ```
 iced-code-editor/
 ├── lib.rs                    # Public API and documentation
-├── text_buffer.rs            # Text storage and manipulation
 ├── theme.rs                  # Styling and theming system
 ├── i18n.rs                   # Internationalization (rust-i18n)
+├── buffer/                   # Text storage
+│   ├── mod.rs                 # Text buffer (line-based storage/manipulation)
+│   └── text_utils.rs          # UTF-8 char-offset <-> byte-offset helpers
 └── canvas_editor/            # Core editor implementation
-    ├── mod.rs                # Main editor struct, builder API, constants
-    ├── bracket_match.rs      # Matching bracket/quote detection + bracket-pair depth scanning
-    ├── canvas_impl.rs        # Canvas rendering (Iced Canvas trait)
-    ├── clipboard.rs          # Clipboard operations
-    ├── command.rs            # Command pattern for undo/redo
-    ├── cursor.rs             # Cursor movement logic
-    ├── cursor_set.rs         # Multi-cursor collection (Cursor / CursorSet)
-    ├── folding.rs            # Code folding (foldable region detection)
-    ├── history.rs            # Command history management
-    ├── ime_requester.rs      # IME bridge widget (CJK input)
-    ├── search.rs             # Search/replace state and matching
-    ├── search_dialog.rs      # Search/replace dialog UI
-    ├── selection.rs          # Text selection logic
-    ├── update.rs             # Message handling (Elm Architecture)
-    ├── view.rs               # UI view construction
-    ├── wrapping.rs           # Line wrapping (logical ↔ visual lines)
-    ├── lsp.rs                # LspClient trait + LSP data types
-    └── lsp_process/          # LSP subprocess client (feature: lsp-process)
-        ├── mod.rs            # LspProcessClient (stdio JSON-RPC)
-        ├── config.rs         # Per-server configuration
-        └── overlay.rs        # Hover / completion overlay UI
+    ├── mod.rs                # CodeEditor struct, Message enum, new()/reset()
+    ├── metrics.rs             # Font/char/line/viewport dimension constants + methods
+    ├── caches.rs              # Visual-line, highlight, bracket-depth, max-width caches
+    ├── config.rs              # Builder-style set_*/with_*/getter configuration methods
+    ├── focus.rs                # Editor focus management
+    ├── bench_support.rs       # Criterion benchmark harness (feature: bench)
+    ├── editing/               # Cursor, selection, clipboard, undo/redo
+    │   ├── mod.rs
+    │   ├── cursor.rs           # Cursor movement/positioning logic
+    │   ├── cursor_set.rs       # Multi-cursor collection (Cursor / CursorSet)
+    │   ├── selection.rs        # Text selection logic
+    │   ├── clipboard.rs        # Clipboard operations
+    │   ├── history.rs          # Command history management
+    │   └── command/            # Command pattern for undo/redo
+    │       ├── mod.rs
+    │       ├── edit.rs          # Char/newline/range editing commands
+    │       ├── composite.rs     # Composite/replace commands
+    │       ├── lines.rs         # Move/duplicate line commands
+    │       └── comment.rs       # Line-comment toggle command
+    ├── input/                 # Event routing and Message dispatch
+    │   ├── mod.rs
+    │   ├── events.rs           # Keyboard/mouse/IME event handling
+    │   ├── ime_requester.rs    # IME bridge widget (CJK input)
+    │   └── update/             # Message handling (Elm Architecture), one file per group
+    │       ├── mod.rs           # Cursor-adjustment helpers + shared finish_* methods
+    │       └── dispatch.rs       # Top-level `pub fn update()` message match
+    ├── render/                 # Rendering
+    │   ├── mod.rs
+    │   ├── canvas.rs            # canvas::Program trait implementation
+    │   ├── text.rs              # Syntax highlighting, tab/whitespace expansion
+    │   ├── gutter.rs            # Line numbers, wrap indicators, fold chevrons
+    │   ├── overlays.rs          # Selection/cursor/search highlight drawing
+    │   ├── wrapping.rs          # Line wrapping (logical ↔ visual lines)
+    │   └── view.rs              # Iced UI view construction
+    ├── features/                # Optional editor features
+    │   ├── mod.rs
+    │   ├── bracket_match.rs      # Matching bracket/quote detection + depth scanning
+    │   ├── context_menu.rs       # Right-click context menu
+    │   ├── folding/              # Code folding
+    │   │   ├── mod.rs             # Foldable-region detection (pure logic)
+    │   │   └── ops.rs             # Fold/unfold operations on CodeEditor
+    │   ├── goto_line/            # Go-to-line dialog
+    │   │   ├── mod.rs
+    │   │   ├── dialog.rs
+    │   │   └── update.rs
+    │   ├── search/                # Search/replace
+    │   │   ├── mod.rs             # Search state and matching
+    │   │   ├── dialog.rs          # Search/replace dialog UI
+    │   │   └── update.rs
+    │   └── vim/                   # Vim emulation
+    │       ├── mod.rs
+    │       └── update.rs
+    └── lsp/                      # LSP integration
+        ├── mod.rs                 # LspClient trait + LSP data types
+        ├── sync.rs                # Buffer <-> LSP document synchronization
+        └── process/               # LSP subprocess client (feature: lsp-process)
+            ├── mod.rs              # LspProcessClient (stdio JSON-RPC)
+            ├── config.rs           # Per-server configuration
+            └── overlay.rs          # Hover / completion overlay UI
 ```
 
 ### Core Components
@@ -151,7 +191,7 @@ pub struct CodeEditor {
 - Derived layout (wrapping, highlighting) is memoized in `RefCell` caches keyed
   by monotonic revision counters (`buffer_revision`, `fold_revision`)
 
-#### 2. **TextBuffer** (`text_buffer.rs`)
+#### 2. **TextBuffer** (`buffer/mod.rs`)
 
 A line-based text storage optimized for editor operations:
 
@@ -233,7 +273,7 @@ All native Iced themes are automatically supported:
 
 ### 1. Command Pattern (Undo/Redo)
 
-**Location:** `canvas_editor/command.rs`, `canvas_editor/history.rs`
+**Location:** `canvas_editor/editing/command/`, `canvas_editor/editing/history.rs`
 
 The undo/redo system uses the Command pattern to make all text modifications reversible.
 
@@ -272,7 +312,7 @@ history.end_group();  // Now undoable as single operation
 
 ### 2. Elm Architecture (Message-Update-View)
 
-**Location:** `canvas_editor/update.rs`, `canvas_editor/view.rs`
+**Location:** `canvas_editor/input/update/`, `canvas_editor/render/view.rs`
 
 The widget follows Iced's Elm-inspired architecture:
 
@@ -314,7 +354,7 @@ This follows the **Single Responsibility Principle** and makes the codebase main
 
 ### 4. Canvas-Based Rendering
 
-**Location:** `canvas_editor/canvas_impl.rs`
+**Location:** `canvas_editor/render/canvas.rs`
 
 Instead of using Iced's high-level text widgets, we use the Canvas API for maximum performance:
 
@@ -353,7 +393,7 @@ self.overlay_cache.clear();  // cursor / selection / search changed
 
 ### 5. Interior Mutability for History
 
-**Location:** `canvas_editor/history.rs`
+**Location:** `canvas_editor/editing/history.rs`
 
 The `CommandHistory` uses `Arc<Mutex<>>` for interior mutability:
 
@@ -423,7 +463,7 @@ for line_idx in first_visible_line..last_visible_line {
 
 ### Multi-Cursor Editing
 
-**Location:** `canvas_editor/cursor_set.rs`
+**Location:** `canvas_editor/editing/cursor_set.rs`
 
 The editor supports multiple simultaneous cursors. State lives in a `CursorSet`,
 an ordered, deduplicated collection that always contains at least one cursor — the
@@ -457,11 +497,11 @@ pub struct CursorSet {
   it primary (e.g. Alt+Click, "add cursor at next match").
 - `remove_all_but_primary()` restores single-cursor mode (Esc).
 - Text commands are applied at every cursor; `get_selection_range()` in
-  `selection.rs` delegates to the primary cursor (see [Selection Direction](#4-selection-direction)).
+  `editing/selection.rs` delegates to the primary cursor (see [Selection Direction](#4-selection-direction)).
 
 ### Line Wrapping (Visual Lines)
 
-**Location:** `canvas_editor/wrapping.rs`
+**Location:** `canvas_editor/render/wrapping.rs`
 
 When wrapping is enabled, a single **logical line** (as stored in the buffer) may be
 displayed as several **visual lines**. All rendering, scrolling and cursor math
@@ -491,7 +531,7 @@ recomputed when one of those inputs changes.
 
 ### Code Folding
 
-**Location:** `canvas_editor/folding.rs` (logic), `canvas_editor/mod.rs` (state)
+**Location:** `canvas_editor/features/folding/mod.rs` (region detection), `canvas_editor/features/folding/ops.rs` (fold/unfold operations), `canvas_editor/mod.rs` (state fields)
 
 Folding lets the user collapse indented blocks. Detection is **indentation-based**
 and therefore language-agnostic: a line is a fold header when the next non-blank line
@@ -521,7 +561,7 @@ pub fn hidden_lines(regions: &[FoldRegion], collapsed: &HashSet<usize>) -> HashS
 
 ### Search and Replace
 
-**Location:** `canvas_editor/search.rs` (state/matching), `canvas_editor/search_dialog.rs` (UI)
+**Location:** `canvas_editor/features/search/mod.rs` (state/matching), `canvas_editor/features/search/dialog.rs` (UI)
 
 A built-in find/replace dialog, gated by `search_replace_enabled`.
 
@@ -551,7 +591,7 @@ pub struct SearchState {
 
 ### Auto-Indentation
 
-**Location:** `canvas_editor/mod.rs`, `canvas_editor/update.rs`
+**Location:** `canvas_editor/config.rs` (toggle/style), `canvas_editor/input/update/text_input.rs` (indent-copy logic)
 
 When `auto_indent_enabled` is set, pressing Enter copies the leading whitespace of the
 current line onto the new line. The inserted whitespace itself follows the configured
@@ -572,7 +612,7 @@ the behaviour. Tab width for display/folding is governed by the `TAB_WIDTH` cons
 
 ### Auto-Closing Brackets/Quotes
 
-**Location:** `canvas_editor/update.rs` (logic), `canvas_editor/mod.rs` (toggle field)
+**Location:** `canvas_editor/input/update/text_input.rs` (logic), `canvas_editor/config.rs` (toggle)
 
 When `auto_close_brackets` is set, `handle_character_input_msg()` branches on the typed
 character before falling back to a plain `InsertCharCommand`:
@@ -615,7 +655,7 @@ toolbar checkbox next to "Auto-indentation".
 
 ### Matching Bracket/Quote Highlight
 
-**Location:** `canvas_editor/bracket_match.rs` (detection), `canvas_editor/canvas_impl.rs` (overlay draw), `canvas_editor/mod.rs` (toggle field)
+**Location:** `canvas_editor/features/bracket_match.rs` (detection), `canvas_editor/render/overlays.rs` (overlay draw), `canvas_editor/config.rs` (toggle)
 
 When `bracket_match_highlight_enabled` is set, `draw_matching_bracket_highlight()` calls
 `find_matching_pair()` with the primary cursor's position on every overlay redraw:
@@ -654,8 +694,8 @@ cursor move); the demo app exposes it as a toolbar checkbox next to "Show whites
 
 ### Bracket-Pair Colorization
 
-**Location:** `canvas_editor/bracket_match.rs` (depth logic), `canvas_editor/mod.rs`
-(`BracketDepthCache`, toggle field), `canvas_editor/canvas_impl.rs` (draw pass, palette)
+**Location:** `canvas_editor/features/bracket_match.rs` (depth logic), `canvas_editor/caches.rs`
+(`BracketDepthCache`), `canvas_editor/config.rs` (toggle), `canvas_editor/render/text.rs` (draw pass, palette)
 
 Unlike [Matching Bracket/Quote Highlight](#matching-bracketquote-highlight), which
 only reacts to the cursor, this feature colors **every** `( ) [ ] { }` in the visible
@@ -747,7 +787,7 @@ Message::Tick => {
 
 ### Focus Management
 
-**Location:** `canvas_editor/mod.rs`, `canvas_editor/update.rs`, `canvas_editor/canvas_impl.rs`
+**Location:** `canvas_editor/focus.rs` (request/query/lose focus), `canvas_editor/input/events.rs` (`has_focus()`, keyboard gating), `canvas_editor/mod.rs` (statics, `editor_id` field)
 
 When multiple `CodeEditor` instances exist, only one should receive keyboard input and display a cursor. The focus system uses global atomic counters for coordination.
 
@@ -908,7 +948,7 @@ settings:
 
 ### CJK and Asian Character Support
 
-**Location:** `canvas_editor/mod.rs`, `canvas_editor/ime_requester.rs`, `canvas_editor/canvas_impl.rs`
+**Location:** `canvas_editor/metrics.rs`, `canvas_editor/input/ime_requester.rs`, `canvas_editor/render/canvas.rs`
 
 CJK characters (Chinese, Japanese, Korean) are "wide" characters that occupy twice the width of ASCII/Latin characters in monospace fonts. The editor must handle mixed-width text correctly for accurate cursor positioning, text selection, and rendering.
 
@@ -928,7 +968,7 @@ pub struct CodeEditor {
 }
 ```
 
-**Width calculation** (`canvas_editor/mod.rs:398-435`):
+**Width calculation** (`canvas_editor/metrics.rs`):
 
 ```rust
 fn recalculate_char_dimensions(&mut self, renderer: &Renderer) {
@@ -958,7 +998,7 @@ fn recalculate_char_dimensions(&mut self, renderer: &Renderer) {
 
 **Integration:** Uses `unicode_width` crate (implements Unicode Standard Annex #11 - East Asian Width)
 
-The `measure_char_width()` function classifies characters and returns appropriate width (`canvas_editor/mod.rs:61-96`):
+The `measure_char_width()` function classifies characters and returns appropriate width (`canvas_editor/metrics.rs`):
 
 ```rust
 pub(crate) fn measure_char_width(
@@ -1000,7 +1040,7 @@ This approach provides O(n) accurate width calculation for any string containing
 
 #### IME (Input Method Editor) Support
 
-**Location:** `canvas_editor/ime_requester.rs`
+**Location:** `canvas_editor/input/ime_requester.rs`
 
 Asian languages require IME for input because they have thousands of characters that cannot be directly typed. The editor includes full IME support through the `ImeRequester` widget.
 
@@ -1059,7 +1099,7 @@ IME candidate window positioning must use fresh cursor coordinates on every fram
 
 Character widths are critical for correct visual rendering throughout the editor.
 
-**Cursor positioning** (`canvas_editor/mod.rs`):
+**Cursor positioning** (`canvas_editor/editing/cursor.rs`):
 
 When clicking with the mouse, `measure_text_width()` determines which character the cursor should be placed at:
 
@@ -1075,7 +1115,7 @@ for (char_index, c) in line_text.chars().enumerate() {
 }
 ```
 
-**Selection rendering** (`canvas_editor/canvas_impl.rs:293-297`):
+**Selection rendering** (`canvas_editor/render/text.rs`):
 
 When rendering selections and syntax highlighting, x-offset is calculated using accurate character widths:
 
@@ -1113,7 +1153,7 @@ All text operations properly handle UTF-8 character boundaries to prevent panics
 
 **Feature gate:** `lsp-process` (not available on WASM)
 
-**Location:** `canvas_editor/lsp.rs`, `canvas_editor/lsp_process/`
+**Location:** `canvas_editor/lsp/mod.rs`, `canvas_editor/lsp/process/`
 
 ### Architecture
 
@@ -1135,13 +1175,13 @@ The LSP integration is split into three layers:
 │  │ (trait)      │  │ + view_lsp_overlay()        │  │
 │  └──────┬───────┘  └────────────────────────────┘  │
 │  ┌──────▼───────┐                                   │
-│  │LspProcessClient│ (lsp_process/mod.rs)            │
+│  │LspProcessClient│ (lsp/process/mod.rs)            │
 │  │ stdio subprocess│                                │
 │  └──────────────┘                                   │
 └─────────────────────────────────────────────────────┘
 ```
 
-### Layer 1 — `LspClient` trait (`canvas_editor/lsp.rs`)
+### Layer 1 — `LspClient` trait (`canvas_editor/lsp/mod.rs`)
 
 The `LspClient` trait decouples the editor from any particular LSP transport:
 
@@ -1159,7 +1199,7 @@ pub trait LspClient {
 
 `CodeEditor` holds an `Option<Box<dyn LspClient>>` and calls the trait methods automatically when the document changes or the user requests hover/completion.
 
-### Layer 2 — `LspProcessClient` (`canvas_editor/lsp_process/mod.rs`)
+### Layer 2 — `LspProcessClient` (`canvas_editor/lsp/process/mod.rs`)
 
 The concrete implementation communicates with an LSP server subprocess via **stdin/stdout** using the JSON-RPC framing of the Language Server Protocol:
 
@@ -1181,11 +1221,11 @@ pub enum LspEvent {
 }
 ```
 
-Server configurations (command, arguments, language IDs) live in `lsp_process/config.rs` and are keyed by a short string such as `"lua-language-server"` or `"rust-analyzer"`.
+Server configurations (command, arguments, language IDs) live in `lsp/process/config.rs` and are keyed by a short string such as `"lua-language-server"` or `"rust-analyzer"`.
 
 **UTF-16 conversion:** LSP uses UTF-16 character offsets while the editor works in UTF-8. `TextModel` inside `LspProcessClient` mirrors the document content and converts positions before every request.
 
-### Layer 3 — `LspOverlayState` + `view_lsp_overlay` (`canvas_editor/lsp_process/overlay.rs`)
+### Layer 3 — `LspOverlayState` + `view_lsp_overlay` (`canvas_editor/lsp/process/overlay.rs`)
 
 All display-related state is aggregated in `LspOverlayState`:
 
@@ -1355,11 +1395,11 @@ mod tests {
 
 **Coverage:**
 
-- `text_buffer.rs`: All buffer operations
-- `command.rs`: All command types and undo/redo
-- `cursor.rs`: Cursor movement edge cases
-- `selection.rs`: Selection normalization and extraction
-- `update.rs`: Message handling and state transitions
+- `buffer/mod.rs`: All buffer operations
+- `editing/command/`: All command types and undo/redo
+- `editing/cursor.rs`: Cursor movement edge cases
+- `editing/selection.rs`: Selection normalization and extraction
+- `input/update/`: Message handling and state transitions
 - `theme.rs`: All Iced themes, color adaptation, helper functions
 
 ### Integration Tests
@@ -1398,7 +1438,7 @@ Performance-critical hot paths are benchmarked with [criterion](https://github.c
 | `compute_foldable_regions_10k` | Fold-region detection |
 | `find_matches_10k` | Search across the buffer |
 
-**Feature gate:** These functions are internal, so they are exposed to the benchmark crate through the hidden `bench_support` module (`canvas_editor/mod.rs`, re-exported from `lib.rs`). Both the module and the `[[bench]]` target are gated behind the `bench` feature (`required-features = ["bench"]`), so the benchmarks are invisible to normal builds and to the public API.
+**Feature gate:** These functions are internal, so they are exposed to the benchmark crate through the hidden `bench_support` module (`canvas_editor/bench_support.rs`, re-exported from `lib.rs`). Both the module and the `[[bench]]` target are gated behind the `bench` feature (`required-features = ["bench"]`), so the benchmarks are invisible to normal builds and to the public API.
 
 **Running:**
 
