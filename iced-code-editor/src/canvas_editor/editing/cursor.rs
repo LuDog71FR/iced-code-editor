@@ -9,12 +9,13 @@ use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
-use super::measure_text_width;
-
-use super::vim::VimMotion;
-use super::wrapping::{VisualLine, WrappingCalculator};
-use super::{ArrowDirection, CodeEditor, Message, cursor_set};
+use super::cursor_set;
 use crate::buffer::TextBuffer;
+use crate::canvas_editor::render::wrapping::{VisualLine, WrappingCalculator};
+use crate::canvas_editor::vim::VimMotion;
+use crate::canvas_editor::{
+    ArrowDirection, CodeEditor, Message, measure_char_width, measure_text_width,
+};
 
 /// Computes the next logical `(line, col)` position for a cursor at `pos` moving in `direction`.
 ///
@@ -462,11 +463,8 @@ impl CodeEditor {
             .skip(visual_line.start_col)
             .take(visual_line.end_col - visual_line.start_col)
         {
-            let char_width = super::measure_char_width(
-                c,
-                self.full_char_width,
-                self.char_width,
-            );
+            let char_width =
+                measure_char_width(c, self.full_char_width, self.char_width);
 
             if current_width + char_width / 2.0 > x_in_text {
                 break;

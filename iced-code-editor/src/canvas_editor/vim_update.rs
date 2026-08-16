@@ -3,12 +3,14 @@
 
 use iced::Task;
 
-use super::command::{Command, DeleteRangeCommand, InsertTextCommand};
 use super::vim::{
     VimAction, VimInsertPosition, VimMotion, VimOperator, VimPastePosition,
     VimRegister, VimRegisterKind,
 };
 use super::{CodeEditor, Message, VimMode};
+use crate::canvas_editor::editing::command::{
+    Command, DeleteRangeCommand, InsertTextCommand,
+};
 
 impl CodeEditor {
     /// Dispatches a parsed Vim key action to the corresponding handler.

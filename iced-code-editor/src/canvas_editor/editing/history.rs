@@ -459,7 +459,7 @@ impl Default for CommandHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::canvas_editor::command::InsertCharCommand;
+    use crate::canvas_editor::editing::command::InsertCharCommand;
 
     #[test]
     fn test_new_history() {

@@ -2,7 +2,7 @@
 
 use iced::Task;
 
-use crate::canvas_editor::command::{
+use crate::canvas_editor::editing::command::{
     Command, DuplicateLinesCommand, MoveLinesCommand, ToggleCommentCommand,
     line_comment_token,
 };

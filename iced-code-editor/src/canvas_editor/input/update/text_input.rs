@@ -3,7 +3,7 @@
 use iced::Task;
 
 use super::{EditType, adjust_other_cursors};
-use crate::canvas_editor::command::{
+use crate::canvas_editor::editing::command::{
     Command, InsertCharCommand, InsertNewlineCommand,
 };
 use crate::canvas_editor::{CodeEditor, IndentStyle, Message};

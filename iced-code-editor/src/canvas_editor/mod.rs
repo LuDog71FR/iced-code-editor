@@ -24,7 +24,8 @@ use unicode_width::UnicodeWidthChar;
 use crate::buffer::TextBuffer;
 use crate::i18n::Translations;
 use crate::theme::Style;
-pub use history::CommandHistory;
+use editing::cursor_set;
+pub use editing::history::CommandHistory;
 use render::wrapping;
 
 #[cfg(target_arch = "wasm32")]
@@ -38,22 +39,17 @@ static FOCUSED_EDITOR_ID: AtomicU64 = AtomicU64::new(0);
 
 // Re-export submodules
 mod bracket_match;
-mod clipboard;
-pub mod command;
 mod context_menu;
-mod cursor;
-pub(crate) mod cursor_set;
+mod editing;
 pub mod folding;
 mod goto_line;
 mod goto_line_dialog;
-pub mod history;
 mod input;
 pub mod lsp;
 mod render;
 mod search;
 mod search_dialog;
 mod search_update;
-mod selection;
 mod vim;
 mod vim_update;
 

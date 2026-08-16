@@ -4,7 +4,7 @@ use iced::Task;
 
 use super::command::{Command, DeleteRangeCommand, InsertTextCommand};
 use super::cursor_set::Cursor;
-use super::{CodeEditor, Message};
+use crate::canvas_editor::{CodeEditor, Message};
 
 // =========================================================================
 // Position adjustment helpers (private to this module)

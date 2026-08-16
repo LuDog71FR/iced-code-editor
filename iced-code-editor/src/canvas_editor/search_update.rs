@@ -3,8 +3,10 @@
 use iced::Task;
 use iced::widget::operation::{focus, select_all};
 
-use super::command::{Command, CompositeCommand, ReplaceTextCommand};
 use super::{CodeEditor, Message};
+use crate::canvas_editor::editing::command::{
+    Command, CompositeCommand, ReplaceTextCommand,
+};
 
 impl CodeEditor {
     /// Handles opening the search dialog.
