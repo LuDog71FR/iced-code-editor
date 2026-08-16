@@ -25,7 +25,7 @@ use iced_code_editor::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
@@ -1173,6 +1173,32 @@ greet("World")
         Task::none()
     }
 
+    /// Returns `true` if `path` lies within the current working directory.
+    ///
+    /// `Definition` responses used for jump-to-file come from the language
+    /// server process, which is untrusted input: a malicious or compromised
+    /// server could otherwise point [`Message::JumpToFile`] at any
+    /// filesystem-readable path (e.g. an SSH private key). Confining jump
+    /// targets to the workspace root prevents that.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let cwd = std::env::current_dir().unwrap();
+    /// assert!(DemoApp::is_lsp_jump_target_allowed(&cwd.join("src/main.rs")));
+    /// assert!(!DemoApp::is_lsp_jump_target_allowed(Path::new("/etc/passwd")));
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    fn is_lsp_jump_target_allowed(path: &Path) -> bool {
+        let Ok(cwd) = std::env::current_dir() else {
+            return false;
+        };
+        let root = cwd.canonicalize().unwrap_or(cwd);
+        let candidate =
+            path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        candidate.starts_with(&root)
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn handle_jump_to_file(
         &mut self,
@@ -1180,6 +1206,17 @@ greet("World")
         line: usize,
         col: usize,
     ) -> Task<Message> {
+        if !Self::is_lsp_jump_target_allowed(&path) {
+            self.log(
+                "WARN",
+                &format!(
+                    "Ignored LSP jump-to-definition outside workspace: {}",
+                    path.display()
+                ),
+            );
+            return Task::none();
+        }
+
         // Check if file is already open
         if let Some(tab) =
             self.tabs.iter().find(|t| t.file_path.as_ref() == Some(&path))
@@ -1623,6 +1660,17 @@ mod tests {
         // configured_editor never touches reveal-in-file-manager; that is
         // decided by open_content_in_tab based on the path.
         assert!(!editor.reveal_in_file_manager_enabled());
+    }
+
+    #[test]
+    fn test_is_lsp_jump_target_allowed_confines_to_workspace_root() {
+        // `current_dir()` is expected to be available in the test runner;
+        // skip rather than fail hard if the sandbox lacks it.
+        let Ok(cwd) = std::env::current_dir() else {
+            return;
+        };
+        assert!(DemoApp::is_lsp_jump_target_allowed(&cwd.join("Cargo.toml")));
+        assert!(!DemoApp::is_lsp_jump_target_allowed(Path::new("/etc/passwd")));
     }
 
     #[test]

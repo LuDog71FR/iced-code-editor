@@ -134,6 +134,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `DeleteRangeCommand` removed a range by calling `delete_forward` once per character, and its `undo` re-inserted the deleted text one character at a time; each call re-scanned the current line, so a large Select All + Delete (or its undo) in a big file could visibly hang the UI
   - Both directions now splice whole lines in bulk (truncate/merge the boundary lines with `replace_range`, drop or reinsert the fully-consumed lines with `remove_line`/`insert_line`), turning the cost into O(text touched + lines affected) instead of O(n²)
 
+- fix: **LSP "go to definition" could open any file readable by the process, at the language server's request** (demo app)
+  - The `Definition` response's target URI comes straight from the language server process, which is untrusted input; a malicious or compromised server could answer a jump request with a path like `~/.ssh/id_ed25519` and the demo would read and display it without confirmation
+  - Jump targets are now confined to the current workspace root: `handle_jump_to_file` rejects (and logs) any path that does not canonicalize to somewhere under the working directory
+
 ## [0.3.11] - 2026-08-03
 
 ### Added
