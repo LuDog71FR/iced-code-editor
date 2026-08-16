@@ -5,7 +5,9 @@
 //! - Efficient insertions and deletions
 //! - Memory-efficient storage
 
-use crate::text_utils::{char_range_to_byte_range, char_to_byte_index};
+use self::text_utils::{char_range_to_byte_range, char_to_byte_index};
+
+pub(crate) mod text_utils;
 
 /// The line-ending style a buffer was loaded with, and reproduces on
 /// [`TextBuffer::to_string`].

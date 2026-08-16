@@ -2,8 +2,8 @@
 
 use iced::Task;
 
+use crate::buffer::text_utils::char_to_byte_index;
 use crate::canvas_editor::{CodeEditor, Message, cursor_set};
-use crate::text_utils::char_to_byte_index;
 
 impl CodeEditor {
     /// Handles Alt+Click: adds a new cursor at the clicked position without

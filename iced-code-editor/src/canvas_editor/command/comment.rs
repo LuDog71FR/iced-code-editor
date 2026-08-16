@@ -1,7 +1,7 @@
 //! Line-comment toggling: mapping a syntax to its comment token and the
 //! indentation-aware command that comments/uncomments a line range.
 
-use crate::text_buffer::TextBuffer;
+use crate::buffer::TextBuffer;
 
 use super::Command;
 

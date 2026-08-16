@@ -4,7 +4,7 @@
 //! when line wrapping is enabled. It supports both viewport-based wrapping
 //! (dynamic) and fixed column wrapping.
 
-use crate::text_buffer::TextBuffer;
+use crate::buffer::TextBuffer;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::ops::Range;

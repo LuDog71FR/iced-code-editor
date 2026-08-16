@@ -21,8 +21,8 @@ use syntect::highlighting::HighlightState;
 use syntect::parsing::ParseState;
 use unicode_width::UnicodeWidthChar;
 
+use crate::buffer::TextBuffer;
 use crate::i18n::Translations;
-use crate::text_buffer::TextBuffer;
 use crate::theme::Style;
 pub use history::CommandHistory;
 
@@ -81,7 +81,7 @@ pub mod bench_support {
     pub use super::search::find_matches;
     pub use super::text::highlight_line_spans;
     pub use super::wrapping::WrappingCalculator;
-    pub use crate::text_buffer::TextBuffer;
+    pub use crate::buffer::TextBuffer;
 
     /// Stateful harness for measuring the normal localized typing path.
     pub struct IncrementalEditBenchmark {
@@ -3211,9 +3211,8 @@ mod tests {
         // Bump revision to simulate edit
         editor.buffer_revision = editor.buffer_revision.wrapping_add(1);
         // Update the buffer to reflect a longer line
-        editor.buffer = crate::text_buffer::TextBuffer::new(
-            "hello world with extra content",
-        );
+        editor.buffer =
+            crate::buffer::TextBuffer::new("hello world with extra content");
         let w3 = editor.max_content_width();
         assert!(
             w3 > w1,

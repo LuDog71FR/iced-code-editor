@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 
-use crate::text_buffer::TextBuffer;
+use crate::buffer::TextBuffer;
 
 use super::TAB_WIDTH;
 

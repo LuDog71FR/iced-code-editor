@@ -1,7 +1,7 @@
 //! Text selection logic.
 
 use super::CodeEditor;
-use crate::text_utils::{char_range_to_byte_range, char_to_byte_index};
+use crate::buffer::text_utils::{char_range_to_byte_range, char_to_byte_index};
 
 impl CodeEditor {
     /// Clears the current selection on all cursors.

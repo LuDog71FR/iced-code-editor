@@ -1,6 +1,6 @@
 //! Line-level commands: moving and duplicating contiguous ranges of lines.
 
-use crate::text_buffer::TextBuffer;
+use crate::buffer::TextBuffer;
 
 use super::Command;
 

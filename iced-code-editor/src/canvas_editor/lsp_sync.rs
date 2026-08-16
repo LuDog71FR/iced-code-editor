@@ -2,7 +2,7 @@
 //! tracking buffer edits as queued `didChange` notifications, and issuing
 //! hover/completion/definition requests.
 
-use crate::text_buffer::TextBuffer;
+use crate::buffer::TextBuffer;
 
 use super::CodeEditor;
 use super::lsp;

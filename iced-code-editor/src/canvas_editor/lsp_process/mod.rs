@@ -27,10 +27,10 @@ use self::config::{
     LspCommand, ensure_rust_analyzer_config, lsp_server_config,
     resolve_lsp_command,
 };
+use crate::buffer::text_utils::char_to_byte_index;
 use crate::canvas_editor::lsp::{
     LspClient, LspDocument, LspPosition, LspRange, LspTextChange,
 };
-use crate::text_utils::char_to_byte_index;
 use serde_json::json;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};

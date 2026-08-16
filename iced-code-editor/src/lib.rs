@@ -232,9 +232,8 @@
 // Initialize rust-i18n for the entire crate
 rust_i18n::i18n!("locales", fallback = "en");
 
+mod buffer;
 mod canvas_editor;
-mod text_buffer;
-mod text_utils;
 
 pub mod i18n;
 pub mod theme;

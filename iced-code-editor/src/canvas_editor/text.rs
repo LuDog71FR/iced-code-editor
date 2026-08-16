@@ -11,7 +11,7 @@ use syntect::highlighting::{
 };
 use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
 
-use crate::text_utils::char_range_to_byte_range;
+use crate::buffer::text_utils::char_range_to_byte_range;
 
 use super::wrapping::VisualLine;
 use super::{CodeEditor, measure_text_width};

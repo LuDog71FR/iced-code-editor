@@ -5,7 +5,7 @@
 //! - Multiple match detection
 //! - Position tracking for highlighting
 
-use crate::text_buffer::TextBuffer;
+use crate::buffer::TextBuffer;
 use iced::widget::Id;
 use std::borrow::Cow;
 use std::thread;

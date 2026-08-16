@@ -1,6 +1,6 @@
 //! Matching bracket/quote detection for the bracket-pair highlight overlay.
 
-use crate::text_buffer::TextBuffer;
+use crate::buffer::TextBuffer;
 
 /// Returns `true` if `ch` is one of the opening brackets `( [ {`.
 fn is_opening_bracket(ch: char) -> bool {

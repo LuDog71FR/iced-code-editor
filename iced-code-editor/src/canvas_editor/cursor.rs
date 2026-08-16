@@ -14,7 +14,7 @@ use super::measure_text_width;
 use super::vim::VimMotion;
 use super::wrapping::{VisualLine, WrappingCalculator};
 use super::{ArrowDirection, CodeEditor, Message, cursor_set};
-use crate::text_buffer::TextBuffer;
+use crate::buffer::TextBuffer;
 
 /// Computes the next logical `(line, col)` position for a cursor at `pos` moving in `direction`.
 ///

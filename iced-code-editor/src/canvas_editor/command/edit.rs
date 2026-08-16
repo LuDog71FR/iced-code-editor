@@ -1,7 +1,7 @@
 //! Single-buffer editing commands: character insertion/deletion, newline
 //! insertion, and range operations.
 
-use crate::text_buffer::TextBuffer;
+use crate::buffer::TextBuffer;
 
 use super::Command;
 

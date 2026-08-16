@@ -8,7 +8,7 @@
 //! [`lines`] for line-level moves/duplication, and [`comment`] for line-
 //! comment toggling.
 
-use crate::text_buffer::TextBuffer;
+use crate::buffer::TextBuffer;
 
 mod comment;
 mod composite;

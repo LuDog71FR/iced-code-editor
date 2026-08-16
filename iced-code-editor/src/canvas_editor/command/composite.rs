@@ -1,7 +1,7 @@
 //! Composite and search/replace commands: grouping multiple commands into
 //! one undo/redo step, and replacing a text range.
 
-use crate::text_buffer::TextBuffer;
+use crate::buffer::TextBuffer;
 
 use super::Command;
 

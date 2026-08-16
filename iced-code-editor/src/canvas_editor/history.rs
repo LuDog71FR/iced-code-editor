@@ -58,7 +58,7 @@
 #![allow(clippy::missing_panics_doc)]
 
 use super::command::{Command, CompositeCommand};
-use crate::text_buffer::TextBuffer;
+use crate::buffer::TextBuffer;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
