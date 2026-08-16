@@ -7,7 +7,7 @@ use crate::canvas_editor::{CodeEditor, Message, VimMode};
 impl CodeEditor {
     /// Synchronises the active search result with a manual primary-cursor
     /// position or selection.
-    pub(super) fn sync_search_match_from_primary_cursor(&mut self) {
+    pub(crate) fn sync_search_match_from_primary_cursor(&mut self) {
         if !self.search_matches_visible() || self.search_state.query.is_empty()
         {
             return;
@@ -32,7 +32,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
-    pub(super) fn handle_mouse_click_msg(
+    pub(crate) fn handle_mouse_click_msg(
         &mut self,
         point: iced::Point,
     ) -> Task<Message> {
@@ -72,7 +72,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
-    pub(super) fn handle_mouse_drag_msg(
+    pub(crate) fn handle_mouse_drag_msg(
         &mut self,
         point: iced::Point,
     ) -> Task<Message> {
@@ -93,7 +93,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
-    pub(super) fn handle_mouse_release_msg(&mut self) -> Task<Message> {
+    pub(crate) fn handle_mouse_release_msg(&mut self) -> Task<Message> {
         self.is_dragging = false;
         if self.vim_enabled {
             if self.cursors.primary().has_selection() {
@@ -124,7 +124,7 @@ impl CodeEditor {
     ///
     /// If the click lands outside any word (e.g. on whitespace), the
     /// selection is cleared and the caret is simply placed there.
-    pub(super) fn handle_double_click_msg(
+    pub(crate) fn handle_double_click_msg(
         &mut self,
         point: iced::Point,
     ) -> Task<Message> {
@@ -154,7 +154,7 @@ impl CodeEditor {
     }
 
     /// Handles a triple-click: selects the whole line under the cursor.
-    pub(super) fn handle_triple_click_msg(
+    pub(crate) fn handle_triple_click_msg(
         &mut self,
         point: iced::Point,
     ) -> Task<Message> {
@@ -181,7 +181,7 @@ impl CodeEditor {
     /// A click inside any existing selection preserves it so Cut and Copy act
     /// on the selected text. A click elsewhere collapses the selection and
     /// moves the caret to the clicked position.
-    pub(super) fn handle_context_menu_requested_msg(
+    pub(crate) fn handle_context_menu_requested_msg(
         &mut self,
         point: iced::Point,
     ) -> Task<Message> {

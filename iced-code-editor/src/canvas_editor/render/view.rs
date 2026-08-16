@@ -10,7 +10,7 @@ use iced::{Background, Border, Color, Element, Length, Rectangle, Shadow};
 use iced_aw::ContextMenu;
 
 use super::wrapping::{self, WrappingCalculator};
-use crate::canvas_editor::ime_requester::ImeRequester;
+use crate::canvas_editor::input::ime_requester::ImeRequester;
 use crate::canvas_editor::{
     CodeEditor, GUTTER_WIDTH, Message, context_menu, goto_line_dialog,
     scrollable_rail, search_dialog,

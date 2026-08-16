@@ -10,7 +10,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to cursor if undo succeeded
-    pub(super) fn handle_undo_msg(&mut self) -> Task<Message> {
+    pub(crate) fn handle_undo_msg(&mut self) -> Task<Message> {
         // End any current grouping before undoing
         self.end_grouping_if_active();
 
@@ -35,7 +35,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to cursor if redo succeeded
-    pub(super) fn handle_redo_msg(&mut self) -> Task<Message> {
+    pub(crate) fn handle_redo_msg(&mut self) -> Task<Message> {
         let mut cursor_pos = self.cursors.primary_position();
         if self.history.redo(&mut self.buffer, &mut cursor_pos) {
             self.cursors.primary_mut().position = cursor_pos;

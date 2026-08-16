@@ -1,6 +1,8 @@
 //! Message handling and update logic.
 
-use super::{CodeEditor, LspEditSnapshot, Message, VimMode, cursor_set, lsp};
+use crate::canvas_editor::{
+    CodeEditor, LspEditSnapshot, Message, VimMode, cursor_set, lsp,
+};
 
 // =========================================================================
 // Cursor adjustment helpers for multi-cursor editing
@@ -8,7 +10,7 @@ use super::{CodeEditor, LspEditSnapshot, Message, VimMode, cursor_set, lsp};
 
 /// Describes the kind of edit applied to a single position.
 #[derive(Clone, Copy)]
-pub(super) enum EditType {
+pub(crate) enum EditType {
     /// Insert one char at `(edit_line, edit_col)`.
     InsertChar,
     /// Backspace: delete char at `(edit_line, edit_col - 1)`.
@@ -26,7 +28,7 @@ pub(super) enum EditType {
 }
 
 /// Adjusts a single `(line, col)` pair after an edit.
-pub(super) fn adjust_pos(
+pub(crate) fn adjust_pos(
     pos: &mut (usize, usize),
     edit_line: usize,
     edit_col: usize,
@@ -76,7 +78,7 @@ pub(super) fn adjust_pos(
 }
 
 /// Adjusts all cursors except `skip_idx` after an edit at `(edit_line, edit_col)`.
-pub(super) fn adjust_other_cursors(
+pub(crate) fn adjust_other_cursors(
     cursors: &mut [cursor_set::Cursor],
     skip_idx: usize,
     edit_line: usize,
@@ -407,12 +409,13 @@ mod tests {
         let _ = editor.update(&Message::Enter);
         let incremental = editor.visual_lines_cached(800.0);
 
-        let calculator = super::super::wrapping::WrappingCalculator::new(
-            editor.wrap_enabled,
-            editor.wrap_column,
-            editor.full_char_width,
-            editor.char_width,
-        );
+        let calculator =
+            crate::canvas_editor::render::wrapping::WrappingCalculator::new(
+                editor.wrap_enabled,
+                editor.wrap_column,
+                editor.full_char_width,
+                editor.char_width,
+            );
         let expected = calculator.calculate_visual_lines(
             &editor.buffer,
             800.0,

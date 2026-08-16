@@ -10,7 +10,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` (currently Task::none())
-    pub(super) fn handle_canvas_focus_gained_msg(&mut self) -> Task<Message> {
+    pub(crate) fn handle_canvas_focus_gained_msg(&mut self) -> Task<Message> {
         self.has_canvas_focus = true;
         self.focus_locked = false; // Unlock focus when gained
         self.show_cursor = true;
@@ -24,7 +24,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` (currently Task::none())
-    pub(super) fn handle_canvas_focus_lost_msg(&mut self) -> Task<Message> {
+    pub(crate) fn handle_canvas_focus_lost_msg(&mut self) -> Task<Message> {
         self.has_canvas_focus = false;
         self.focus_locked = true; // Lock focus when lost to prevent focus stealing
         self.show_cursor = false;
@@ -40,7 +40,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` (currently Task::none())
-    pub(super) fn handle_ime_opened_msg(&mut self) -> Task<Message> {
+    pub(crate) fn handle_ime_opened_msg(&mut self) -> Task<Message> {
         self.ime_preedit = None;
         self.overlay_cache.clear();
         Task::none()
@@ -58,7 +58,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` (currently Task::none())
-    pub(super) fn handle_ime_preedit_msg(
+    pub(crate) fn handle_ime_preedit_msg(
         &mut self,
         content: &str,
         selection: &Option<std::ops::Range<usize>>,
@@ -87,7 +87,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to cursor after insertion
-    pub(super) fn handle_ime_commit_msg(
+    pub(crate) fn handle_ime_commit_msg(
         &mut self,
         text: &str,
     ) -> Task<Message> {
@@ -112,7 +112,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` (currently Task::none())
-    pub(super) fn handle_ime_closed_msg(&mut self) -> Task<Message> {
+    pub(crate) fn handle_ime_closed_msg(&mut self) -> Task<Message> {
         self.ime_preedit = None;
         self.overlay_cache.clear();
         Task::none()

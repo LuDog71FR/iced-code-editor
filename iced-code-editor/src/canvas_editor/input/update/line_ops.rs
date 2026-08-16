@@ -57,7 +57,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible
-    pub(super) fn move_lines(&mut self, down: bool) -> Task<Message> {
+    pub(crate) fn move_lines(&mut self, down: bool) -> Task<Message> {
         self.end_grouping_if_active();
         self.cursors.remove_all_but_primary();
 
@@ -97,7 +97,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible
-    pub(super) fn duplicate_lines(&mut self, down: bool) -> Task<Message> {
+    pub(crate) fn duplicate_lines(&mut self, down: bool) -> Task<Message> {
         self.end_grouping_if_active();
         self.cursors.remove_all_but_primary();
 
@@ -128,7 +128,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible
-    pub(super) fn toggle_comment(&mut self) -> Task<Message> {
+    pub(crate) fn toggle_comment(&mut self) -> Task<Message> {
         self.end_grouping_if_active();
         self.cursors.remove_all_but_primary();
 

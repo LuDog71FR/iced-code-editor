@@ -5,7 +5,7 @@ use iced::Task;
 use crate::canvas_editor::{ArrowDirection, CodeEditor, Message, VimMode};
 
 impl CodeEditor {
-    pub(super) fn vim_accepts_insert_input(&self) -> bool {
+    pub(crate) fn vim_accepts_insert_input(&self) -> bool {
         !self.vim_enabled || self.vim_state.mode() == VimMode::Insert
     }
 
@@ -19,7 +19,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible
-    pub(super) fn handle_arrow_key(
+    pub(crate) fn handle_arrow_key(
         &mut self,
         direction: ArrowDirection,
         shift_pressed: bool,
@@ -56,7 +56,7 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible (including
     /// horizontal scroll back to x=0 when wrap is disabled)
-    pub(super) fn handle_home(&mut self, shift_pressed: bool) -> Task<Message> {
+    pub(crate) fn handle_home(&mut self, shift_pressed: bool) -> Task<Message> {
         if shift_pressed {
             for cursor in self.cursors.as_mut_slice() {
                 if cursor.anchor.is_none() {
@@ -87,7 +87,7 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible (including
     /// horizontal scroll to end of line when wrap is disabled)
-    pub(super) fn handle_end(&mut self, shift_pressed: bool) -> Task<Message> {
+    pub(crate) fn handle_end(&mut self, shift_pressed: bool) -> Task<Message> {
         if shift_pressed {
             for cursor in self.cursors.as_mut_slice() {
                 if cursor.anchor.is_none() {
@@ -113,7 +113,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible
-    pub(super) fn handle_ctrl_home(&mut self) -> Task<Message> {
+    pub(crate) fn handle_ctrl_home(&mut self) -> Task<Message> {
         // Move cursor to the beginning of the document
         self.clear_selection();
         self.cursors.set_single((0, 0));
@@ -128,7 +128,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible
-    pub(super) fn handle_ctrl_end(&mut self) -> Task<Message> {
+    pub(crate) fn handle_ctrl_end(&mut self) -> Task<Message> {
         // Move cursor to the end of the document
         self.clear_selection();
         let last_line = self.buffer.line_count().saturating_sub(1);
@@ -145,7 +145,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible
-    pub(super) fn handle_page_up(&mut self) -> Task<Message> {
+    pub(crate) fn handle_page_up(&mut self) -> Task<Message> {
         self.page_up();
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -158,7 +158,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible
-    pub(super) fn handle_page_down(&mut self) -> Task<Message> {
+    pub(crate) fn handle_page_down(&mut self) -> Task<Message> {
         self.page_down();
         self.finish_navigation_operation();
         self.scroll_to_cursor()

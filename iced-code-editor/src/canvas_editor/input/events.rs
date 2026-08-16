@@ -4,8 +4,11 @@ use iced::advanced::input_method;
 use iced::widget::canvas::Action;
 use iced::{Point, Rectangle, keyboard, mouse};
 
-use super::folding;
-use super::{ArrowDirection, CodeEditor, Message};
+use crate::canvas_editor::folding;
+use crate::canvas_editor::vim::VimMode;
+use crate::canvas_editor::{
+    ArrowDirection, CodeEditor, FOCUSED_EDITOR_ID, Message,
+};
 
 impl CodeEditor {
     /// Checks if the editor has focus (both Iced focus and internal canvas focus).
@@ -16,7 +19,7 @@ impl CodeEditor {
     pub(crate) fn has_focus(&self) -> bool {
         // Check if this editor has Iced focus
         let focused_id =
-            super::FOCUSED_EDITOR_ID.load(std::sync::atomic::Ordering::Relaxed);
+            FOCUSED_EDITOR_ID.load(std::sync::atomic::Ordering::Relaxed);
         focused_id == self.editor_id
             && self.has_canvas_focus
             && !self.focus_locked
@@ -123,7 +126,7 @@ impl CodeEditor {
         // Vim's redo binding is Ctrl+R in Normal mode. Keep the existing
         // platform redo shortcuts above available in every editor mode.
         if self.vim_enabled
-            && self.vim_state.mode() == super::VimMode::Normal
+            && self.vim_state.mode() == VimMode::Normal
             && modifiers.control()
             && !modifiers.shift()
             && matches!(key, keyboard::Key::Character(r) if r.as_str() == "r")
@@ -345,7 +348,7 @@ impl CodeEditor {
     }
 
     fn printable_input_message(&self, ch: char) -> Message {
-        if self.vim_enabled && self.vim_state.mode() != super::VimMode::Insert {
+        if self.vim_enabled && self.vim_state.mode() != VimMode::Insert {
             Message::VimKey(ch)
         } else {
             Message::CharacterInput(ch)
@@ -406,7 +409,7 @@ impl CodeEditor {
         let message = match key {
             keyboard::Key::Named(keyboard::key::Named::Backspace)
                 if !self.vim_enabled
-                    || self.vim_state.mode() == super::VimMode::Insert
+                    || self.vim_state.mode() == VimMode::Insert
                     || self.vim_state.command_line_active() =>
             {
                 if self.vim_state.command_line_active() {
@@ -417,13 +420,13 @@ impl CodeEditor {
             }
             keyboard::Key::Named(keyboard::key::Named::Delete)
                 if !self.vim_enabled
-                    || self.vim_state.mode() == super::VimMode::Insert =>
+                    || self.vim_state.mode() == VimMode::Insert =>
             {
                 Some(Message::Delete)
             }
             keyboard::Key::Named(keyboard::key::Named::Enter)
                 if !self.vim_enabled
-                    || self.vim_state.mode() == super::VimMode::Insert
+                    || self.vim_state.mode() == VimMode::Insert
                     || self.vim_state.command_line_active() =>
             {
                 if self.vim_state.command_line_active() {
@@ -434,7 +437,7 @@ impl CodeEditor {
             }
             keyboard::Key::Named(keyboard::key::Named::Tab)
                 if !self.vim_enabled
-                    || self.vim_state.mode() == super::VimMode::Insert =>
+                    || self.vim_state.mode() == VimMode::Insert =>
             {
                 // Handle Tab for focus navigation or text insertion
                 // This implements focus event propagation and focus chain management
@@ -515,7 +518,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `Some(Action<Message>)` if the event was handled, `None` otherwise
-    pub(super) fn handle_keyboard_event(
+    pub(crate) fn handle_keyboard_event(
         &self,
         key: &keyboard::Key,
         modified_key: &keyboard::Key,
@@ -594,7 +597,7 @@ impl CodeEditor {
     ///
     /// `Some(Action<Message>)` if the event was handled, `None` otherwise
     #[allow(clippy::unused_self)]
-    pub(super) fn handle_mouse_event(
+    pub(crate) fn handle_mouse_event(
         &self,
         event: &mouse::Event,
         bounds: Rectangle,
@@ -684,7 +687,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `Some(Action<Message>)` if the event was handled, `None` otherwise
-    pub(super) fn handle_ime_event(
+    pub(crate) fn handle_ime_event(
         &self,
         event: &input_method::Event,
         _bounds: Rectangle,
@@ -696,7 +699,7 @@ impl CodeEditor {
         if !self.has_focus() || self.focus_locked {
             return None;
         }
-        if self.vim_enabled && self.vim_state.mode() != super::VimMode::Insert {
+        if self.vim_enabled && self.vim_state.mode() != VimMode::Insert {
             return None;
         }
 

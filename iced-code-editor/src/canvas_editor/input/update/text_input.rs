@@ -58,7 +58,7 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible (including
     /// horizontal scroll when wrap is disabled)
-    pub(super) fn handle_character_input_msg(
+    pub(crate) fn handle_character_input_msg(
         &mut self,
         ch: char,
     ) -> Task<Message> {
@@ -286,7 +286,7 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible (including
     /// horizontal scroll when wrap is disabled)
-    pub(super) fn handle_tab(&mut self) -> Task<Message> {
+    pub(crate) fn handle_tab(&mut self) -> Task<Message> {
         self.ensure_grouping_started();
 
         // A plain click leaves a zero-length anchor in place (see
@@ -355,7 +355,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// Always `Task::none()`
-    pub(super) fn handle_focus_navigation(&mut self) -> Task<Message> {
+    pub(crate) fn handle_focus_navigation(&mut self) -> Task<Message> {
         if !self.search_state.is_open {
             self.has_canvas_focus = false;
             self.show_cursor = false;
@@ -369,7 +369,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible
-    pub(super) fn handle_enter(&mut self) -> Task<Message> {
+    pub(crate) fn handle_enter(&mut self) -> Task<Message> {
         // Standard editing treats Enter as a boundary. In Vim Insert mode the
         // newline belongs to the same insertion session and is closed by Esc.
         let keep_vim_group = self.keep_vim_insert_group();

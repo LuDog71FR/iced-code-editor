@@ -6,7 +6,7 @@ use crate::canvas_editor::{CodeEditor, Message};
 
 impl CodeEditor {
     /// Cuts all selected ranges to the clipboard as a single undoable edit.
-    pub(super) fn handle_cut_msg(&mut self) -> Task<Message> {
+    pub(crate) fn handle_cut_msg(&mut self) -> Task<Message> {
         if !self.cursors.iter().any(|cursor| cursor.has_selection()) {
             return Task::none();
         }
@@ -22,7 +22,7 @@ impl CodeEditor {
     }
 
     /// Selects the complete document.
-    pub(super) fn handle_select_all_msg(&mut self) -> Task<Message> {
+    pub(crate) fn handle_select_all_msg(&mut self) -> Task<Message> {
         self.end_grouping_if_active();
 
         let last_line = self.buffer.line_count().saturating_sub(1);
@@ -47,7 +47,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that may read clipboard or scroll to cursor
-    pub(super) fn handle_paste_msg(&mut self, text: &str) -> Task<Message> {
+    pub(crate) fn handle_paste_msg(&mut self, text: &str) -> Task<Message> {
         // End grouping on paste
         self.end_grouping_if_active();
 

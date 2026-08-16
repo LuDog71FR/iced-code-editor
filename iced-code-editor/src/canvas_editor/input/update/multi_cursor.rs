@@ -16,7 +16,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `Task::none()` — no async work needed
-    pub(super) fn handle_alt_click_msg(
+    pub(crate) fn handle_alt_click_msg(
         &mut self,
         point: iced::Point,
     ) -> Task<Message> {
@@ -37,7 +37,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `Task::none()`
-    pub(super) fn handle_add_cursor_above_msg(&mut self) -> Task<Message> {
+    pub(crate) fn handle_add_cursor_above_msg(&mut self) -> Task<Message> {
         if self.vim_enabled {
             return Task::none();
         }
@@ -59,7 +59,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `Task::none()`
-    pub(super) fn handle_add_cursor_below_msg(&mut self) -> Task<Message> {
+    pub(crate) fn handle_add_cursor_below_msg(&mut self) -> Task<Message> {
         if self.vim_enabled {
             return Task::none();
         }
@@ -83,7 +83,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `Task::none()`
-    pub(super) fn handle_select_next_occurrence_msg(
+    pub(crate) fn handle_select_next_occurrence_msg(
         &mut self,
     ) -> Task<Message> {
         if self.vim_enabled {

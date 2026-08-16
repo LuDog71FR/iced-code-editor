@@ -16,7 +16,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` (currently Task::none())
-    pub(super) fn handle_tick_msg(&mut self) -> Task<Message> {
+    pub(crate) fn handle_tick_msg(&mut self) -> Task<Message> {
         // Handle cursor blinking only if editor has focus
         if self.has_focus()
             && self.last_blink.elapsed() >= CURSOR_BLINK_INTERVAL
@@ -47,7 +47,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` (currently Task::none())
-    pub(super) fn handle_scrolled_msg(
+    pub(crate) fn handle_scrolled_msg(
         &mut self,
         viewport: iced::widget::scrollable::Viewport,
     ) -> Task<Message> {
@@ -120,7 +120,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` (currently `Task::none()`)
-    pub(super) fn handle_horizontal_scrolled_msg(
+    pub(crate) fn handle_horizontal_scrolled_msg(
         &mut self,
         viewport: iced::widget::scrollable::Viewport,
     ) -> Task<Message> {

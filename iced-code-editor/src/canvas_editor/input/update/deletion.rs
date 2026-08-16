@@ -17,7 +17,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible if selection was deleted
-    pub(super) fn handle_backspace(&mut self) -> Task<Message> {
+    pub(crate) fn handle_backspace(&mut self) -> Task<Message> {
         // End grouping on backspace (separate from typing)
         if !self.keep_vim_insert_group() {
             self.end_grouping_if_active();
@@ -78,7 +78,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible if selection was deleted
-    pub(super) fn handle_delete(&mut self) -> Task<Message> {
+    pub(crate) fn handle_delete(&mut self) -> Task<Message> {
         // End grouping on delete
         if !self.keep_vim_insert_group() {
             self.end_grouping_if_active();
@@ -134,7 +134,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible
-    pub(super) fn handle_delete_selection(&mut self) -> Task<Message> {
+    pub(crate) fn handle_delete_selection(&mut self) -> Task<Message> {
         // End grouping on delete selection
         self.end_grouping_if_active();
 
