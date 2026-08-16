@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `handle_keyboard_shortcuts` matched the fold-toggle binding against the base `key` only; on French AZERTY, `.` is `Shift+;`, so `key` reports `;` and the shortcut never fired, while `Ctrl+/` (toggle comment) already handled this correctly by also checking `modified_key`
   - Both bindings now share a new `is_key_char(key, modified_key, ch)` helper that checks either key, so `Ctrl+.` works on AZERTY and future symbol shortcuts can't regress the same way
 
+- fix: **LSP document mirror could desynchronize from the real document and keep serving stale positions silently**
+  - `TextModel::apply_change` (the internal per-document copy used to convert cursor positions to LSP's UTF-16 columns) silently ignored a change whose range fell outside the tracked lines instead of reporting the failure; the change was still forwarded to the language server, so the local mirror and the server's copy diverged with no error and no recovery — every later hover, completion, and go-to-definition on that document then silently computed positions against the wrong text
+  - `apply_change` now reports whether it applied the change; if a batch desynchronizes partway through, none of it is forwarded to the server, the document is dropped from the client's tracked documents so the next `did_open` reseeds it from scratch, and an `LspEvent::Log` is emitted so the desync shows up in the demo app's log pane instead of only as "the language server gives nonsense answers"
+
 
 ## [0.4.0] - 2026-08-16
 

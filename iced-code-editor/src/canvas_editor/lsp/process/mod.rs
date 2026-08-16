@@ -68,12 +68,18 @@ impl TextModel {
     /// Applies a text change (edit) to the document.
     ///
     /// Handles multi-line insertions and deletions by splicing the lines vector.
-    fn apply_change(&mut self, change: &LspTextChange) {
+    ///
+    /// Returns `false` without modifying `self` when `change`'s range falls
+    /// outside the current line count. That means this mirror has drifted
+    /// out of sync with the real document (e.g. a change was computed
+    /// against a state this mirror never saw) — the caller must not trust
+    /// this `TextModel` for further position translation once that happens.
+    fn apply_change(&mut self, change: &LspTextChange) -> bool {
         let start_line = change.range.start.line as usize;
         let end_line = change.range.end.line as usize;
 
         if start_line >= self.lines.len() || end_line >= self.lines.len() {
-            return;
+            return false;
         }
 
         let start_col = change.range.start.character as usize;
@@ -103,6 +109,7 @@ impl TextModel {
         }
 
         self.lines.splice(start_line..=end_line, replacement);
+        true
     }
 
     /// Converts a UTF-8 character position to a UTF-16 position.
@@ -127,6 +134,41 @@ impl TextModel {
 struct DocumentState {
     /// The text content of the document
     text: TextModel,
+}
+
+/// Applies `changes` to `state`'s mirror in order, converting each to the
+/// UTF-16 JSON shape LSP's `didChange` notification expects.
+///
+/// Returns `None` — instead of the changes converted so far — the moment any
+/// change's range falls outside the mirror. That means the mirror has
+/// already drifted out of sync with the real document, so every change from
+/// that point on (their coordinates are relative to the mirror's state after
+/// prior changes) is computed against a state the mirror doesn't actually
+/// have; forwarding a partial or best-effort batch would tell the server
+/// something that isn't true. The caller is responsible for treating the
+/// document as stale (see [`LspProcessClient::apply_change_and_convert`]).
+fn apply_changes_to_document(
+    state: &mut DocumentState,
+    changes: &[LspTextChange],
+) -> Option<Vec<serde_json::Value>> {
+    let mut out = Vec::with_capacity(changes.len());
+    for change in changes {
+        let start = state.text.to_utf16_position(change.range.start);
+        let end = state.text.to_utf16_position(change.range.end);
+
+        if !state.text.apply_change(change) {
+            return None;
+        }
+
+        out.push(json!({
+            "range": {
+                "start": { "line": start.line, "character": start.character },
+                "end": { "line": end.line, "character": end.character }
+            },
+            "text": change.text
+        }));
+    }
+    Some(out)
 }
 
 // =============================================================================
@@ -224,6 +266,13 @@ pub struct LspProcessClient {
     writer: mpsc::Sender<Vec<u8>>,
     /// Map of URI to document state for all open documents
     documents: Arc<Mutex<HashMap<String, DocumentState>>>,
+    /// Channel used to report a document mirror going out of sync (see
+    /// [`Self::apply_change_and_convert`]); the reader/stderr threads carry
+    /// their own clone of the same sender for server-pushed events.
+    events: mpsc::Sender<LspEvent>,
+    /// Key identifying the connected server, used to label events emitted
+    /// directly by the client rather than by the reader/stderr threads.
+    server_key: String,
     /// Counter for generating unique request IDs
     request_id: AtomicU64,
     /// Map of pending request IDs to their types (for response routing)
@@ -320,10 +369,11 @@ impl LspProcessClient {
         let pending_requests = Arc::new(Mutex::new(HashMap::new()));
         let pending_reader = pending_requests.clone();
         let events_reader = events.clone();
-        let events_log = events;
+        let events_log = events.clone();
+        let events_field = events;
         let server_key = server_key.to_string();
         let server_key_reader = server_key.clone();
-        let server_key_log = server_key;
+        let server_key_log = server_key.clone();
         let tx_reader = tx.clone();
 
         let writer_thread = thread::spawn(move || {
@@ -389,6 +439,8 @@ impl LspProcessClient {
             child,
             writer: tx,
             documents: Arc::new(Mutex::new(HashMap::new())),
+            events: events_field,
+            server_key,
             request_id: AtomicU64::new(1),
             pending_requests,
             _writer_thread: writer_thread,
@@ -447,30 +499,37 @@ impl LspProcessClient {
     /// Applies text changes to a document and converts them to JSON format.
     ///
     /// Also converts positions to UTF-16 as required by LSP.
+    ///
+    /// If the local document mirror desynchronizes partway through `changes`
+    /// (see [`apply_changes_to_document`]), the document is dropped from
+    /// [`Self::documents`] — so a later `did_open` reseeds it instead of
+    /// this client continuing to serve hover/completion/definition
+    /// positions computed from a copy known to be stale — and an
+    /// [`LspEvent::Log`] is emitted so the desync is diagnosable instead of
+    /// surfacing only as "the language server gives nonsense answers".
     fn apply_change_and_convert(
         &self,
         uri: &str,
         changes: &[LspTextChange],
     ) -> Vec<serde_json::Value> {
-        let mut out = Vec::new();
         let mut docs = self.documents.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(state) = docs.get_mut(uri) else { return out };
+        let Some(state) = docs.get_mut(uri) else { return Vec::new() };
 
-        for change in changes {
-            let start = state.text.to_utf16_position(change.range.start);
-            let end = state.text.to_utf16_position(change.range.end);
-
-            out.push(json!({
-                "range": {
-                    "start": { "line": start.line, "character": start.character },
-                    "end": { "line": end.line, "character": end.character }
-                },
-                "text": change.text
-            }));
-
-            state.text.apply_change(change);
+        match apply_changes_to_document(state, changes) {
+            Some(out) => out,
+            None => {
+                docs.remove(uri);
+                let _ = self.events.send(LspEvent::Log {
+                    server_key: self.server_key.clone(),
+                    message: format!(
+                        "Local document mirror for {uri} desynchronized \
+                         (a change referenced a line outside the tracked \
+                         document); dropping it until the next open."
+                    ),
+                });
+                Vec::new()
+            }
         }
-        out
     }
 }
 
@@ -951,6 +1010,94 @@ mod tests {
             .expect("missing header separator");
         let body = &data[header_end + 4..];
         serde_json::from_slice(body).expect("invalid JSON body")
+    }
+
+    // -------------------------------------------------------------------------
+    // TextModel::apply_change
+    // -------------------------------------------------------------------------
+
+    fn change(
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+        text: &str,
+    ) -> LspTextChange {
+        LspTextChange {
+            range: LspRange {
+                start: LspPosition { line: start_line, character: start_char },
+                end: LspPosition { line: end_line, character: end_char },
+            },
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_text_model_apply_change_in_range_succeeds() {
+        let mut model = TextModel::from_text("hello\nworld");
+        let applied = model.apply_change(&change(0, 0, 0, 5, "goodbye"));
+        assert!(applied);
+        assert_eq!(
+            model.lines,
+            vec!["goodbye".to_string(), "world".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_text_model_apply_change_out_of_range_line_fails_without_mutating() {
+        let mut model = TextModel::from_text("hello\nworld");
+        let original = model.lines.clone();
+
+        // Line 5 does not exist in a 2-line document.
+        let applied = model.apply_change(&change(5, 0, 5, 0, "x"));
+
+        assert!(!applied);
+        assert_eq!(model.lines, original);
+    }
+
+    // -------------------------------------------------------------------------
+    // apply_changes_to_document
+    // -------------------------------------------------------------------------
+
+    #[test]
+    #[allow(clippy::panic)]
+    fn test_apply_changes_to_document_converts_every_change() {
+        let mut state =
+            DocumentState { text: TextModel::from_text("hello\nworld") };
+
+        let changes =
+            vec![change(0, 0, 0, 5, "hi"), change(1, 0, 1, 5, "earth")];
+        let Some(out) = apply_changes_to_document(&mut state, &changes) else {
+            panic!("in-range changes must convert");
+        };
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["text"], "hi");
+        assert_eq!(out[1]["text"], "earth");
+        assert_eq!(
+            state.text.lines,
+            vec!["hi".to_string(), "earth".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_apply_changes_to_document_stops_at_first_desync() {
+        let mut state = DocumentState { text: TextModel::from_text("hello") };
+
+        // The first change is valid and does get applied to the mirror; the
+        // second references a line that doesn't exist. The whole batch must
+        // report `None` rather than a partial result, since every change
+        // after the desync point is computed against a mirror state that no
+        // longer reflects reality.
+        let changes =
+            vec![change(0, 0, 0, 5, "hi"), change(9, 0, 9, 0, "unreachable")];
+        let out = apply_changes_to_document(&mut state, &changes);
+
+        assert!(out.is_none());
+        // The first change was still applied before the desync was found —
+        // documenting why the caller must discard the whole `DocumentState`
+        // rather than trying to salvage it.
+        assert_eq!(state.text.lines, vec!["hi".to_string()]);
     }
 
     // -------------------------------------------------------------------------
