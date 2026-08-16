@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `TextModel::apply_change` (the internal per-document copy used to convert cursor positions to LSP's UTF-16 columns) silently ignored a change whose range fell outside the tracked lines instead of reporting the failure; the change was still forwarded to the language server, so the local mirror and the server's copy diverged with no error and no recovery — every later hover, completion, and go-to-definition on that document then silently computed positions against the wrong text
   - `apply_change` now reports whether it applied the change; if a batch desynchronizes partway through, none of it is forwarded to the server, the document is dropped from the client's tracked documents so the next `did_open` reseeds it from scratch, and an `LspEvent::Log` is emitted so the desync shows up in the demo app's log pane instead of only as "the language server gives nonsense answers"
 
+### Changed
+
+- refactor: **Collapsed the demo app's eleven editor-toggle checkboxes into one data-driven path** (demo app)
+  - Each boolean editor setting (line wrapping, folding, auto-indent, auto-close brackets, search/replace, line numbers, show whitespace, bracket-match highlight, bracket-pair colorization, Vim, LSP) had its own `Message` variant, its own near-identical `update` handler, and its own hand-written checkbox; five of the eleven handlers never logged the change while the other six did, an inconsistency visible in the log pane
+  - Replaced with a single `EditorToggle` enum (`demo-app/src/types.rs`) that maps each setting to its `CodeEditor` getter/setter pair, one `Message::ToggleEditor(EditorId, EditorToggle, bool)` variant, one `handle_toggle_editor` handler, and one checkbox built per entry in `EditorToggle::ALL` — all eleven toggles now log consistently, and the LSP checkbox label changed from "Enable LSP" to "LSP" to match the other checkboxes' phrasing
+  - No other behavior changes; covered by new unit tests in `types.rs`
+
 
 ## [0.4.0] - 2026-08-16
 

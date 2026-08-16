@@ -1,7 +1,7 @@
 mod lsp;
 
 use crate::app::{DemoApp, EditorTab, Message};
-use crate::types::{FontOption, LanguageOption, Template};
+use crate::types::{EditorToggle, FontOption, LanguageOption, Template};
 use iced::widget::{
     Space, button, center, checkbox, column, container, mouse_area, pick_list,
     row, scrollable, slider, stack, text, text_input,
@@ -411,20 +411,8 @@ pub fn view_editor_pane<'a>(
     let editor = &tab.editor;
 
     // We assume these settings are global for now, but could be per-tab
-    let wrap_enabled = editor.wrap_enabled();
-    let folding_enabled = editor.folding_enabled();
-    let auto_indent_enabled = editor.auto_indent_enabled();
-    let auto_close_brackets_enabled = editor.auto_close_brackets();
     let current_indent_style = editor.indent_style();
-    let search_replace_enabled = editor.search_replace_enabled();
-    let line_numbers_enabled = editor.line_numbers_enabled();
     let lsp_enabled = editor.lsp_enabled();
-    let show_whitespace = editor.show_whitespace();
-    let bracket_match_highlight_enabled =
-        editor.bracket_match_highlight_enabled();
-    let bracket_pair_colorization_enabled =
-        editor.bracket_pair_colorization_enabled();
-    let vim_enabled = editor.vim_enabled();
 
     // Template picker using pick_list
     let template_picker =
@@ -434,29 +422,18 @@ pub fn view_editor_pane<'a>(
         .placeholder("Choose template...")
         .text_size(14);
 
-    // Wrap checkbox
-    let wrap_checkbox = checkbox(wrap_enabled)
-        .label("Line wrapping")
-        .on_toggle(move |b| Message::ToggleWrap(editor_id, b))
-        .text_size(14);
-
-    // Code folding checkbox
-    let folding_checkbox = checkbox(folding_enabled)
-        .label("Code folding")
-        .on_toggle(move |b| Message::ToggleFolding(editor_id, b))
-        .text_size(14);
-
-    // Auto-indent checkbox
-    let auto_indent_checkbox = checkbox(auto_indent_enabled)
-        .label("Auto-indentation")
-        .on_toggle(move |b| Message::ToggleAutoIndent(editor_id, b))
-        .text_size(14);
-
-    // Auto-close brackets/quotes checkbox
-    let auto_close_brackets_checkbox = checkbox(auto_close_brackets_enabled)
-        .label("Auto-close brackets")
-        .on_toggle(move |b| Message::ToggleAutoCloseBrackets(editor_id, b))
-        .text_size(14);
+    // One checkbox per `EditorToggle`, in place of eleven near-identical
+    // `checkbox(...).on_toggle(...)` blocks that used to live here.
+    let toggle_checkboxes: Vec<Element<'_, Message>> = EditorToggle::ALL
+        .into_iter()
+        .map(|toggle| {
+            checkbox(toggle.is_enabled(editor))
+                .label(toggle.label())
+                .on_toggle(move |b| Message::ToggleEditor(editor_id, toggle, b))
+                .text_size(14)
+                .into()
+        })
+        .collect();
 
     // Indent style pick_list
     let indent_style_picker = pick_list(
@@ -465,54 +442,6 @@ pub fn view_editor_pane<'a>(
         move |style| Message::IndentStyleChanged(editor_id, style),
     )
     .text_size(14);
-
-    // Search/replace checkbox
-    let search_replace_checkbox = checkbox(search_replace_enabled)
-        .label("Allow search/replace")
-        .on_toggle(move |b| Message::ToggleSearchReplace(editor_id, b))
-        .text_size(14);
-
-    // Line numbers checkbox
-    let line_numbers_checkbox = checkbox(line_numbers_enabled)
-        .label("Show line numbers")
-        .on_toggle(move |b| Message::ToggleLineNumbers(editor_id, b))
-        .text_size(14);
-
-    // Whitespace rendering checkbox
-    let show_whitespace_checkbox = checkbox(show_whitespace)
-        .label("Show whitespace")
-        .on_toggle(move |b| Message::ToggleShowWhitespace(editor_id, b))
-        .text_size(14);
-
-    // Matching bracket highlight checkbox
-    let bracket_match_highlight_checkbox =
-        checkbox(bracket_match_highlight_enabled)
-            .label("Highlight matching bracket")
-            .on_toggle(move |b| {
-                Message::ToggleBracketMatchHighlight(editor_id, b)
-            })
-            .text_size(14);
-
-    // Bracket-pair colorization (rainbow brackets) checkbox
-    let bracket_pair_colorization_checkbox =
-        checkbox(bracket_pair_colorization_enabled)
-            .label("Rainbow brackets")
-            .on_toggle(move |b| {
-                Message::ToggleBracketPairColorization(editor_id, b)
-            })
-            .text_size(14);
-
-    // Vim mode checkbox
-    let vim_checkbox = checkbox(vim_enabled)
-        .label("Vim mode (Cmd/Ctrl+Alt+V)")
-        .on_toggle(move |b| Message::ToggleVim(editor_id, b))
-        .text_size(14);
-
-    // LSP enabled checkbox
-    let lsp_enabled_checkbox = checkbox(lsp_enabled)
-        .label("Enable LSP")
-        .on_toggle(move |b| Message::ToggleLsp(editor_id, b))
-        .text_size(14);
 
     // LSP Status
     #[cfg(not(target_arch = "wasm32"))]
@@ -638,36 +567,20 @@ pub fn view_editor_pane<'a>(
     .style(button::secondary);
 
     let options_panel: Element<'_, Message> = if app.show_editor_options {
-        container(
-            column![
-                wrap_checkbox,
-                folding_checkbox,
-                auto_indent_checkbox,
-                auto_close_brackets_checkbox,
-                search_replace_checkbox,
-                line_numbers_checkbox,
-                show_whitespace_checkbox,
-                bracket_match_highlight_checkbox,
-                bracket_pair_colorization_checkbox,
-                vim_checkbox,
-                lsp_enabled_checkbox,
-            ]
-            .spacing(8)
-            .padding(10),
-        )
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.weak.color.into()),
-                border: iced::Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                ..Default::default()
-            }
-        })
-        .into()
+        container(column(toggle_checkboxes).spacing(8).padding(10))
+            .style(|theme: &Theme| {
+                let palette = theme.extended_palette();
+                container::Style {
+                    background: Some(palette.background.weak.color.into()),
+                    border: iced::Border {
+                        color: palette.background.strong.color,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
+            .into()
     } else {
         Space::new().into()
     };

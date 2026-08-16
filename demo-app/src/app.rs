@@ -5,7 +5,9 @@
 //! update loop, and the associated `view`/`update` implementations.
 
 use crate::file_ops;
-use crate::types::{EditorId, FontOption, LanguageOption, Template};
+use crate::types::{
+    EditorId, EditorToggle, FontOption, LanguageOption, Template,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use iced::mouse;
 #[cfg(not(target_arch = "wasm32"))]
@@ -169,30 +171,11 @@ pub enum Message {
     ClearLog,
     /// Run code (simulated)
     RunCode,
-    /// Toggle line wrapping
-    ToggleWrap(EditorId, bool),
-    /// Toggle code folding
-    ToggleFolding(EditorId, bool),
-    /// Toggle auto-indentation
-    ToggleAutoIndent(EditorId, bool),
-    /// Toggle auto-closing of brackets/quotes
-    ToggleAutoCloseBrackets(EditorId, bool),
+    /// Toggle a boolean editor setting (wrap, folding, auto-indent, ...) —
+    /// see [`EditorToggle`]
+    ToggleEditor(EditorId, EditorToggle, bool),
     /// Change indentation style
     IndentStyleChanged(EditorId, IndentStyle),
-    /// Toggle search/replace
-    ToggleSearchReplace(EditorId, bool),
-    /// Toggle line numbers
-    ToggleLineNumbers(EditorId, bool),
-    /// Toggle visible whitespace rendering
-    ToggleShowWhitespace(EditorId, bool),
-    /// Toggle matching-bracket-pair highlight
-    ToggleBracketMatchHighlight(EditorId, bool),
-    /// Toggle bracket-pair colorization (rainbow brackets)
-    ToggleBracketPairColorization(EditorId, bool),
-    /// Toggle Vim behavior
-    ToggleVim(EditorId, bool),
-    /// Toggle LSP support
-    ToggleLsp(EditorId, bool),
     /// Test text input changed
     TextInputChanged(String),
     /// Test text input clicked
@@ -302,7 +285,11 @@ greet("World")
         // unit tests, and a synchronous spawn would make their behavior
         // depend on whether a language server happens to be on `PATH`.
         #[cfg(not(target_arch = "wasm32"))]
-        let startup_task = Task::done(Message::ToggleLsp(active_tab_id, true));
+        let startup_task = Task::done(Message::ToggleEditor(
+            active_tab_id,
+            EditorToggle::Lsp,
+            true,
+        ));
         #[cfg(target_arch = "wasm32")]
         let startup_task = Task::none();
 
@@ -724,210 +711,46 @@ greet("World")
         Task::none()
     }
 
-    /// Handles toggling auto-indentation for a specific editor.
-    fn handle_toggle_auto_indent(
+    /// Handles toggling a boolean editor setting (see [`EditorToggle`]).
+    ///
+    /// Every checkbox in the options panel routes through here: the setting
+    /// itself is applied via [`EditorToggle::apply`] and the change is
+    /// logged uniformly for all eleven toggles — previously each toggle had
+    /// its own near-identical handler, and six of them never logged the
+    /// change, an inconsistency visible in the log pane that this shared
+    /// path removes by construction. [`EditorToggle::Lsp`] gets one extra
+    /// step — attaching or detaching the actual language-server process —
+    /// since that requires spawning a subprocess and is not available on
+    /// WASM.
+    fn handle_toggle_editor(
         &mut self,
         editor_id: EditorId,
+        toggle: EditorToggle,
         enabled: bool,
     ) -> Task<Message> {
         self.log(
             "INFO",
             &format!(
-                "Auto-indentation {} in {:?} editor",
+                "{} {} in {:?} editor",
+                toggle.label(),
                 if enabled { "enabled" } else { "disabled" },
                 editor_id
             ),
         );
 
         if let Some(tab) = self.get_tab(editor_id) {
-            tab.editor.set_auto_indent_enabled(enabled);
+            toggle.apply(&mut tab.editor, enabled);
         }
-        Task::none()
-    }
 
-    /// Handles toggling auto-closing of brackets/quotes for a specific editor.
-    fn handle_toggle_auto_close_brackets(
-        &mut self,
-        editor_id: EditorId,
-        enabled: bool,
-    ) -> Task<Message> {
-        self.log(
-            "INFO",
-            &format!(
-                "Auto-close brackets {} in {:?} editor",
-                if enabled { "enabled" } else { "disabled" },
-                editor_id
-            ),
-        );
-
-        if let Some(tab) = self.get_tab(editor_id) {
-            tab.editor.set_auto_close_brackets(enabled);
-        }
-        Task::none()
-    }
-
-    /// Handles toggling line wrapping for a specific editor.
-    fn handle_toggle_wrap(
-        &mut self,
-        editor_id: EditorId,
-        enabled: bool,
-    ) -> Task<Message> {
-        self.log(
-            "INFO",
-            &format!(
-                "Line wrapping {} in {:?} editor",
-                if enabled { "enabled" } else { "disabled" },
-                editor_id
-            ),
-        );
-
-        if let Some(tab) = self.get_tab(editor_id) {
-            tab.editor.set_wrap_enabled(enabled);
-        }
-        Task::none()
-    }
-
-    /// Handles toggling code folding for a specific editor.
-    fn handle_toggle_folding(
-        &mut self,
-        editor_id: EditorId,
-        enabled: bool,
-    ) -> Task<Message> {
-        self.log(
-            "INFO",
-            &format!(
-                "Code folding {} in {:?} editor",
-                if enabled { "enabled" } else { "disabled" },
-                editor_id
-            ),
-        );
-
-        if let Some(tab) = self.get_tab(editor_id) {
-            tab.editor.set_folding_enabled(enabled);
-        }
-        Task::none()
-    }
-
-    /// Handles toggling search/replace functionality for a specific editor.
-    fn handle_toggle_search_replace(
-        &mut self,
-        editor_id: EditorId,
-        enabled: bool,
-    ) -> Task<Message> {
-        self.log(
-            "INFO",
-            &format!(
-                "Search/Replace {} in {:?} editor",
-                if enabled { "enabled" } else { "disabled" },
-                editor_id
-            ),
-        );
-
-        if let Some(tab) = self.get_tab(editor_id) {
-            tab.editor.set_search_replace_enabled(enabled);
-        }
-        Task::none()
-    }
-
-    /// Handles toggling line numbers for a specific editor.
-    fn handle_toggle_line_numbers(
-        &mut self,
-        editor_id: EditorId,
-        enabled: bool,
-    ) -> Task<Message> {
-        self.log(
-            "INFO",
-            &format!(
-                "Line numbers {} in {:?} editor",
-                if enabled { "enabled" } else { "disabled" },
-                editor_id
-            ),
-        );
-
-        if let Some(tab) = self.get_tab(editor_id) {
-            tab.editor.set_line_numbers_enabled(enabled);
-        }
-        Task::none()
-    }
-
-    /// Handles toggling visible whitespace rendering for a specific editor.
-    fn handle_toggle_show_whitespace(
-        &mut self,
-        editor_id: EditorId,
-        enabled: bool,
-    ) -> Task<Message> {
-        if let Some(tab) = self.get_tab(editor_id) {
-            tab.editor.set_show_whitespace(enabled);
-        }
-        Task::none()
-    }
-
-    /// Handles toggling the matching-bracket-pair highlight for a specific editor.
-    fn handle_toggle_bracket_match_highlight(
-        &mut self,
-        editor_id: EditorId,
-        enabled: bool,
-    ) -> Task<Message> {
-        if let Some(tab) = self.get_tab(editor_id) {
-            tab.editor.set_bracket_match_highlight_enabled(enabled);
-        }
-        Task::none()
-    }
-
-    /// Handles toggling bracket-pair colorization for a specific editor.
-    fn handle_toggle_bracket_pair_colorization(
-        &mut self,
-        editor_id: EditorId,
-        enabled: bool,
-    ) -> Task<Message> {
-        if let Some(tab) = self.get_tab(editor_id) {
-            tab.editor.set_bracket_pair_colorization_enabled(enabled);
-        }
-        Task::none()
-    }
-
-    /// Handles toggling Vim behavior for a specific editor.
-    fn handle_toggle_vim(
-        &mut self,
-        editor_id: EditorId,
-        enabled: bool,
-    ) -> Task<Message> {
-        if let Some(tab) = self.get_tab(editor_id) {
-            tab.editor.set_vim_enabled(enabled);
-        }
-        Task::none()
-    }
-
-    /// Handles toggling LSP support for a specific editor.
-    fn handle_toggle_lsp(
-        &mut self,
-        editor_id: EditorId,
-        enabled: bool,
-    ) -> Task<Message> {
-        self.log(
-            "INFO",
-            &format!(
-                "LSP {} in {:?} editor",
-                if enabled { "enabled" } else { "disabled" },
-                editor_id
-            ),
-        );
-
-        if enabled {
-            if let Some(tab) = self.get_tab(editor_id) {
-                tab.editor.set_lsp_enabled(true);
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
+        #[cfg(not(target_arch = "wasm32"))]
+        if toggle == EditorToggle::Lsp {
+            if enabled {
                 self.sync_lsp_for_editor(editor_id);
+            } else {
+                self.set_lsp_server_for_editor(editor_id, None);
             }
-        } else {
-            if let Some(tab) = self.get_tab(editor_id) {
-                tab.editor.set_lsp_enabled(false);
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            self.set_lsp_server_for_editor(editor_id, None);
         }
+
         Task::none()
     }
 
@@ -1381,41 +1204,11 @@ greet("World")
                 self.handle_theme_changed(new_theme)
             }
             // Editor toggles
-            Message::ToggleWrap(editor_id, enabled) => {
-                self.handle_toggle_wrap(editor_id, enabled)
-            }
-            Message::ToggleFolding(editor_id, enabled) => {
-                self.handle_toggle_folding(editor_id, enabled)
-            }
-            Message::ToggleAutoIndent(editor_id, enabled) => {
-                self.handle_toggle_auto_indent(editor_id, enabled)
-            }
-            Message::ToggleAutoCloseBrackets(editor_id, enabled) => {
-                self.handle_toggle_auto_close_brackets(editor_id, enabled)
+            Message::ToggleEditor(editor_id, toggle, enabled) => {
+                self.handle_toggle_editor(editor_id, toggle, enabled)
             }
             Message::IndentStyleChanged(editor_id, style) => {
                 self.handle_indent_style_changed(editor_id, style)
-            }
-            Message::ToggleSearchReplace(editor_id, enabled) => {
-                self.handle_toggle_search_replace(editor_id, enabled)
-            }
-            Message::ToggleLineNumbers(editor_id, enabled) => {
-                self.handle_toggle_line_numbers(editor_id, enabled)
-            }
-            Message::ToggleShowWhitespace(editor_id, enabled) => {
-                self.handle_toggle_show_whitespace(editor_id, enabled)
-            }
-            Message::ToggleBracketMatchHighlight(editor_id, enabled) => {
-                self.handle_toggle_bracket_match_highlight(editor_id, enabled)
-            }
-            Message::ToggleBracketPairColorization(editor_id, enabled) => {
-                self.handle_toggle_bracket_pair_colorization(editor_id, enabled)
-            }
-            Message::ToggleVim(editor_id, enabled) => {
-                self.handle_toggle_vim(editor_id, enabled)
-            }
-            Message::ToggleLsp(editor_id, enabled) => {
-                self.handle_toggle_lsp(editor_id, enabled)
             }
             // Editor events
             Message::EditorEvent(editor_id, event) => {
@@ -1731,10 +1524,10 @@ mod tests {
 
         assert!(!app.get_active_editor().is_some_and(|e| e.vim_enabled()));
 
-        let _ = app.handle_toggle_vim(tab_id, true);
+        let _ = app.handle_toggle_editor(tab_id, EditorToggle::Vim, true);
         assert!(app.get_active_editor().is_some_and(|e| e.vim_enabled()));
 
-        let _ = app.handle_toggle_vim(tab_id, false);
+        let _ = app.handle_toggle_editor(tab_id, EditorToggle::Vim, false);
         assert!(!app.get_active_editor().is_some_and(|e| e.vim_enabled()));
     }
 
@@ -1747,12 +1540,20 @@ mod tests {
             app.get_active_editor().is_some_and(|e| e.auto_close_brackets())
         );
 
-        let _ = app.handle_toggle_auto_close_brackets(tab_id, false);
+        let _ = app.handle_toggle_editor(
+            tab_id,
+            EditorToggle::AutoCloseBrackets,
+            false,
+        );
         assert!(
             !app.get_active_editor().is_some_and(|e| e.auto_close_brackets())
         );
 
-        let _ = app.handle_toggle_auto_close_brackets(tab_id, true);
+        let _ = app.handle_toggle_editor(
+            tab_id,
+            EditorToggle::AutoCloseBrackets,
+            true,
+        );
         assert!(
             app.get_active_editor().is_some_and(|e| e.auto_close_brackets())
         );
