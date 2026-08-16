@@ -33,6 +33,216 @@ fn is_key_char(
         || matches!(modified_key, keyboard::Key::Character(c) if c.as_str() == ch)
 }
 
+// =============================================================================
+// Keyboard shortcut groups
+// =============================================================================
+//
+// `handle_keyboard_shortcuts` dispatches to these in a fixed order — see its
+// doc comment for why that order matters. Each group below is a pure
+// function of `key`/`modified_key`/`modifiers` where possible (no `self`
+// field is involved) and a private method on `CodeEditor` where the
+// shortcut depends on editor state (search/goto-line open, Vim mode,
+// folding enabled, multi-cursor). Splitting by whether `self` is needed
+// keeps every function honest about what it depends on, and the
+// `clippy::unused_self` lint (denied workspace-wide) would otherwise catch
+// a method that doesn't actually need `&self`.
+
+/// Handles `Ctrl/Cmd+Alt+V`, which toggles Vim mode.
+///
+/// Requires Alt so it doesn't conflict with the platform paste shortcut
+/// (`Ctrl/Cmd+V`, handled by [`clipboard_shortcut`]).
+fn vim_toggle_shortcut(
+    key: &keyboard::Key,
+    modifiers: &keyboard::Modifiers,
+) -> Option<Action<Message>> {
+    let command_pressed = modifiers.command() || modifiers.control();
+    if command_pressed
+        && modifiers.alt()
+        && !modifiers.shift()
+        && matches!(key, keyboard::Key::Character(v) if v.as_str() == "v")
+    {
+        return Some(Action::publish(Message::ToggleVimMode).and_capture());
+    }
+    None
+}
+
+/// Handles `Ctrl/Cmd+S`, routed through the same host-owned save request as
+/// Vim's `:w`.
+fn write_shortcut(
+    key: &keyboard::Key,
+    modifiers: &keyboard::Modifiers,
+) -> Option<Action<Message>> {
+    let command_pressed = modifiers.command() || modifiers.control();
+    if command_pressed
+        && !modifiers.alt()
+        && !modifiers.shift()
+        && matches!(key, keyboard::Key::Character(s) if s.as_str() == "s")
+    {
+        return Some(Action::publish(Message::WriteRequested).and_capture());
+    }
+    None
+}
+
+/// Handles copy (`Ctrl/Cmd+C`, `Ctrl+Insert`), cut (`Ctrl/Cmd+X`), select
+/// all (`Ctrl/Cmd+A`), and paste (`Ctrl/Cmd+V`, `Shift+Insert`, read from
+/// clipboard and forwarded as an empty [`Message::Paste`]).
+fn clipboard_shortcut(
+    key: &keyboard::Key,
+    modifiers: &keyboard::Modifiers,
+) -> Option<Action<Message>> {
+    let command_pressed = modifiers.command() || modifiers.control();
+
+    if (command_pressed
+        && matches!(key, keyboard::Key::Character(c) if c.as_str() == "c"))
+        || (modifiers.control()
+            && matches!(
+                key,
+                keyboard::Key::Named(keyboard::key::Named::Insert)
+            ))
+    {
+        return Some(Action::publish(Message::Copy).and_capture());
+    }
+
+    if command_pressed
+        && matches!(key, keyboard::Key::Character(x) if x.as_str() == "x")
+    {
+        return Some(Action::publish(Message::Cut).and_capture());
+    }
+
+    if command_pressed
+        && matches!(key, keyboard::Key::Character(a) if a.as_str() == "a")
+    {
+        return Some(Action::publish(Message::SelectAll).and_capture());
+    }
+
+    if (command_pressed
+        && matches!(key, keyboard::Key::Character(v) if v.as_str() == "v"))
+        || (modifiers.shift()
+            && matches!(
+                key,
+                keyboard::Key::Named(keyboard::key::Named::Insert)
+            ))
+    {
+        return Some(Action::publish(Message::Paste(String::new())));
+    }
+
+    None
+}
+
+/// Handles `Ctrl/Cmd+D` (select next occurrence) and `Ctrl+Alt+Up`/`Down`
+/// (add a cursor above/below the current one).
+fn multi_cursor_shortcut(
+    key: &keyboard::Key,
+    modifiers: &keyboard::Modifiers,
+) -> Option<Action<Message>> {
+    let command_pressed = modifiers.command() || modifiers.control();
+
+    if command_pressed
+        && matches!(key, keyboard::Key::Character(d) if d.as_str() == "d")
+    {
+        return Some(
+            Action::publish(Message::SelectNextOccurrence).and_capture(),
+        );
+    }
+
+    if modifiers.control()
+        && modifiers.alt()
+        && matches!(key, keyboard::Key::Named(keyboard::key::Named::ArrowUp))
+    {
+        return Some(Action::publish(Message::AddCursorAbove).and_capture());
+    }
+
+    if modifiers.control()
+        && modifiers.alt()
+        && matches!(key, keyboard::Key::Named(keyboard::key::Named::ArrowDown))
+    {
+        return Some(Action::publish(Message::AddCursorBelow).and_capture());
+    }
+
+    None
+}
+
+/// Handles direct-edit shortcuts that don't touch the clipboard: toggling
+/// the line comment (`Ctrl/Cmd+/`) and deleting the current selection
+/// (`Shift+Delete`).
+fn editing_shortcut(
+    key: &keyboard::Key,
+    modified_key: &keyboard::Key,
+    modifiers: &keyboard::Modifiers,
+) -> Option<Action<Message>> {
+    let command_pressed = modifiers.command() || modifiers.control();
+
+    // On French AZERTY `/` is Shift+`:` and only appears in `modified_key`;
+    // see `is_key_char`.
+    if command_pressed && is_key_char(key, modified_key, "/") {
+        return Some(Action::publish(Message::ToggleComment).and_capture());
+    }
+
+    if modifiers.shift()
+        && matches!(key, keyboard::Key::Named(keyboard::key::Named::Delete))
+    {
+        return Some(Action::publish(Message::DeleteSelection).and_capture());
+    }
+
+    None
+}
+
+/// Handles `Alt+Up`/`Alt+Down` (move the current line) and
+/// `Shift+Alt+Up`/`Down` (duplicate it). Excludes Control to avoid
+/// clashing with the `Ctrl+Alt+Up`/`Down` multi-cursor shortcuts (see
+/// [`multi_cursor_shortcut`]).
+fn line_move_shortcut(
+    key: &keyboard::Key,
+    modifiers: &keyboard::Modifiers,
+) -> Option<Action<Message>> {
+    if !modifiers.alt() || modifiers.control() {
+        return None;
+    }
+
+    if matches!(key, keyboard::Key::Named(keyboard::key::Named::ArrowUp)) {
+        let message = if modifiers.shift() {
+            Message::DuplicateLineUp
+        } else {
+            Message::MoveLineUp
+        };
+        return Some(Action::publish(message).and_capture());
+    }
+
+    if matches!(key, keyboard::Key::Named(keyboard::key::Named::ArrowDown)) {
+        let message = if modifiers.shift() {
+            Message::DuplicateLineDown
+        } else {
+            Message::MoveLineDown
+        };
+        return Some(Action::publish(message).and_capture());
+    }
+
+    None
+}
+
+/// Handles `Ctrl/Cmd+Home` (jump to the start of the document) and
+/// `Ctrl/Cmd+End` (jump to the end).
+fn navigation_shortcut(
+    key: &keyboard::Key,
+    modifiers: &keyboard::Modifiers,
+) -> Option<Action<Message>> {
+    let command_pressed = modifiers.command() || modifiers.control();
+
+    if command_pressed
+        && matches!(key, keyboard::Key::Named(keyboard::key::Named::Home))
+    {
+        return Some(Action::publish(Message::CtrlHome).and_capture());
+    }
+
+    if command_pressed
+        && matches!(key, keyboard::Key::Named(keyboard::key::Named::End))
+    {
+        return Some(Action::publish(Message::CtrlEnd).and_capture());
+    }
+
+    None
+}
+
 impl CodeEditor {
     /// Checks if the editor has focus (both Iced focus and internal canvas focus).
     ///
@@ -50,12 +260,22 @@ impl CodeEditor {
 
     /// Handles keyboard shortcut combinations (Ctrl+C, Ctrl+Z, etc.).
     ///
-    /// This implementation includes focus chain management for Tab and Shift+Tab
-    /// navigation between editors.
+    /// Tries each shortcut group in turn — see the "Keyboard shortcut
+    /// groups" section above this `impl` block — and returns the first
+    /// match. The order is a real dependency, not just style: a few
+    /// bindings share a physical key across groups and rely on being
+    /// listed in a specific relative order (e.g. `Ctrl/Cmd+Alt+V` for the
+    /// Vim toggle must be tried before the plain `Ctrl/Cmd+V` paste
+    /// shortcut, or the Alt modifier would fall through to paste instead).
+    /// Everywhere the groups share a key, the conflicting bindings already
+    /// exclude each other via their modifier checks (documented on each
+    /// group), so this list is not otherwise order-sensitive.
     ///
     /// # Arguments
     ///
     /// * `key` - The keyboard key that was pressed
+    /// * `modified_key` - The key with all modifiers applied except Ctrl;
+    ///   used by symbol shortcuts (see [`is_key_char`])
     /// * `modifiers` - The keyboard modifiers (Ctrl, Shift, Alt, etc.)
     ///
     /// # Returns
@@ -67,33 +287,30 @@ impl CodeEditor {
         modified_key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
     ) -> Option<Action<Message>> {
-        // `command()` maps to Command on macOS and Control elsewhere. Keep
-        // accepting Control on macOS for backwards compatibility.
-        let command_pressed = modifiers.command() || modifiers.control();
+        vim_toggle_shortcut(key, modifiers)
+            .or_else(|| write_shortcut(key, modifiers))
+            .or_else(|| self.focus_navigation_shortcut(key, modifiers))
+            .or_else(|| clipboard_shortcut(key, modifiers))
+            .or_else(|| self.history_shortcut(key, modifiers))
+            .or_else(|| self.dialog_shortcut(key, modifiers))
+            .or_else(|| self.escape_shortcut(key))
+            .or_else(|| multi_cursor_shortcut(key, modifiers))
+            .or_else(|| editing_shortcut(key, modified_key, modifiers))
+            .or_else(|| line_move_shortcut(key, modifiers))
+            .or_else(|| navigation_shortcut(key, modifiers))
+            .or_else(|| self.folding_shortcut(key, modified_key, modifiers))
+    }
 
-        // Toggle Vim behavior without conflicting with the platform paste
-        // shortcut (Ctrl/Cmd+V).
-        if command_pressed
-            && modifiers.alt()
-            && !modifiers.shift()
-            && matches!(key, keyboard::Key::Character(v) if v.as_str() == "v")
-        {
-            return Some(Action::publish(Message::ToggleVimMode).and_capture());
-        }
-
-        // Handle Ctrl/Cmd+S through the same host-owned save request as Vim
-        // `:w`.
-        if command_pressed
-            && !modifiers.alt()
-            && !modifiers.shift()
-            && matches!(key, keyboard::Key::Character(s) if s.as_str() == "s")
-        {
-            return Some(
-                Action::publish(Message::WriteRequested).and_capture(),
-            );
-        }
-
-        // Shift+Tab: focus navigation backward (Tab alone inserts indentation)
+    /// Handles `Shift+Tab` for backward focus-chain navigation between
+    /// editors. Plain `Tab` inserts indentation instead, handled by
+    /// [`Self::handle_character_input`]. Skipped while the search dialog is
+    /// open, where Tab/Shift+Tab cycle its fields instead (see
+    /// [`Self::dialog_shortcut`]).
+    fn focus_navigation_shortcut(
+        &self,
+        key: &keyboard::Key,
+        modifiers: &keyboard::Modifiers,
+    ) -> Option<Action<Message>> {
         if matches!(key, keyboard::Key::Named(keyboard::key::Named::Tab))
             && modifiers.shift()
             && !self.search_state.is_open
@@ -102,34 +319,20 @@ impl CodeEditor {
                 Action::publish(Message::FocusNavigationShiftTab).and_capture(),
             );
         }
+        None
+    }
 
-        // Handle Ctrl+C / Ctrl+Insert (copy)
-        if (command_pressed
-            && matches!(key, keyboard::Key::Character(c) if c.as_str() == "c"))
-            || (modifiers.control()
-                && matches!(
-                    key,
-                    keyboard::Key::Named(keyboard::key::Named::Insert)
-                ))
-        {
-            return Some(Action::publish(Message::Copy).and_capture());
-        }
+    /// Handles undo (`Ctrl/Cmd+Z`), redo (`Ctrl/Cmd+Y`, or `Shift+Cmd+Z` on
+    /// macOS), and Vim's `Ctrl+R` redo binding in Normal mode — kept
+    /// alongside the platform shortcuts above, which stay available in
+    /// every editor mode, not just Vim's Normal mode.
+    fn history_shortcut(
+        &self,
+        key: &keyboard::Key,
+        modifiers: &keyboard::Modifiers,
+    ) -> Option<Action<Message>> {
+        let command_pressed = modifiers.command() || modifiers.control();
 
-        // Handle Ctrl/Cmd+X (cut)
-        if command_pressed
-            && matches!(key, keyboard::Key::Character(x) if x.as_str() == "x")
-        {
-            return Some(Action::publish(Message::Cut).and_capture());
-        }
-
-        // Handle Ctrl/Cmd+A (select all)
-        if command_pressed
-            && matches!(key, keyboard::Key::Character(a) if a.as_str() == "a")
-        {
-            return Some(Action::publish(Message::SelectAll).and_capture());
-        }
-
-        // Handle Ctrl/Cmd+Z (undo). Shift+Cmd+Z is redo on macOS.
         if command_pressed
             && !modifiers.shift()
             && matches!(key, keyboard::Key::Character(z) if z.as_str() == "z")
@@ -137,7 +340,6 @@ impl CodeEditor {
             return Some(Action::publish(Message::Undo).and_capture());
         }
 
-        // Handle Ctrl/Cmd+Y and Shift+Cmd+Z (redo)
         if command_pressed
             && (matches!(key, keyboard::Key::Character(y) if y.as_str() == "y")
                 || (modifiers.shift()
@@ -146,8 +348,6 @@ impl CodeEditor {
             return Some(Action::publish(Message::Redo).and_capture());
         }
 
-        // Vim's redo binding is Ctrl+R in Normal mode. Keep the existing
-        // platform redo shortcuts above available in every editor mode.
         if self.vim_enabled
             && self.vim_state.mode() == VimMode::Normal
             && modifiers.control()
@@ -157,7 +357,20 @@ impl CodeEditor {
             return Some(Action::publish(Message::Redo).and_capture());
         }
 
-        // Handle Ctrl+F (open search)
+        None
+    }
+
+    /// Handles the search/replace and goto-line dialogs: opening them
+    /// (`Ctrl/Cmd+F`, `Ctrl/Cmd+H`, `Ctrl/Cmd+G`), cycling the search
+    /// dialog's fields while it is open (`Tab`/`Shift+Tab`), and find
+    /// next/previous (`F3`/`Shift+F3`).
+    fn dialog_shortcut(
+        &self,
+        key: &keyboard::Key,
+        modifiers: &keyboard::Modifiers,
+    ) -> Option<Action<Message>> {
+        let command_pressed = modifiers.command() || modifiers.control();
+
         if command_pressed
             && matches!(key, keyboard::Key::Character(f) if f.as_str() == "f")
             && self.search_replace_enabled
@@ -165,7 +378,6 @@ impl CodeEditor {
             return Some(Action::publish(Message::OpenSearch).and_capture());
         }
 
-        // Handle Ctrl+H (open search and replace)
         if command_pressed
             && matches!(key, keyboard::Key::Character(h) if h.as_str() == "h")
             && self.search_replace_enabled
@@ -175,204 +387,102 @@ impl CodeEditor {
             );
         }
 
-        // Handle Cmd/Ctrl+G (open go-to-line input)
         if command_pressed
             && matches!(key, keyboard::Key::Character(g) if g.as_str() == "g")
         {
             return Some(Action::publish(Message::OpenGotoLine).and_capture());
         }
 
-        // Handle Escape — close the active overlay, collapse a multi-cursor
-        // selection (`handle_close_search_msg` does this when more than one
-        // cursor is active, even with search closed), or forward it to Vim's
-        // modal state machine. If none of these apply, Escape has nothing to
-        // do here, so the event is left uncaptured (`None`) instead of being
-        // swallowed on a no-op — a host embedding the editor can then react
-        // to it (e.g. closing a modal, leaving fullscreen).
-        if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
-            let message = if self.goto_line_state.is_open {
-                Some(Message::CloseGotoLine)
-            } else if self.search_state.is_open {
-                Some(Message::CloseSearch)
-            } else if self.vim_enabled {
-                Some(Message::VimKey('\u{1b}'))
-            } else if self.cursors.is_multi() {
-                Some(Message::CloseSearch)
-            } else {
-                None
-            };
-            return message
-                .map(|message| Action::publish(message).and_capture());
-        }
-
-        // Handle Ctrl+D (select next occurrence)
-        if command_pressed
-            && matches!(key, keyboard::Key::Character(d) if d.as_str() == "d")
-        {
-            return Some(
-                Action::publish(Message::SelectNextOccurrence).and_capture(),
-            );
-        }
-
-        // Handle Ctrl+/ (toggle line comment). On French AZERTY `/` is
-        // Shift+`:` and only appears in `modified_key`; see `is_key_char`.
-        if command_pressed && is_key_char(key, modified_key, "/") {
-            return Some(Action::publish(Message::ToggleComment).and_capture());
-        }
-
-        // Handle Ctrl+Alt+Up (add cursor above)
-        if modifiers.control()
-            && modifiers.alt()
-            && matches!(
-                key,
-                keyboard::Key::Named(keyboard::key::Named::ArrowUp)
-            )
-        {
-            return Some(
-                Action::publish(Message::AddCursorAbove).and_capture(),
-            );
-        }
-
-        // Handle Ctrl+Alt+Down (add cursor below)
-        if modifiers.control()
-            && modifiers.alt()
-            && matches!(
-                key,
-                keyboard::Key::Named(keyboard::key::Named::ArrowDown)
-            )
-        {
-            return Some(
-                Action::publish(Message::AddCursorBelow).and_capture(),
-            );
-        }
-
-        // Handle Alt+Up / Alt+Down (move line) and Shift+Alt+Up / Shift+Alt+Down
-        // (duplicate line). Exclude Control to avoid clashing with the
-        // Ctrl+Alt+Up/Down multi-cursor shortcuts above.
-        if modifiers.alt() && !modifiers.control() {
-            if matches!(
-                key,
-                keyboard::Key::Named(keyboard::key::Named::ArrowUp)
-            ) {
-                let message = if modifiers.shift() {
-                    Message::DuplicateLineUp
-                } else {
-                    Message::MoveLineUp
-                };
-                return Some(Action::publish(message).and_capture());
-            }
-            if matches!(
-                key,
-                keyboard::Key::Named(keyboard::key::Named::ArrowDown)
-            ) {
-                let message = if modifiers.shift() {
-                    Message::DuplicateLineDown
-                } else {
-                    Message::MoveLineDown
-                };
-                return Some(Action::publish(message).and_capture());
-            }
-        }
-
-        // Handle Tab (cycle forward in search dialog if open)
         if matches!(key, keyboard::Key::Named(keyboard::key::Named::Tab))
             && self.search_state.is_open
         {
-            if modifiers.shift() {
-                // Shift+Tab: cycle backward
-                return Some(
-                    Action::publish(Message::SearchDialogShiftTab)
-                        .and_capture(),
-                );
+            let message = if modifiers.shift() {
+                Message::SearchDialogShiftTab
             } else {
-                // Tab: cycle forward
-                return Some(
-                    Action::publish(Message::SearchDialogTab).and_capture(),
-                );
-            }
+                Message::SearchDialogTab
+            };
+            return Some(Action::publish(message).and_capture());
         }
 
-        // Handle F3 (find next) and Shift+F3 (find previous)
         if matches!(key, keyboard::Key::Named(keyboard::key::Named::F3))
             && self.search_replace_enabled
         {
-            if modifiers.shift() {
-                return Some(
-                    Action::publish(Message::FindPrevious).and_capture(),
-                );
+            let message = if modifiers.shift() {
+                Message::FindPrevious
             } else {
-                return Some(Action::publish(Message::FindNext).and_capture());
-            }
+                Message::FindNext
+            };
+            return Some(Action::publish(message).and_capture());
         }
 
-        // Handle Ctrl+V / Shift+Insert (paste) - read clipboard and send paste message
-        if (command_pressed
-            && matches!(key, keyboard::Key::Character(v) if v.as_str() == "v"))
-            || (modifiers.shift()
-                && matches!(
-                    key,
-                    keyboard::Key::Named(keyboard::key::Named::Insert)
-                ))
-        {
-            // Return an action that requests clipboard read
-            return Some(Action::publish(Message::Paste(String::new())));
+        None
+    }
+
+    /// Handles Escape: closes the active dialog, collapses a multi-cursor
+    /// selection down to the primary cursor (`handle_close_search_msg`
+    /// does this when more than one cursor is active, even with no dialog
+    /// open), or forwards it to Vim's modal state machine. If none of
+    /// these apply, Escape has nothing to do here, so the event is left
+    /// uncaptured (`None`) instead of being swallowed on a no-op — a host
+    /// embedding the editor can then react to it (e.g. closing a modal,
+    /// leaving fullscreen).
+    fn escape_shortcut(&self, key: &keyboard::Key) -> Option<Action<Message>> {
+        if !matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
+            return None;
         }
 
-        // Handle Ctrl+Home (go to start of document)
-        if command_pressed
-            && matches!(key, keyboard::Key::Named(keyboard::key::Named::Home))
-        {
-            return Some(Action::publish(Message::CtrlHome).and_capture());
+        let message = if self.goto_line_state.is_open {
+            Some(Message::CloseGotoLine)
+        } else if self.search_state.is_open {
+            Some(Message::CloseSearch)
+        } else if self.vim_enabled {
+            Some(Message::VimKey('\u{1b}'))
+        } else if self.cursors.is_multi() {
+            Some(Message::CloseSearch)
+        } else {
+            None
+        };
+        message.map(|message| Action::publish(message).and_capture())
+    }
+
+    /// Handles code-folding shortcuts, active only while folding is
+    /// enabled: toggling the fold at the cursor (`Ctrl/Cmd+.`), folding
+    /// everything (`Ctrl+K`), and unfolding everything (`Ctrl+J`).
+    fn folding_shortcut(
+        &self,
+        key: &keyboard::Key,
+        modified_key: &keyboard::Key,
+        modifiers: &keyboard::Modifiers,
+    ) -> Option<Action<Message>> {
+        if !self.folding_enabled {
+            return None;
         }
 
-        // Handle Ctrl+End (go to end of document)
-        if command_pressed
-            && matches!(key, keyboard::Key::Named(keyboard::key::Named::End))
-        {
-            return Some(Action::publish(Message::CtrlEnd).and_capture());
-        }
-
-        // Handle Shift+Delete (delete selection)
-        if modifiers.shift()
-            && matches!(key, keyboard::Key::Named(keyboard::key::Named::Delete))
-        {
+        // On French AZERTY `.` is Shift+`;` and only appears in
+        // `modified_key`; see `is_key_char`.
+        if modifiers.control() && is_key_char(key, modified_key, ".") {
             return Some(
-                Action::publish(Message::DeleteSelection).and_capture(),
+                Action::publish(Message::ToggleFoldAtCursor).and_capture(),
             );
         }
 
-        // Code folding shortcuts (only when folding is enabled).
-        if self.folding_enabled {
-            // Ctrl+. : toggle the fold of the block at the cursor. On French
-            // AZERTY `.` is Shift+`;` and only appears in `modified_key`;
-            // see `is_key_char`.
-            if modifiers.control() && is_key_char(key, modified_key, ".") {
-                return Some(
-                    Action::publish(Message::ToggleFoldAtCursor).and_capture(),
-                );
-            }
+        // Exclude Alt so it doesn't clash with a future Ctrl+Alt+K binding,
+        // matching the Ctrl+Alt+Up/Down and Alt+Up/Down shortcuts, which
+        // each exclude the other modifier for the same reason.
+        if modifiers.control()
+            && !modifiers.shift()
+            && !modifiers.alt()
+            && matches!(key, keyboard::Key::Character(c) if c.as_str() == "k")
+        {
+            return Some(Action::publish(Message::FoldAll).and_capture());
+        }
 
-            // Ctrl+K : fold all blocks. Exclude Alt so it doesn't clash with
-            // a future Ctrl+Alt+K binding, matching the Ctrl+Alt+Up/Down
-            // multi-cursor shortcuts and the Alt+Up/Down line-move
-            // shortcuts above, which each exclude the other modifier for
-            // the same reason.
-            if modifiers.control()
-                && !modifiers.shift()
-                && !modifiers.alt()
-                && matches!(key, keyboard::Key::Character(c) if c.as_str() == "k")
-            {
-                return Some(Action::publish(Message::FoldAll).and_capture());
-            }
-
-            // Ctrl+J : unfold all blocks. Same Alt exclusion as Ctrl+K above.
-            if modifiers.control()
-                && !modifiers.shift()
-                && !modifiers.alt()
-                && matches!(key, keyboard::Key::Character(c) if c.as_str() == "j")
-            {
-                return Some(Action::publish(Message::UnfoldAll).and_capture());
-            }
+        if modifiers.control()
+            && !modifiers.shift()
+            && !modifiers.alt()
+            && matches!(key, keyboard::Key::Character(c) if c.as_str() == "j")
+        {
+            return Some(Action::publish(Message::UnfoldAll).and_capture());
         }
 
         None

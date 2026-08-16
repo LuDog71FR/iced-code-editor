@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `CodeEditor::reset`'s example used only public API and now compiles as `no_run` on every `cargo test`
   - The `i18n` module doc's example told readers to `use iced_code_editor::t;` and call `t!(...)` directly — but this crate doesn't re-export `rust-i18n`'s `t!` macro, so the example was never valid and `ignore` had been hiding that. Rewritten to show the crate's actual public API (`Translations::new(language).search_placeholder()`, matching every other example in the module) as a normal, fully-run doctest
 
+- refactor: **Split up the two largest files flagged by the project's 1000-line rule** (no behavior change)
+  - `handle_keyboard_shortcuts` (`iced-code-editor/src/canvas_editor/input/events.rs`) was a single 316-line function encoding ~25 shortcuts' precedence as statement order, which is exactly the shape that let the AZERTY fold-toggle bug and the Ctrl+Alt+K fold-all bug slip through earlier. Split into named groups (`vim_toggle_shortcut`, `clipboard_shortcut`, `history_shortcut`, `dialog_shortcut`, `escape_shortcut`, `multi_cursor_shortcut`, `editing_shortcut`, `line_move_shortcut`, `navigation_shortcut`, `folding_shortcut`, plus `focus_navigation_shortcut`), each independently documented, with `handle_keyboard_shortcuts` reduced to a 13-line `.or_else()` chain whose doc comment explains the one real ordering dependency (Vim-toggle before paste) and notes every other shared-key pair already excludes itself via its own modifier check
+  - `demo-app/src/app.rs` (1653 lines) split into `app/message.rs` (the `Message` enum), `app/tabs.rs` (tab/editor creation, lookup, and event forwarding), `app/files.rs` (open/save/reveal and LSP jump-to-definition), and `app/settings.rs` (font/theme/language/per-editor toggles), following the same pattern already used for `app/app_lsp.rs`; `app.rs` itself is now 610 lines and holds only app state, `new()`, and the `update()`/`subscription()`/`theme()` entry points. Each of the 12 relocated unit tests moved into the file testing the code it covers
+
 
 ## [0.4.0] - 2026-08-16
 
