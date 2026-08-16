@@ -1,5 +1,10 @@
 //! Minimal LSP types and helpers used by the editor.
 
+pub(crate) mod sync;
+
+#[cfg(all(feature = "lsp-process", not(target_arch = "wasm32")))]
+pub mod process;
+
 /// A zero-based position in an LSP document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LspPosition {

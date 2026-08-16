@@ -51,9 +51,6 @@ mod gutter;
 pub mod history;
 pub mod ime_requester;
 pub mod lsp;
-#[cfg(all(feature = "lsp-process", not(target_arch = "wasm32")))]
-pub mod lsp_process;
-mod lsp_sync;
 mod overlays;
 mod search;
 mod search_dialog;
@@ -2682,7 +2679,7 @@ impl CodeEditor {
 /// solid-color scroller, square corners of `radius`, and no border.
 ///
 /// Shared by the canvas editor's own scrollbars ([`view`]) and the LSP
-/// overlay panels ([`lsp_process::overlay`]), which derive their colors from
+/// overlay panels ([`lsp::process::overlay`]), which derive their colors from
 /// a theme palette instead of plain [`Color`]s.
 ///
 /// # Examples

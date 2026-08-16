@@ -3,9 +3,8 @@
 //! hover/completion/definition requests.
 
 use crate::buffer::TextBuffer;
-
-use super::CodeEditor;
-use super::lsp;
+use crate::canvas_editor::CodeEditor;
+use crate::canvas_editor::lsp;
 
 impl CodeEditor {
     /// Attaches an LSP client and opens a document for the current buffer.
@@ -414,7 +413,8 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use super::super::Message;
+    use crate::canvas_editor::Message;
+
     use super::*;
 
     #[derive(Default)]
