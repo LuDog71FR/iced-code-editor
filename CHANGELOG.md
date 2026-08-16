@@ -60,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `update.rs` shrinks from ~5000 to ~3500 lines; the corresponding unit tests moved with their handlers into each new file's own test module
   - No functional changes; a few purely-internal helpers (`finish_edit_operation`, `finish_navigation_operation`, `ensure_grouping_started`, `end_grouping_if_active`, `capture_lsp_edit_snapshot`, `handle_goto_position`) went from private to `pub(crate)` so the moved handlers can still call them across the new file boundary
 
+- refactor: **Split `mod.rs`, `canvas_impl.rs` and `command.rs` into topic-focused files, continuing the `update.rs` split above**
+  - `mod.rs`: the LSP attach/detach, hover/completion/definition request, and incremental-change-queueing methods (~600 lines) moved to a new `lsp_sync.rs`, the same sibling-`impl CodeEditor` pattern as `cursor.rs`/`clipboard.rs`
+  - `canvas_impl.rs` (~3000 lines, mixing drawing and input handling) split five ways: `canvas_impl.rs` keeps only the `canvas::Program` trait glue (`draw`/`update`/`mouse_interaction`); `gutter.rs`, `text.rs` and `overlays.rs` each own one rendering layer (line numbers/fold chevrons, syntax highlighting, and selection/cursor/search highlights respectively); `events.rs` holds all keyboard/mouse/IME handling
+  - `command.rs` (~1700 lines) became a `command/` directory module: `command.rs` now holds only the `Command` trait and re-exports, with `command/edit.rs`, `command/composite.rs`, `command/lines.rs` and `command/comment.rs` each owning one command family; every external `super::command::{Type}` import kept working unchanged since the re-exports preserve the original path
+  - No functional changes; unit tests moved with the code they cover into each new file's own test module (472 tests pass, same count as before)
+
 - refactor: **Minor cleanups found during review**
   - `lsp_language_for_extension` lowercased its input and then compared it with `eq_ignore_ascii_case`, which is already case-insensitive; dropped the redundant allocation
   - `Ctrl+/` line-comment toggling now recognizes C, C++, Java, C#, shell scripts, Ruby, TOML and YAML in addition to the languages already covered (Rust, JS/TS, Go, Python, Lua); it was previously a silent no-op for all of them
