@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- perf: **Case-insensitive search skips the per-character boundary table for ASCII lines**
+  - The column-drift fix for Unicode case-folding built a `String` plus a `Vec<(usize, usize)>` boundary table for every line scanned, even for pure-ASCII text, where a byte offset already equals a character/column offset and no table is needed
+  - ASCII lines now take a fast path (`to_ascii_lowercase` + direct byte offsets); non-ASCII lines keep the boundary-table path unchanged
+
+- perf: **Undo-history trimming no longer shifts the whole stack on each discard**
+  - `enforce_size_limit` dropped the oldest command with `Vec::remove(0)`, which shifts every remaining element down by one; shrinking a deep history via `set_max_size` was `O(k·n)`
+  - `undo_stack` is now a `VecDeque`, so trimming pops from the front in `O(1)`
+
 - ci: **Continuous integration now covers the whole workspace and every feature**
   - `build`, `clippy` and `test` run with `--workspace --all-features`; they previously used the default members with no feature enabled, so `demo-app`, `simple-example` and everything behind the `lsp-process` and `two-face` features was never built, linted or tested
   - Raises the number of tests actually executed in CI from 428 to 491

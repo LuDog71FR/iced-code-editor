@@ -59,6 +59,7 @@
 
 use super::command::{Command, CompositeCommand};
 use crate::text_buffer::TextBuffer;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 /// Manages command history for undo/redo operations.
@@ -76,7 +77,7 @@ pub struct CommandHistory {
 #[derive(Debug)]
 struct HistoryInner {
     /// Stack of commands that can be undone
-    undo_stack: Vec<Box<dyn Command>>,
+    undo_stack: VecDeque<Box<dyn Command>>,
     /// Stack of commands that can be redone
     redo_stack: Vec<Box<dyn Command>>,
     /// Maximum number of commands to keep in history
@@ -96,7 +97,7 @@ impl HistoryInner {
     /// reachable via undo.
     fn enforce_size_limit(&mut self) {
         while self.undo_stack.len() > self.max_size {
-            self.undo_stack.remove(0);
+            self.undo_stack.pop_front();
             if let Some(ref mut sp) = self.save_point {
                 if *sp > 0 {
                     *sp -= 1;
@@ -129,7 +130,7 @@ impl CommandHistory {
     pub fn new(max_size: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(HistoryInner {
-                undo_stack: Vec::with_capacity(max_size.min(100)),
+                undo_stack: VecDeque::with_capacity(max_size.min(100)),
                 redo_stack: Vec::with_capacity(max_size.min(100)),
                 max_size,
                 save_point: None,
@@ -170,7 +171,7 @@ impl CommandHistory {
         inner.redo_stack.clear();
 
         // Add to undo stack
-        inner.undo_stack.push(command);
+        inner.undo_stack.push_back(command);
 
         inner.enforce_size_limit();
     }
@@ -197,7 +198,7 @@ impl CommandHistory {
             Self::end_group_internal(&mut inner);
         }
 
-        if let Some(mut command) = inner.undo_stack.pop() {
+        if let Some(mut command) = inner.undo_stack.pop_back() {
             command.undo(buffer, cursor);
             inner.redo_stack.push(command);
             true
@@ -225,7 +226,7 @@ impl CommandHistory {
 
         if let Some(mut command) = inner.redo_stack.pop() {
             command.execute(buffer, cursor);
-            inner.undo_stack.push(command);
+            inner.undo_stack.push_back(command);
             true
         } else {
             false
@@ -339,7 +340,7 @@ impl CommandHistory {
             inner.redo_stack.clear();
 
             // Add composite to undo stack
-            inner.undo_stack.push(Box::new(group));
+            inner.undo_stack.push_back(Box::new(group));
 
             inner.enforce_size_limit();
         }

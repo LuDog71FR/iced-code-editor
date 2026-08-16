@@ -630,6 +630,22 @@ fn find_matches_case_insensitive(
     line_idx: usize,
     matches: &mut Vec<SearchMatch>,
 ) {
+    // ASCII text lowercases one byte to one byte, so byte offset == char
+    // offset == column and no boundary table is needed. This is the common
+    // case, so skip the per-line `Vec` allocation below for it.
+    if line.is_ascii() {
+        let search_line = line.to_ascii_lowercase();
+        let mut start_pos = 0;
+        while let Some(relative_pos) =
+            search_line[start_pos..].find(search_query)
+        {
+            let absolute_pos = start_pos + relative_pos;
+            matches.push(SearchMatch { line: line_idx, col: absolute_pos });
+            start_pos = absolute_pos + search_query.len();
+        }
+        return;
+    }
+
     let mut search_line = String::with_capacity(line.len());
     let mut boundaries: Vec<(usize, usize)> =
         Vec::with_capacity(line.len() + 1);
