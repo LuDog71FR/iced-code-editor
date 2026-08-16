@@ -657,9 +657,157 @@ impl CodeEditor {
     }
 }
 
+impl CodeEditor {
+    /// Converts a logical buffer position into a canvas point, if visible.
+    pub(crate) fn point_from_position(
+        &self,
+        line: usize,
+        col: usize,
+    ) -> Option<iced::Point> {
+        let visual_lines = self.visual_lines_cached(self.viewport_width);
+        let visual_index =
+            WrappingCalculator::logical_to_visual(&visual_lines, line, col)?;
+        let visual_line = &visual_lines[visual_index];
+        let line_content = self.buffer.line(visual_line.logical_line);
+        let prefix_len = col.saturating_sub(visual_line.start_col);
+        let prefix_text: String = line_content
+            .chars()
+            .skip(visual_line.start_col)
+            .take(prefix_len)
+            .collect();
+        let x = self.gutter_width()
+            + 5.0
+            + measure_text_width(
+                &prefix_text,
+                self.full_char_width,
+                self.char_width,
+            );
+        let y = visual_index as f32 * self.line_height;
+        Some(iced::Point::new(x, y))
+    }
+
+    /// Returns the word-start column in a line for a given column.
+    ///
+    /// Word characters include ASCII alphanumerics and underscore.
+    pub(crate) fn word_start_in_line(line: &str, col: usize) -> usize {
+        let chars: Vec<char> = line.chars().collect();
+        if chars.is_empty() {
+            return 0;
+        }
+        let mut idx = col.min(chars.len());
+        if idx == chars.len() {
+            idx = idx.saturating_sub(1);
+        }
+        if !Self::is_word_char(chars[idx]) {
+            if idx > 0 && Self::is_word_char(chars[idx - 1]) {
+                idx -= 1;
+            } else {
+                return col.min(chars.len());
+            }
+        }
+        while idx > 0 && Self::is_word_char(chars[idx - 1]) {
+            idx -= 1;
+        }
+        idx
+    }
+
+    /// Returns the word-end column in a line for a given column.
+    pub(crate) fn word_end_in_line(line: &str, col: usize) -> usize {
+        let chars: Vec<char> = line.chars().collect();
+        if chars.is_empty() {
+            return 0;
+        }
+        let mut idx = col.min(chars.len());
+        if idx == chars.len() {
+            idx = idx.saturating_sub(1);
+        }
+
+        // If current char is not a word char, check if previous was (we might be just after the word)
+        if !Self::is_word_char(chars[idx]) {
+            if idx > 0 && Self::is_word_char(chars[idx - 1]) {
+                // We are just after a word, so idx is the end (exclusive)
+                // But wait, if we are at the space after "foo", idx points to space.
+                // "foo " -> ' ' is at 3. word_end should be 3.
+                // So if chars[idx] is not word char, and chars[idx-1] IS, then idx is the end.
+                return idx;
+            } else {
+                // Not on a word
+                return col.min(chars.len());
+            }
+        }
+
+        // If we are on a word char, scan forward
+        while idx < chars.len() && Self::is_word_char(chars[idx]) {
+            idx += 1;
+        }
+        idx
+    }
+
+    /// Returns true when the character is part of an identifier-style word.
+    pub(crate) fn is_word_char(ch: char) -> bool {
+        ch == '_' || ch.is_alphanumeric()
+    }
+
+    /// Returns the screen position of the cursor.
+    ///
+    /// This method returns the (x, y) coordinates of the current cursor position
+    /// relative to the editor canvas, accounting for gutter width and line height.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<iced::Point>` containing the cursor position, or `None` if
+    /// the cursor position cannot be determined.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// if let Some(point) = editor.cursor_screen_position() {
+    ///     println!("Cursor at: ({}, {})", point.x, point.y);
+    /// }
+    /// ```
+    pub fn cursor_screen_position(&self) -> Option<iced::Point> {
+        let pos = self.cursors.primary_position();
+        self.point_from_position(pos.0, pos.1)
+    }
+
+    /// Returns the current cursor position as (line, column).
+    ///
+    /// This method returns the logical cursor position in the buffer,
+    /// where line and column are both 0-indexed.
+    ///
+    /// # Returns
+    ///
+    /// A tuple `(line, column)` representing the cursor position.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// let (line, col) = editor.cursor_position();
+    /// println!("Cursor at line {}, column {}", line, col);
+    /// ```
+    pub fn cursor_position(&self) -> (usize, usize) {
+        self.cursors.primary_position()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn test_word_start_in_line() {
+        let line = "foo_bar baz";
+        assert_eq!(CodeEditor::word_start_in_line(line, 0), 0);
+        assert_eq!(CodeEditor::word_start_in_line(line, 2), 0);
+        assert_eq!(CodeEditor::word_start_in_line(line, 4), 0);
+        assert_eq!(CodeEditor::word_start_in_line(line, 7), 0);
+        assert_eq!(CodeEditor::word_start_in_line(line, 9), 8);
+    }
 
     #[test]
     fn vim_word_motion_crosses_line_boundary_via_prebuilt_index() {

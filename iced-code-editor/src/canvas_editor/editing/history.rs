@@ -59,6 +59,7 @@
 
 use super::command::{Command, CompositeCommand};
 use crate::buffer::TextBuffer;
+use crate::canvas_editor::CodeEditor;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -453,6 +454,34 @@ impl CommandHistory {
 impl Default for CommandHistory {
     fn default() -> Self {
         Self::new(100)
+    }
+}
+
+impl CodeEditor {
+    /// Returns whether the editor has unsaved changes.
+    ///
+    /// # Returns
+    ///
+    /// `true` if there are unsaved modifications, `false` otherwise
+    pub fn is_modified(&self) -> bool {
+        self.history.is_modified()
+    }
+
+    /// Marks the current state as saved.
+    ///
+    /// Call this after successfully saving the file to reset the modified state.
+    pub fn mark_saved(&mut self) {
+        self.history.mark_saved();
+    }
+
+    /// Returns whether undo is available.
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    /// Returns whether redo is available.
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
     }
 }
 

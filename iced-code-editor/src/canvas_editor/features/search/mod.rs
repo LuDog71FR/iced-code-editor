@@ -9,6 +9,7 @@ pub(crate) mod dialog;
 mod update;
 
 use crate::buffer::TextBuffer;
+use crate::canvas_editor::{CodeEditor, Message};
 use iced::widget::Id;
 use std::borrow::Cow;
 use std::thread;
@@ -671,6 +672,68 @@ fn find_matches_case_insensitive(
         };
         matches.push(SearchMatch { line: line_idx, col });
         start_pos = absolute_pos + search_query.len();
+    }
+}
+
+impl CodeEditor {
+    /// Refreshes search matches after buffer modification.
+    ///
+    /// Should be called after any operation that modifies the buffer.
+    /// If search is active, recalculates only the affected logical lines and
+    /// selects the match closest to the current cursor position.
+    pub(crate) fn refresh_search_matches_if_needed(&mut self) {
+        if self.search_matches_visible() && !self.search_state.query.is_empty()
+        {
+            let start_line = self.pre_edit_line.saturating_sub(1);
+            let old_end_exclusive = self.pre_edit_last_line.saturating_add(2);
+            self.search_state.update_matches_after_edit(
+                &self.buffer,
+                start_line,
+                old_end_exclusive,
+            );
+
+            // Select match closest to cursor to maintain context
+            self.search_state
+                .select_match_near_cursor(self.cursors.primary_position());
+        }
+    }
+
+    pub(crate) fn search_matches_visible(&self) -> bool {
+        self.search_state.is_open
+            || (self.vim_enabled && self.vim_state.last_search().is_some())
+    }
+
+    /// Opens the search dialog programmatically.
+    ///
+    /// This is useful when wiring your own UI button instead of relying on
+    /// keyboard shortcuts.
+    ///
+    /// # Returns
+    ///
+    /// A `Task<Message>` that focuses the search input.
+    pub fn open_search_dialog(&mut self) -> iced::Task<Message> {
+        self.update(&Message::OpenSearch)
+    }
+
+    /// Opens the search-and-replace dialog programmatically.
+    ///
+    /// This is useful when wiring your own UI button instead of relying on
+    /// keyboard shortcuts.
+    ///
+    /// # Returns
+    ///
+    /// A `Task<Message>` that focuses the search input.
+    pub fn open_search_replace_dialog(&mut self) -> iced::Task<Message> {
+        self.update(&Message::OpenSearchReplace)
+    }
+
+    /// Closes the search dialog programmatically.
+    ///
+    /// # Returns
+    ///
+    /// A `Task<Message>` for any follow-up UI work.
+    pub fn close_search_dialog(&mut self) -> iced::Task<Message> {
+        self.update(&Message::CloseSearch)
     }
 }
 

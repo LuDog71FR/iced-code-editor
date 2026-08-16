@@ -14,9 +14,7 @@ use crate::canvas_editor::features::context_menu;
 use crate::canvas_editor::features::goto_line::dialog as goto_line_dialog;
 use crate::canvas_editor::features::search::dialog as search_dialog;
 use crate::canvas_editor::input::ime_requester::ImeRequester;
-use crate::canvas_editor::{
-    CodeEditor, GUTTER_WIDTH, Message, scrollable_rail,
-};
+use crate::canvas_editor::{CodeEditor, GUTTER_WIDTH, Message};
 use std::rc::Rc;
 
 /// Builds the transparent-container scrollable style shared by the canvas
@@ -441,9 +439,60 @@ impl CodeEditor {
     }
 }
 
+/// Builds a plain-color scrollable rail: a solid background track with a
+/// solid-color scroller, square corners of `radius`, and no border.
+///
+/// Shared by the canvas editor's own scrollbars ([`view`]) and the LSP
+/// overlay panels ([`lsp::process::overlay`]), which derive their colors from
+/// a theme palette instead of plain [`Color`]s.
+///
+/// # Examples
+///
+/// ```ignore
+/// let rail = scrollable_rail(Color::BLACK, Color::WHITE, 4.0);
+/// ```
+pub(crate) fn scrollable_rail(
+    background: Color,
+    scroller: Color,
+    radius: f32,
+) -> iced::widget::scrollable::Rail {
+    iced::widget::scrollable::Rail {
+        background: Some(background.into()),
+        border: iced::Border {
+            radius: radius.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        scroller: iced::widget::scrollable::Scroller {
+            background: scroller.into(),
+            border: iced::Border {
+                radius: radius.into(),
+                width: 0.0,
+                color: Color::TRANSPARENT,
+            },
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_scrollable_rail_sets_background_scroller_and_radius() {
+        let bg = Color::from_rgb(0.1, 0.2, 0.3);
+        let scroller = Color::from_rgb(0.4, 0.5, 0.6);
+        let rail = scrollable_rail(bg, scroller, 4.0);
+
+        assert_eq!(rail.background, Some(iced::Background::Color(bg)));
+        assert_eq!(rail.scroller.background, iced::Background::Color(scroller));
+        assert_eq!(rail.border.radius, iced::border::Radius::from(4.0));
+        assert!(rail.border.width.abs() < f32::EPSILON);
+        assert_eq!(
+            rail.scroller.border.radius,
+            iced::border::Radius::from(4.0)
+        );
+    }
 
     #[test]
     fn test_canvas_scrollbar_style_uses_transparent_container() {

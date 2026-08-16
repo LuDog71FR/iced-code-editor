@@ -725,7 +725,7 @@ fn build_completion_layer<'a, M: Clone + 'a>(
 fn lsp_scrollable_rail(
     palette: &iced::theme::palette::Extended,
 ) -> scrollable::Rail {
-    crate::canvas_editor::scrollable_rail(
+    crate::canvas_editor::render::view::scrollable_rail(
         palette.background.weak.color,
         palette.primary.weak.color,
         SCROLLABLE_BORDER_RADIUS,

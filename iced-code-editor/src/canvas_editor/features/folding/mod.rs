@@ -9,6 +9,8 @@
 //! the on/off toggle live on [`super::CodeEditor`]; this module is pure logic so
 //! it can be unit-tested in isolation.
 
+mod ops;
+
 use std::collections::HashSet;
 
 use crate::buffer::TextBuffer;

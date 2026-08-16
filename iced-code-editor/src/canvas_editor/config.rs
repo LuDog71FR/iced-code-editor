@@ -1,0 +1,748 @@
+//! Builder-style configuration: context menu, theme/language, Vim toggle,
+//! wrap/whitespace/bracket/folding-enabled flags, auto-indent, auto-close
+//! brackets, indent style, search/replace enablement, and line numbers.
+
+use crate::canvas_editor::features::context_menu::ContextMenuEntry;
+use crate::canvas_editor::features::vim::VimMode;
+use crate::canvas_editor::{CodeEditor, IndentStyle};
+use crate::theme::Style;
+
+impl CodeEditor {
+    /// Replaces the custom context-menu entries.
+    pub fn set_custom_context_menu_entries(
+        &mut self,
+        entries: Vec<ContextMenuEntry>,
+    ) {
+        self.custom_context_menu_entries = entries;
+    }
+
+    /// Replaces the custom context-menu entries using the builder pattern.
+    #[must_use]
+    pub fn with_custom_context_menu_entries(
+        mut self,
+        entries: Vec<ContextMenuEntry>,
+    ) -> Self {
+        self.set_custom_context_menu_entries(entries);
+        self
+    }
+
+    /// Returns the custom context-menu entries in display order.
+    pub fn custom_context_menu_entries(&self) -> &[ContextMenuEntry] {
+        &self.custom_context_menu_entries
+    }
+
+    /// Sets whether the built-in editing actions appear in the context menu.
+    pub fn set_default_context_menu_enabled(&mut self, enabled: bool) {
+        self.default_context_menu_enabled = enabled;
+    }
+
+    /// Sets built-in context-menu visibility using the builder pattern.
+    #[must_use]
+    pub fn with_default_context_menu_enabled(mut self, enabled: bool) -> Self {
+        self.set_default_context_menu_enabled(enabled);
+        self
+    }
+
+    /// Returns whether the built-in context-menu actions are enabled.
+    pub fn default_context_menu_enabled(&self) -> bool {
+        self.default_context_menu_enabled
+    }
+
+    /// Sets whether the built-in reveal-in-file-manager action is shown.
+    pub fn set_reveal_in_file_manager_enabled(&mut self, enabled: bool) {
+        self.reveal_in_file_manager_enabled = enabled;
+    }
+
+    /// Sets reveal-in-file-manager visibility using the builder pattern.
+    #[must_use]
+    pub fn with_reveal_in_file_manager_enabled(
+        mut self,
+        enabled: bool,
+    ) -> Self {
+        self.set_reveal_in_file_manager_enabled(enabled);
+        self
+    }
+
+    /// Returns whether the reveal-in-file-manager action is shown.
+    pub fn reveal_in_file_manager_enabled(&self) -> bool {
+        self.reveal_in_file_manager_enabled
+    }
+
+    /// Enables or disables Vim behavior for this editor instance.
+    ///
+    /// Changing this setting enters a clean Normal mode without modifying the
+    /// buffer or command history.
+    pub fn set_vim_enabled(&mut self, enabled: bool) {
+        if self.is_grouping {
+            self.history.end_group();
+            self.is_grouping = false;
+        }
+        self.vim_enabled = enabled;
+        self.vim_state.enter_clean_normal_mode();
+        self.cursors.remove_all_but_primary();
+        let position = if enabled {
+            self.vim_normal_position(self.cursors.primary_position())
+        } else {
+            self.cursors.primary_position()
+        };
+        self.cursors.set_single(position);
+        self.is_dragging = false;
+        self.overlay_cache.clear();
+    }
+
+    /// Sets whether Vim behavior is enabled using the builder pattern.
+    #[must_use]
+    pub fn with_vim_enabled(mut self, enabled: bool) -> Self {
+        self.set_vim_enabled(enabled);
+        self
+    }
+
+    /// Returns whether Vim behavior is enabled for this editor instance.
+    pub fn vim_enabled(&self) -> bool {
+        self.vim_enabled
+    }
+
+    /// Returns the active Vim mode, or `None` when Vim behavior is disabled.
+    pub fn vim_mode(&self) -> Option<VimMode> {
+        self.vim_enabled.then(|| self.vim_state.mode())
+    }
+
+    /// Sets the theme style for the editor.
+    ///
+    /// # Arguments
+    ///
+    /// * `style` - The style to apply to the editor
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, theme};
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_theme(theme::from_iced_theme(&iced::Theme::TokyoNightStorm));
+    /// ```
+    pub fn set_theme(&mut self, style: Style) {
+        self.style = style;
+        self.content_cache.clear();
+        self.overlay_cache.clear();
+    }
+
+    /// Sets the language for UI translations.
+    ///
+    /// This changes the language used for all UI text elements in the editor,
+    /// including search dialog tooltips, placeholders, and labels.
+    ///
+    /// # Arguments
+    ///
+    /// * `language` - The language to use for UI text
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Language};
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_language(Language::French);
+    /// ```
+    pub fn set_language(&mut self, language: crate::i18n::Language) {
+        self.translations.set_language(language);
+        self.overlay_cache.clear();
+    }
+
+    /// Returns the current UI language.
+    ///
+    /// # Returns
+    ///
+    /// The currently active language for UI text
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Language};
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// let current_lang = editor.language();
+    /// ```
+    pub fn language(&self) -> crate::i18n::Language {
+        self.translations.language()
+    }
+
+    /// Sets whether line wrapping is enabled.
+    ///
+    /// When enabled, long lines will wrap at the viewport width or at a
+    /// configured column width.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable line wrapping
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_wrap_enabled(false); // Disable wrapping
+    /// ```
+    pub fn set_wrap_enabled(&mut self, enabled: bool) {
+        if self.wrap_enabled != enabled {
+            self.wrap_enabled = enabled;
+            if enabled {
+                self.horizontal_scroll_offset = 0.0;
+            }
+            self.content_cache.clear();
+            self.overlay_cache.clear();
+        }
+    }
+
+    /// Returns whether line wrapping is enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` if line wrapping is enabled, `false` otherwise
+    pub fn wrap_enabled(&self) -> bool {
+        self.wrap_enabled
+    }
+
+    /// Enables or disables visible whitespace rendering.
+    ///
+    /// When enabled, space characters are rendered as `·` and tab characters
+    /// as `→`, both drawn in a dimmed color to remain non-intrusive. Toggling
+    /// this setting clears the content cache to trigger an immediate redraw.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to show whitespace characters
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_show_whitespace(true);
+    /// ```
+    pub fn set_show_whitespace(&mut self, enabled: bool) {
+        if self.show_whitespace != enabled {
+            self.show_whitespace = enabled;
+            self.content_cache.clear();
+        }
+    }
+
+    /// Returns whether visible whitespace rendering is enabled.
+    pub fn show_whitespace(&self) -> bool {
+        self.show_whitespace
+    }
+
+    /// Enables or disables the matching-bracket/quote-pair highlight overlay.
+    ///
+    /// When enabled, placing the cursor next to a bracket (`(`, `)`, `[`,
+    /// `]`, `{`, `}`) or a quote (`"`, `'`) highlights it and its matching
+    /// pair. When disabled, no matching scan or highlight is performed.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable the bracket/quote-matching highlight
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_bracket_match_highlight_enabled(false); // Disable
+    /// ```
+    pub fn set_bracket_match_highlight_enabled(&mut self, enabled: bool) {
+        if self.bracket_match_highlight_enabled != enabled {
+            self.bracket_match_highlight_enabled = enabled;
+            self.overlay_cache.clear();
+        }
+    }
+
+    /// Returns whether the matching-bracket/quote-pair highlight overlay is enabled.
+    pub fn bracket_match_highlight_enabled(&self) -> bool {
+        self.bracket_match_highlight_enabled
+    }
+
+    /// Enables or disables bracket-pair colorization (rainbow brackets).
+    ///
+    /// When enabled, each `( ) [ ] { }` is colored by its nesting depth, so a
+    /// matching pair always shares the same color, cycling through a fixed
+    /// palette as depth increases. When disabled, brackets render with their
+    /// normal syntax-highlight color.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable bracket-pair colorization
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_bracket_pair_colorization_enabled(false); // Disable
+    /// ```
+    pub fn set_bracket_pair_colorization_enabled(&mut self, enabled: bool) {
+        if self.bracket_pair_colorization_enabled != enabled {
+            self.bracket_pair_colorization_enabled = enabled;
+            self.content_cache.clear();
+        }
+    }
+
+    /// Returns whether bracket-pair colorization (rainbow brackets) is enabled.
+    pub fn bracket_pair_colorization_enabled(&self) -> bool {
+        self.bracket_pair_colorization_enabled
+    }
+
+    /// Enables or disables code folding (collapse/expand blocks).
+    ///
+    /// When disabled, no fold chevrons are drawn and all lines are shown
+    /// regardless of the collapsed state (which is preserved, so re-enabling
+    /// restores the previously collapsed blocks).
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable code folding
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_folding_enabled(true);
+    /// ```
+    pub fn set_folding_enabled(&mut self, enabled: bool) {
+        if self.folding_enabled != enabled {
+            self.folding_enabled = enabled;
+            self.bump_fold_revision();
+        }
+    }
+
+    /// Returns whether code folding is enabled.
+    pub fn folding_enabled(&self) -> bool {
+        self.folding_enabled
+    }
+
+    /// Enables or disables automatic indentation on Enter.
+    ///
+    /// When enabled, pressing Enter copies the leading whitespace of the
+    /// current line to the new line. When disabled, the cursor is placed
+    /// at column 0 on the new line.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - `true` to enable auto-indentation, `false` to disable
+    pub fn set_auto_indent_enabled(&mut self, enabled: bool) {
+        self.auto_indent_enabled = enabled;
+    }
+
+    /// Returns whether auto-indentation is enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` if auto-indentation is enabled, `false` otherwise
+    pub fn auto_indent_enabled(&self) -> bool {
+        self.auto_indent_enabled
+    }
+
+    /// Enables or disables auto-closing of brackets and quotes.
+    ///
+    /// When enabled, typing an opening bracket/quote (`(`, `[`, `{`, `"`,
+    /// `'`) auto-inserts its matching closing character with the cursor
+    /// placed between them, typing the closing character right before an
+    /// already-inserted match moves the cursor past it instead of
+    /// duplicating it, and typing an opening bracket/quote while text is
+    /// selected wraps the selection in the pair instead of replacing it.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - `true` to enable auto-closing, `false` to disable
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_auto_close_brackets(false); // Disable auto-closing
+    /// ```
+    pub fn set_auto_close_brackets(&mut self, enabled: bool) {
+        self.auto_close_brackets = enabled;
+    }
+
+    /// Returns whether auto-closing of brackets and quotes is enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` if auto-closing is enabled, `false` otherwise
+    pub fn auto_close_brackets(&self) -> bool {
+        self.auto_close_brackets
+    }
+
+    /// Sets the indentation style used when pressing the Tab key.
+    ///
+    /// # Arguments
+    ///
+    /// * `style` - The indentation style (`IndentStyle::Spaces(n)` or `IndentStyle::Tab`)
+    pub fn set_indent_style(&mut self, style: IndentStyle) {
+        self.indent_style = style;
+    }
+
+    /// Returns the current indentation style.
+    ///
+    /// # Returns
+    ///
+    /// The current [`IndentStyle`] configured for this editor
+    pub fn indent_style(&self) -> IndentStyle {
+        self.indent_style
+    }
+
+    /// Enables or disables the search/replace functionality.
+    ///
+    /// When disabled, search/replace keyboard shortcuts (Ctrl+F, Ctrl+H, F3)
+    /// will be ignored. If the search dialog is currently open, it will be closed.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable search/replace functionality
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_search_replace_enabled(false); // Disable search/replace
+    /// ```
+    pub fn set_search_replace_enabled(&mut self, enabled: bool) {
+        self.search_replace_enabled = enabled;
+        if !enabled && self.search_state.is_open {
+            self.search_state.close();
+        }
+    }
+
+    /// Returns whether search/replace functionality is enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` if search/replace is enabled, `false` otherwise
+    pub fn search_replace_enabled(&self) -> bool {
+        self.search_replace_enabled
+    }
+
+    /// Returns the syntax highlighting language identifier for this editor.
+    ///
+    /// This is the language key passed at construction (e.g., `"lua"`, `"rs"`, `"py"`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert_eq!(editor.syntax(), "rs");
+    /// ```
+    pub fn syntax(&self) -> &str {
+        &self.syntax
+    }
+
+    /// Sets the line wrapping with builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable line wrapping
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_wrap_enabled(false);
+    /// ```
+    #[must_use]
+    pub fn with_wrap_enabled(mut self, enabled: bool) -> Self {
+        self.wrap_enabled = enabled;
+        self
+    }
+
+    /// Enables or disables code folding using the builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable code folding
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_folding_enabled(true);
+    /// ```
+    #[must_use]
+    pub fn with_folding_enabled(mut self, enabled: bool) -> Self {
+        self.folding_enabled = enabled;
+        self
+    }
+
+    /// Sets the wrap column (fixed width wrapping).
+    ///
+    /// When set to `Some(n)`, lines will wrap at column `n`.
+    /// When set to `None`, lines will wrap at the viewport width.
+    ///
+    /// # Arguments
+    ///
+    /// * `column` - The column to wrap at, or None for viewport-based wrapping
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_wrap_column(Some(80)); // Wrap at 80 characters
+    /// ```
+    #[must_use]
+    pub fn with_wrap_column(mut self, column: Option<usize>) -> Self {
+        self.wrap_column = column;
+        self
+    }
+
+    /// Sets whether line numbers are displayed.
+    ///
+    /// When disabled, the gutter is completely removed (0px width),
+    /// providing more space for code display.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to display line numbers
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_line_numbers_enabled(false); // Hide line numbers
+    /// ```
+    pub fn set_line_numbers_enabled(&mut self, enabled: bool) {
+        if self.line_numbers_enabled != enabled {
+            self.line_numbers_enabled = enabled;
+            self.content_cache.clear();
+            self.overlay_cache.clear();
+        }
+    }
+
+    /// Returns whether line numbers are displayed.
+    ///
+    /// # Returns
+    ///
+    /// `true` if line numbers are displayed, `false` otherwise
+    pub fn line_numbers_enabled(&self) -> bool {
+        self.line_numbers_enabled
+    }
+
+    /// Sets the line numbers display with builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to display line numbers
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_line_numbers_enabled(false);
+    /// ```
+    #[must_use]
+    pub fn with_line_numbers_enabled(mut self, enabled: bool) -> Self {
+        self.line_numbers_enabled = enabled;
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::canvas_editor::features::context_menu::ContextMenuItem;
+    use crate::canvas_editor::features::vim;
+
+    #[test]
+    fn test_custom_context_menu_configuration() {
+        let custom_entries = vec![
+            ContextMenuEntry::item("format", "Format document")
+                .with_shortcut("Shift+Alt+F"),
+            ContextMenuEntry::separator(),
+            ContextMenuEntry::Item(
+                ContextMenuItem::new("rename", "Rename symbol")
+                    .with_enabled(false),
+            ),
+        ];
+
+        let editor = CodeEditor::new("", "rs")
+            .with_custom_context_menu_entries(custom_entries.clone())
+            .with_default_context_menu_enabled(false);
+
+        assert_eq!(editor.custom_context_menu_entries(), custom_entries);
+        assert!(!editor.default_context_menu_enabled());
+
+        let default_editor = CodeEditor::new("", "rs");
+        assert!(default_editor.custom_context_menu_entries().is_empty());
+        assert!(default_editor.default_context_menu_enabled());
+    }
+
+    #[test]
+    fn test_reveal_in_file_manager_configuration() {
+        let mut editor = CodeEditor::new("", "rs");
+        assert!(!editor.reveal_in_file_manager_enabled());
+
+        editor.set_reveal_in_file_manager_enabled(true);
+        assert!(editor.reveal_in_file_manager_enabled());
+
+        let editor =
+            CodeEditor::new("", "rs").with_reveal_in_file_manager_enabled(true);
+        assert!(editor.reveal_in_file_manager_enabled());
+    }
+
+    #[test]
+    fn test_auto_close_brackets_configuration() {
+        let mut editor = CodeEditor::new("", "rs");
+        assert!(editor.auto_close_brackets());
+
+        editor.set_auto_close_brackets(false);
+        assert!(!editor.auto_close_brackets());
+
+        editor.set_auto_close_brackets(true);
+        assert!(editor.auto_close_brackets());
+    }
+
+    #[test]
+    fn test_bracket_match_highlight_configuration() {
+        let mut editor = CodeEditor::new("", "rs");
+        assert!(editor.bracket_match_highlight_enabled());
+
+        editor.set_bracket_match_highlight_enabled(false);
+        assert!(!editor.bracket_match_highlight_enabled());
+
+        editor.set_bracket_match_highlight_enabled(true);
+        assert!(editor.bracket_match_highlight_enabled());
+    }
+
+    #[test]
+    fn test_bracket_pair_colorization_configuration() {
+        let mut editor = CodeEditor::new("", "rs");
+        assert!(editor.bracket_pair_colorization_enabled());
+
+        editor.set_bracket_pair_colorization_enabled(false);
+        assert!(!editor.bracket_pair_colorization_enabled());
+
+        editor.set_bracket_pair_colorization_enabled(true);
+        assert!(editor.bracket_pair_colorization_enabled());
+    }
+
+    #[test]
+    fn vim_disabled_by_default() {
+        let editor = CodeEditor::new("unchanged", "rs");
+
+        assert!(!editor.vim_enabled());
+        assert_eq!(editor.vim_mode(), None);
+        assert_eq!(editor.content(), "unchanged");
+        assert!(!editor.can_undo());
+        assert!(!editor.can_redo());
+    }
+
+    #[test]
+    fn vim_enable_enters_clean_normal_mode() {
+        let mut editor = CodeEditor::new("unchanged", "rs");
+        assert_eq!(editor.vim_state.parse_key('9'), None);
+        assert_eq!(editor.vim_state.parse_key('d'), None);
+
+        editor.set_vim_enabled(true);
+
+        assert!(editor.vim_enabled());
+        assert_eq!(editor.vim_mode(), Some(VimMode::Normal));
+        assert_eq!(
+            editor.vim_state.parse_key('l'),
+            Some(vim::VimAction::Motion {
+                motion: vim::VimMotion::Right,
+                count: 1,
+                explicit_count: false,
+            })
+        );
+        assert_eq!(editor.content(), "unchanged");
+        assert!(!editor.can_undo());
+        assert!(!editor.can_redo());
+    }
+
+    #[test]
+    fn vim_disable_clears_pending_state() {
+        let mut editor =
+            CodeEditor::new("unchanged", "rs").with_vim_enabled(true);
+        assert_eq!(editor.vim_state.parse_key('4'), None);
+        assert_eq!(editor.vim_state.parse_key('d'), None);
+
+        editor.set_vim_enabled(false);
+        assert!(!editor.vim_enabled());
+        assert_eq!(editor.vim_mode(), None);
+
+        editor.set_vim_enabled(true);
+        assert_eq!(
+            editor.vim_state.parse_key('w'),
+            Some(vim::VimAction::Motion {
+                motion: vim::VimMotion::WordForward,
+                count: 1,
+                explicit_count: false,
+            })
+        );
+        assert_eq!(editor.content(), "unchanged");
+        assert!(!editor.can_undo());
+        assert!(!editor.can_redo());
+    }
+
+    #[test]
+    fn vim_reset_clears_pending_state() {
+        let mut editor = CodeEditor::new("before", "rs").with_vim_enabled(true);
+        assert_eq!(editor.vim_state.parse_key('3'), None);
+        assert_eq!(editor.vim_state.parse_key('g'), None);
+
+        let _ = editor.reset("after");
+
+        assert_eq!(editor.vim_mode(), Some(VimMode::Normal));
+        assert_eq!(editor.vim_state.parse_key('g'), None);
+        assert_eq!(
+            editor.vim_state.parse_key('g'),
+            Some(vim::VimAction::Motion {
+                motion: vim::VimMotion::DocumentStart,
+                count: 1,
+                explicit_count: false,
+            })
+        );
+        assert_eq!(editor.content(), "after");
+        assert!(!editor.can_undo());
+        assert!(!editor.can_redo());
+    }
+
+    #[test]
+    fn test_syntax_getter() {
+        let editor = CodeEditor::new("", "lua");
+        assert_eq!(editor.syntax(), "lua");
+    }
+
+    #[test]
+    fn test_folding_enabled_by_default() {
+        let editor = CodeEditor::new("fn main() {}", "rs");
+        assert!(editor.folding_enabled());
+    }
+}

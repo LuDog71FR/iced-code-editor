@@ -5,6 +5,8 @@ mod update;
 
 use iced::widget::Id;
 
+use crate::canvas_editor::{CodeEditor, Message};
+
 /// State owned by the compact go-to-line input.
 #[derive(Debug, Clone)]
 pub(crate) struct GotoLineState {
@@ -42,5 +44,19 @@ impl GotoLineState {
     /// Returns the entered one-based line number when it is a positive integer.
     pub(crate) fn target_line(&self) -> Option<usize> {
         self.query.trim().parse::<usize>().ok().filter(|line| *line > 0)
+    }
+}
+
+impl CodeEditor {
+    /// Opens the go-to-line dialog programmatically.
+    ///
+    /// The input is pre-filled with the current one-based line number.
+    pub fn open_goto_line_dialog(&mut self) -> iced::Task<Message> {
+        self.update(&Message::OpenGotoLine)
+    }
+
+    /// Closes the go-to-line dialog programmatically.
+    pub fn close_goto_line_dialog(&mut self) -> iced::Task<Message> {
+        self.update(&Message::CloseGotoLine)
     }
 }
