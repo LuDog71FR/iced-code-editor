@@ -38,6 +38,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::{Duration, Instant};
 
 // =============================================================================
 // Text Model - Internal document representation for tracking text changes
@@ -185,6 +186,38 @@ enum LspRequestKind {
     Definition,
 }
 
+/// A request awaiting a server response, tracked with the time it was sent.
+struct PendingRequest {
+    /// Which kind of request this is, used to route the eventual response.
+    kind: LspRequestKind,
+    /// When the request was sent, used by [`evict_expired_requests`] to
+    /// drop it if the server never responds.
+    requested_at: Instant,
+}
+
+/// Requests older than this are treated as abandoned.
+///
+/// A hung or crashed language server can leave a hover/completion/definition
+/// request pending forever: `pending_requests` only removes an entry when a
+/// matching response arrives (see `handle_client_response`), so without a
+/// timeout it would grow without bound for the lifetime of the client. Real
+/// LSP responses arrive in well under a second; 30s is generous headroom for
+/// a slow server while still bounding the leak from one that never replies.
+const PENDING_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Drops entries from `pending` older than [`PENDING_REQUEST_TIMEOUT`].
+///
+/// Called whenever a new request is registered (see
+/// [`LspProcessClient::request_hover`] and friends), so a server that stops
+/// responding can't grow this map without bound.
+fn evict_expired_requests(pending: &mut HashMap<u64, PendingRequest>) {
+    let now = Instant::now();
+    pending.retain(|_, entry| {
+        now.saturating_duration_since(entry.requested_at)
+            < PENDING_REQUEST_TIMEOUT
+    });
+}
+
 // =============================================================================
 // LSP Events - Events sent back to the main application
 // =============================================================================
@@ -275,8 +308,9 @@ pub struct LspProcessClient {
     server_key: String,
     /// Counter for generating unique request IDs
     request_id: AtomicU64,
-    /// Map of pending request IDs to their types (for response routing)
-    pending_requests: Arc<Mutex<HashMap<u64, LspRequestKind>>>,
+    /// Map of pending request IDs to their types and send time (for
+    /// response routing and expiry of abandoned requests)
+    pending_requests: Arc<Mutex<HashMap<u64, PendingRequest>>>,
     /// Handle to the writer thread (kept alive for the client's lifetime)
     _writer_thread: thread::JoinHandle<()>,
     /// Handle to the reader thread (kept alive for the client's lifetime)
@@ -622,12 +656,12 @@ fn handle_server_request(id: u64, method: &str, tx: &mpsc::Sender<Vec<u8>>) {
 fn handle_client_response(
     id: u64,
     value: &serde_json::Value,
-    pending: &Arc<Mutex<HashMap<u64, LspRequestKind>>>,
+    pending: &Arc<Mutex<HashMap<u64, PendingRequest>>>,
     events: &mpsc::Sender<LspEvent>,
 ) {
     let kind = {
         let mut map = pending.lock().unwrap_or_else(|e| e.into_inner());
-        map.remove(&id)
+        map.remove(&id).map(|entry| entry.kind)
     };
 
     let Some(kind) = kind else { return };
@@ -917,7 +951,14 @@ impl LspClient for LspProcessClient {
         {
             let mut pending =
                 self.pending_requests.lock().unwrap_or_else(|e| e.into_inner());
-            pending.insert(id, LspRequestKind::Hover);
+            evict_expired_requests(&mut pending);
+            pending.insert(
+                id,
+                PendingRequest {
+                    kind: LspRequestKind::Hover,
+                    requested_at: Instant::now(),
+                },
+            );
         }
 
         let msg = json!({
@@ -945,7 +986,14 @@ impl LspClient for LspProcessClient {
         {
             let mut pending =
                 self.pending_requests.lock().unwrap_or_else(|e| e.into_inner());
-            pending.insert(id, LspRequestKind::Completion);
+            evict_expired_requests(&mut pending);
+            pending.insert(
+                id,
+                PendingRequest {
+                    kind: LspRequestKind::Completion,
+                    requested_at: Instant::now(),
+                },
+            );
         }
 
         let msg = json!({
@@ -974,7 +1022,14 @@ impl LspClient for LspProcessClient {
         {
             let mut pending =
                 self.pending_requests.lock().unwrap_or_else(|e| e.into_inner());
-            pending.insert(id, LspRequestKind::Definition);
+            evict_expired_requests(&mut pending);
+            pending.insert(
+                id,
+                PendingRequest {
+                    kind: LspRequestKind::Definition,
+                    requested_at: Instant::now(),
+                },
+            );
         }
 
         let msg = json!({
@@ -1010,6 +1065,46 @@ mod tests {
             .expect("missing header separator");
         let body = &data[header_end + 4..];
         serde_json::from_slice(body).expect("invalid JSON body")
+    }
+
+    /// Builds a [`PendingRequest`] of `kind`, sent "now" for test purposes.
+    fn pending_request(kind: LspRequestKind) -> PendingRequest {
+        PendingRequest { kind, requested_at: Instant::now() }
+    }
+
+    // -------------------------------------------------------------------------
+    // evict_expired_requests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_evict_expired_requests_drops_only_stale_entries() {
+        let mut pending = HashMap::new();
+        pending.insert(
+            1u64,
+            PendingRequest {
+                kind: LspRequestKind::Hover,
+                requested_at: Instant::now()
+                    - PENDING_REQUEST_TIMEOUT
+                    - Duration::from_secs(1),
+            },
+        );
+        pending.insert(2u64, pending_request(LspRequestKind::Completion));
+
+        evict_expired_requests(&mut pending);
+
+        assert!(!pending.contains_key(&1));
+        assert!(pending.contains_key(&2));
+    }
+
+    #[test]
+    fn test_evict_expired_requests_keeps_fresh_entries() {
+        let mut pending = HashMap::new();
+        pending.insert(1u64, pending_request(LspRequestKind::Hover));
+        pending.insert(2u64, pending_request(LspRequestKind::Definition));
+
+        evict_expired_requests(&mut pending);
+
+        assert_eq!(pending.len(), 2);
     }
 
     // -------------------------------------------------------------------------
@@ -1291,7 +1386,10 @@ mod tests {
     fn test_handle_client_response_hover() {
         let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
         let pending = Arc::new(Mutex::new(HashMap::new()));
-        pending.lock().unwrap().insert(1u64, LspRequestKind::Hover);
+        pending
+            .lock()
+            .unwrap()
+            .insert(1u64, pending_request(LspRequestKind::Hover));
 
         let value = serde_json::json!({
             "id": 1,
@@ -1311,7 +1409,10 @@ mod tests {
     fn test_handle_client_response_completion() {
         let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
         let pending = Arc::new(Mutex::new(HashMap::new()));
-        pending.lock().unwrap().insert(2u64, LspRequestKind::Completion);
+        pending
+            .lock()
+            .unwrap()
+            .insert(2u64, pending_request(LspRequestKind::Completion));
 
         let value = serde_json::json!({
             "id": 2,
@@ -1332,7 +1433,10 @@ mod tests {
     fn test_handle_client_response_definition() {
         let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
         let pending = Arc::new(Mutex::new(HashMap::new()));
-        pending.lock().unwrap().insert(3u64, LspRequestKind::Definition);
+        pending
+            .lock()
+            .unwrap()
+            .insert(3u64, pending_request(LspRequestKind::Definition));
 
         let value = serde_json::json!({
             "id": 3,

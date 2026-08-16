@@ -600,7 +600,7 @@ impl CodeEditor {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
     /// use iced_code_editor::CodeEditor;
     ///
     /// let mut editor = CodeEditor::new("initial content", "lua");

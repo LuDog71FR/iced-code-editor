@@ -182,18 +182,27 @@ impl CodeEditor {
             return Some(Action::publish(Message::OpenGotoLine).and_capture());
         }
 
-        // Handle Escape — close the active overlay, or collapse multi-cursor.
+        // Handle Escape — close the active overlay, collapse a multi-cursor
+        // selection (`handle_close_search_msg` does this when more than one
+        // cursor is active, even with search closed), or forward it to Vim's
+        // modal state machine. If none of these apply, Escape has nothing to
+        // do here, so the event is left uncaptured (`None`) instead of being
+        // swallowed on a no-op — a host embedding the editor can then react
+        // to it (e.g. closing a modal, leaving fullscreen).
         if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
             let message = if self.goto_line_state.is_open {
-                Message::CloseGotoLine
+                Some(Message::CloseGotoLine)
             } else if self.search_state.is_open {
-                Message::CloseSearch
+                Some(Message::CloseSearch)
             } else if self.vim_enabled {
-                Message::VimKey('\u{1b}')
+                Some(Message::VimKey('\u{1b}'))
+            } else if self.cursors.is_multi() {
+                Some(Message::CloseSearch)
             } else {
-                Message::CloseSearch
+                None
             };
-            return Some(Action::publish(message).and_capture());
+            return message
+                .map(|message| Action::publish(message).and_capture());
         }
 
         // Handle Ctrl+D (select next occurrence)
@@ -343,17 +352,23 @@ impl CodeEditor {
                 );
             }
 
-            // Ctrl+K : fold all blocks.
+            // Ctrl+K : fold all blocks. Exclude Alt so it doesn't clash with
+            // a future Ctrl+Alt+K binding, matching the Ctrl+Alt+Up/Down
+            // multi-cursor shortcuts and the Alt+Up/Down line-move
+            // shortcuts above, which each exclude the other modifier for
+            // the same reason.
             if modifiers.control()
                 && !modifiers.shift()
+                && !modifiers.alt()
                 && matches!(key, keyboard::Key::Character(c) if c.as_str() == "k")
             {
                 return Some(Action::publish(Message::FoldAll).and_capture());
             }
 
-            // Ctrl+J : unfold all blocks.
+            // Ctrl+J : unfold all blocks. Same Alt exclusion as Ctrl+K above.
             if modifiers.control()
                 && !modifiers.shift()
+                && !modifiers.alt()
                 && matches!(key, keyboard::Key::Character(c) if c.as_str() == "j")
             {
                 return Some(Action::publish(Message::UnfoldAll).and_capture());
@@ -880,5 +895,56 @@ mod tests {
             .map(|action| action.into_inner().0);
 
         assert!(matches!(message, Some(Some(Message::ToggleComment))));
+    }
+
+    #[test]
+    fn test_ctrl_alt_k_does_not_fold_all() {
+        let editor = CodeEditor::new("fn a() {\n}\n", "rs");
+        assert!(editor.folding_enabled);
+
+        let key = keyboard::Key::Character("k".into());
+        let modifiers = keyboard::Modifiers::CTRL | keyboard::Modifiers::ALT;
+
+        let message = editor
+            .handle_keyboard_shortcuts(&key, &key, &modifiers)
+            .map(|action| action.into_inner().0);
+
+        // Ctrl+Alt+K must not trigger the plain Ctrl+K fold-all shortcut,
+        // leaving room for a future Ctrl+Alt+K binding.
+        assert!(!matches!(message, Some(Some(Message::FoldAll))));
+    }
+
+    #[test]
+    fn test_escape_with_nothing_to_close_is_not_captured() {
+        let editor = CodeEditor::new("abc", "txt");
+        assert!(!editor.goto_line_state.is_open);
+        assert!(!editor.search_state.is_open);
+        assert!(!editor.vim_enabled);
+        assert!(!editor.cursors.is_multi());
+
+        let key = keyboard::Key::Named(keyboard::key::Named::Escape);
+        let message = editor.handle_keyboard_shortcuts(
+            &key,
+            &key,
+            &keyboard::Modifiers::NONE,
+        );
+
+        // Nothing for the editor to do with Escape here, so the event must
+        // be left uncaptured for the host application to handle.
+        assert!(message.is_none());
+    }
+
+    #[test]
+    fn test_escape_with_multi_cursor_and_nothing_else_open_is_captured() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree", "txt");
+        editor.cursors.add_cursor((1, 0));
+        assert!(editor.cursors.is_multi());
+
+        let key = keyboard::Key::Named(keyboard::key::Named::Escape);
+        let message = editor
+            .handle_keyboard_shortcuts(&key, &key, &keyboard::Modifiers::NONE)
+            .map(|action| action.into_inner().0);
+
+        assert!(matches!(message, Some(Some(Message::CloseSearch))));
     }
 }

@@ -2,16 +2,18 @@
 //!
 //! This module provides translation support for UI text in the search dialog.
 //!
-//! # Using rust-i18n
+//! # Using `Translations`
 //!
-//! The translations are available in YAML files in the `locales` directory.
-//! The `rust-i18n` crate is integrated and can be used directly via the `t!` macro:
+//! The translations are available in YAML files in the `locales` directory,
+//! loaded through the `rust-i18n` crate. Application code does not call
+//! `rust-i18n`'s `t!` macro directly — it is not part of this crate's public
+//! API. Instead, look up translated strings through [`Translations`]:
 //!
-//! ```ignore
-//! use iced_code_editor::t;
+//! ```
+//! use iced_code_editor::{Language, Translations};
 //!
-//! // Use translations directly
-//! let text = t!("search.placeholder");
+//! let translations = Translations::new(Language::English);
+//! assert_eq!(translations.search_placeholder(), "Search...");
 //! ```
 
 /// Supported languages for the code editor UI.

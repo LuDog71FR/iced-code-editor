@@ -1017,8 +1017,14 @@ greet("World")
             return false;
         };
         let root = cwd.canonicalize().unwrap_or(cwd);
-        let candidate =
-            path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        // Fail closed: a target that can't be canonicalized (e.g. a `..`
+        // traversal through a component that doesn't exist) can't be opened
+        // anyway, and falling back to a lexical (uncanonicalized) path would
+        // let a traversal like `<cwd>/missing/../../etc/passwd` pass the
+        // `starts_with` check below on its literal components alone.
+        let Ok(candidate) = path.canonicalize() else {
+            return false;
+        };
         candidate.starts_with(&root)
     }
 
@@ -1464,6 +1470,19 @@ mod tests {
         };
         assert!(DemoApp::is_lsp_jump_target_allowed(&cwd.join("Cargo.toml")));
         assert!(!DemoApp::is_lsp_jump_target_allowed(Path::new("/etc/passwd")));
+    }
+
+    #[test]
+    fn test_is_lsp_jump_target_allowed_rejects_traversal_through_missing_dir() {
+        let Ok(cwd) = std::env::current_dir() else {
+            return;
+        };
+        // The leading component doesn't exist, so `canonicalize()` fails —
+        // but the path still lexically starts with `cwd`, since its `..`
+        // components only walk back out on a real filesystem. A fallback to
+        // the uncanonicalized path here would wrongly allow this traversal.
+        let traversal = cwd.join("nonexistent_subdir_xyz/../../etc/passwd");
+        assert!(!DemoApp::is_lsp_jump_target_allowed(&traversal));
     }
 
     #[test]

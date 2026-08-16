@@ -17,6 +17,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `TextModel::apply_change` (the internal per-document copy used to convert cursor positions to LSP's UTF-16 columns) silently ignored a change whose range fell outside the tracked lines instead of reporting the failure; the change was still forwarded to the language server, so the local mirror and the server's copy diverged with no error and no recovery — every later hover, completion, and go-to-definition on that document then silently computed positions against the wrong text
   - `apply_change` now reports whether it applied the change; if a batch desynchronizes partway through, none of it is forwarded to the server, the document is dropped from the client's tracked documents so the next `did_open` reseeds it from scratch, and an `LspEvent::Log` is emitted so the desync shows up in the demo app's log pane instead of only as "the language server gives nonsense answers"
 
+- fix: **`Ctrl+K`/`Ctrl+J` (fold/unfold all) fired even with Alt held**
+  - Unlike the `Ctrl+Alt+Up/Down` multi-cursor and `Alt+Up/Down` line-move shortcuts a few lines above, which each explicitly exclude the other modifier, the fold-all/unfold-all bindings only excluded Shift — so `Ctrl+Alt+K`/`Ctrl+Alt+J` folded/unfolded everything, leaving no room for a future `Ctrl+Alt+K`/`J` binding
+  - Both now exclude Alt as well, matching the surrounding shortcuts' convention
+
+- fix: **Escape was always captured by the editor, even when it had nothing to do**
+  - With no search/goto-line dialog open, Vim disabled, and a single cursor, pressing Escape published a `CloseSearch` message that was a pure no-op, and the key event was still marked captured — a host application embedding the editor could never see an Escape press to close its own modal, leave fullscreen, etc.
+  - The editor now leaves the event uncaptured (returns `None`) in exactly that case; Escape still closes the active dialog, forwards to Vim, and — unchanged — collapses a multi-cursor selection down to the primary cursor when more than one cursor is active
+
+- security: **LSP jump-to-definition's workspace-confinement check could accept a path traversal through a nonexistent directory component**
+  - `is_lsp_jump_target_allowed` canonicalized the candidate path to compare it against the workspace root, but silently fell back to the *uncanonicalized* path when `canonicalize()` failed (e.g. because a leading path component doesn't exist) — a traversal like `<cwd>/missing/../../etc/passwd` still lexically starts with `<cwd>` and would have passed the `starts_with` check on that fallback
+  - Now fails closed: if the candidate can't be canonicalized, it's rejected — a target that can't be canonicalized can't be opened anyway, so nothing legitimate is lost
+
+- security: **LSP client's pending-request map grew without bound if the language server stopped responding**
+  - Each hover/completion/definition request added an entry to `pending_requests`, removed only when a matching response arrived; a hung or crashed server left every outstanding entry there for the client's whole lifetime
+  - Requests older than 30 seconds are now evicted whenever a new one is registered, bounding the growth
+
 ### Changed
 
 - refactor: **Collapsed the demo app's eleven editor-toggle checkboxes into one data-driven path** (demo app)
@@ -27,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - docs: **`ArrowDirection`'s four variants were undocumented, and nothing enforced that this couldn't happen again**
   - `ArrowDirection::{Up, Down, Left, Right}` had no doc comments — the only `missing_docs` gap in the crate; added one line per variant
   - Added `missing_docs = "deny"` to `[workspace.lints.rust]` so an undocumented public item is now a compile error across the whole workspace instead of something a reviewer has to notice manually; the crate-root-level `missing_docs` requirement on integration test binaries and the criterion-macro-generated bench entry point are satisfied with a short `//!` header and a scoped `#![allow(missing_docs)]` respectively
+
+- docs: **Two `ignore`d doctests on public API were never compiled, and one of them documented a macro this crate doesn't actually expose**
+  - `CodeEditor::reset`'s example used only public API and now compiles as `no_run` on every `cargo test`
+  - The `i18n` module doc's example told readers to `use iced_code_editor::t;` and call `t!(...)` directly — but this crate doesn't re-export `rust-i18n`'s `t!` macro, so the example was never valid and `ignore` had been hiding that. Rewritten to show the crate's actual public API (`Translations::new(language).search_placeholder()`, matching every other example in the module) as a normal, fully-run doctest
 
 
 ## [0.4.0] - 2026-08-16
