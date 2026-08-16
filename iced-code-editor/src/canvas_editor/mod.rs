@@ -457,9 +457,13 @@ impl std::fmt::Display for IndentStyle {
 /// Arrow key directions
 #[derive(Debug, Clone, Copy)]
 pub enum ArrowDirection {
+    /// Up arrow key.
     Up,
+    /// Down arrow key.
     Down,
+    /// Left arrow key.
     Left,
+    /// Right arrow key.
     Right,
 }
 

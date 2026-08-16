@@ -29,6 +29,7 @@ strip = true
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+missing_docs = "deny"                # Denies public items without a doc comment. Enforces the project's mandatory-documentation rule instead of relying on manual review.
 
 [workspace.lints.clippy]
 panic = "deny"                       # Denies direct calls to `panic!`. Encourages proper error handling instead of crashing.

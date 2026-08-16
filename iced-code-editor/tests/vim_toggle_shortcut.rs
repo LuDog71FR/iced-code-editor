@@ -1,3 +1,7 @@
+//! Integration tests for the `Ctrl/Cmd+Alt+V` Vim-toggle keyboard shortcut,
+//! its interaction with the platform save shortcut, and the effects of
+//! toggling Vim mode via `Message::ToggleVimMode`.
+
 use iced::widget::canvas;
 use iced::{Event, Point, Rectangle, Size, keyboard, mouse};
 use iced_code_editor::{CodeEditor, Message, VimMode};

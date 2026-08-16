@@ -1,3 +1,6 @@
+//! Integration tests for Vim's command-line mode: `/` search, `n`/`N`
+//! repeat, `:` line jumps, and `:q`/`:wq`/`:w`.
+
 use iced_code_editor::{CodeEditor, Message, VimMode};
 
 fn vim_keys(editor: &mut CodeEditor, keys: &str) {

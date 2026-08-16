@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Replaced with a single `EditorToggle` enum (`demo-app/src/types.rs`) that maps each setting to its `CodeEditor` getter/setter pair, one `Message::ToggleEditor(EditorId, EditorToggle, bool)` variant, one `handle_toggle_editor` handler, and one checkbox built per entry in `EditorToggle::ALL` — all eleven toggles now log consistently, and the LSP checkbox label changed from "Enable LSP" to "LSP" to match the other checkboxes' phrasing
   - No other behavior changes; covered by new unit tests in `types.rs`
 
+- docs: **`ArrowDirection`'s four variants were undocumented, and nothing enforced that this couldn't happen again**
+  - `ArrowDirection::{Up, Down, Left, Right}` had no doc comments — the only `missing_docs` gap in the crate; added one line per variant
+  - Added `missing_docs = "deny"` to `[workspace.lints.rust]` so an undocumented public item is now a compile error across the whole workspace instead of something a reviewer has to notice manually; the crate-root-level `missing_docs` requirement on integration test binaries and the criterion-macro-generated bench entry point are satisfied with a short `//!` header and a scoped `#![allow(missing_docs)]` respectively
+
 
 ## [0.4.0] - 2026-08-16
 

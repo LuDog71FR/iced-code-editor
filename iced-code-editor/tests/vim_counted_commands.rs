@@ -1,3 +1,6 @@
+//! Integration tests for Vim count prefixes (`5dd`, `3gg`, `99G`, ...) on
+//! line-jump and line-operator motions.
+
 use iced_code_editor::{CodeEditor, Message, VimMode};
 
 fn vim_keys(editor: &mut CodeEditor, keys: &str) {

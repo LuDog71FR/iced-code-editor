@@ -8,6 +8,10 @@
 //! cargo bench -p iced-code-editor --features bench
 //! ```
 
+// `criterion_group!` below expands to a `pub fn benches()` with no way for
+// this file to attach a doc comment to it.
+#![allow(missing_docs)]
+
 use std::collections::HashSet;
 use std::hint::black_box;
 
