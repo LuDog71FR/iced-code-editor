@@ -50,18 +50,11 @@
 //! // assert!(history.is_modified());
 //! ```
 
-// Allow unwrap on Mutex since this is safe in the single-threaded GUI context
-// The mutex is only used for interior mutability, not actual multi-threading
-#![allow(clippy::unwrap_used)]
-// The Mutex cannot be poisoned in our single-threaded context, so panics documented
-// below would never actually occur in practice
-#![allow(clippy::missing_panics_doc)]
-
 use super::command::{Command, CompositeCommand};
 use crate::buffer::TextBuffer;
 use crate::canvas_editor::CodeEditor;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Manages command history for undo/redo operations.
 ///
@@ -69,7 +62,11 @@ use std::sync::{Arc, Mutex};
 /// - Undo stack: Commands that can be undone
 /// - Redo stack: Commands that can be redone (cleared when new commands are added)
 ///
-/// Thread-safe using Arc<Mutex<>> for interior mutability.
+/// Thread-safe using Arc<Mutex<>> for interior mutability. Cloning shares the
+/// same history: every clone reads and writes the one set of stacks.
+///
+/// No method on this type panics on a poisoned mutex; see [`Self::lock_inner`]
+/// for why.
 #[derive(Debug, Clone)]
 pub struct CommandHistory {
     inner: Arc<Mutex<HistoryInner>>,
@@ -111,6 +108,25 @@ impl HistoryInner {
 }
 
 impl CommandHistory {
+    /// Locks the shared state, recovering the guard if the mutex was poisoned.
+    ///
+    /// Poisoning is reachable here without a second thread. [`Self::undo`] and
+    /// [`Self::redo`] run `Command::undo` / `Command::execute` *while holding
+    /// this guard*, and [`Command`] is a public trait: a panic inside a
+    /// caller-supplied implementation poisons the mutex on this very thread.
+    /// Panicking again on every subsequent lock would turn one recoverable
+    /// mistake into a dead editor, because the render path calls
+    /// [`Self::can_undo`] on each frame and every [`Clone`] of this handle
+    /// shares the same poisoned mutex.
+    ///
+    /// Taking the guard is safe to do here: the only invariant a poisoned
+    /// `HistoryInner` can break is "the undo stack matches the buffer", which a
+    /// caller recovers from with [`Self::clear`]. This matches the policy the
+    /// LSP client applies to its own shared state.
+    fn lock_inner(&self) -> MutexGuard<'_, HistoryInner> {
+        self.inner.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
     /// Creates a new command history with the specified size limit.
     ///
     /// # Arguments
@@ -149,7 +165,7 @@ impl CommandHistory {
     ///
     /// * `command` - The command to add
     pub fn push(&self, command: Box<dyn Command>) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock_inner();
 
         // If we're building a composite, add to it
         if let Some(ref mut group) = inner.current_group {
@@ -192,7 +208,7 @@ impl CommandHistory {
         buffer: &mut TextBuffer,
         cursor: &mut (usize, usize),
     ) -> bool {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock_inner();
 
         // End any current grouping
         if inner.current_group.is_some() {
@@ -223,7 +239,7 @@ impl CommandHistory {
         buffer: &mut TextBuffer,
         cursor: &mut (usize, usize),
     ) -> bool {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock_inner();
 
         if let Some(mut command) = inner.redo_stack.pop() {
             command.execute(buffer, cursor);
@@ -237,14 +253,14 @@ impl CommandHistory {
     /// Returns whether there are commands that can be undone.
     #[must_use]
     pub fn can_undo(&self) -> bool {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.lock_inner();
         !inner.undo_stack.is_empty() || inner.current_group.is_some()
     }
 
     /// Returns whether there are commands that can be redone.
     #[must_use]
     pub fn can_redo(&self) -> bool {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.lock_inner();
         !inner.redo_stack.is_empty()
     }
 
@@ -253,7 +269,7 @@ impl CommandHistory {
     /// This is used to track whether the document has been modified since
     /// the last save. Call this after successfully saving the file.
     pub fn mark_saved(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock_inner();
         inner.save_point = Some(inner.undo_stack.len());
     }
 
@@ -264,7 +280,7 @@ impl CommandHistory {
     /// `true` if there are unsaved changes, `false` otherwise
     #[must_use]
     pub fn is_modified(&self) -> bool {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.lock_inner();
 
         // If we're currently in a group, we're modified
         if inner.current_group.is_some() {
@@ -297,7 +313,7 @@ impl CommandHistory {
     /// assert!(!history.is_modified());
     /// ```
     pub fn clear(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock_inner();
         inner.undo_stack.clear();
         inner.redo_stack.clear();
         inner.save_point = None;
@@ -310,7 +326,7 @@ impl CommandHistory {
     /// `end_group()` is called. This is useful for grouping consecutive
     /// typing operations.
     pub fn begin_group(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock_inner();
         if inner.current_group.is_none() {
             inner.current_group = Some(CompositeCommand::new());
         }
@@ -321,7 +337,7 @@ impl CommandHistory {
     /// The grouped commands are added to the history as a single composite
     /// command. If no commands were grouped, nothing is added.
     pub fn end_group(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock_inner();
         Self::end_group_internal(&mut inner);
     }
 
@@ -363,7 +379,7 @@ impl CommandHistory {
     /// ```
     #[must_use]
     pub fn max_size(&self) -> usize {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.lock_inner();
         inner.max_size
     }
 
@@ -392,7 +408,7 @@ impl CommandHistory {
     /// assert_eq!(history.max_size(), 50);
     /// ```
     pub fn set_max_size(&self, max_size: usize) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock_inner();
         inner.max_size = max_size;
         inner.enforce_size_limit();
     }
@@ -419,7 +435,7 @@ impl CommandHistory {
     /// ```
     #[must_use]
     pub fn undo_count(&self) -> usize {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.lock_inner();
         inner.undo_stack.len()
     }
 
@@ -445,7 +461,7 @@ impl CommandHistory {
     /// ```
     #[must_use]
     pub fn redo_count(&self) -> usize {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.lock_inner();
         inner.redo_stack.len()
     }
 }
@@ -776,5 +792,78 @@ mod tests {
         history.push(Box::new(cmd2));
 
         assert!(!history.can_redo());
+    }
+
+    /// A caller-supplied command whose `undo` panics, standing in for a buggy
+    /// [`Command`] implementation in a downstream crate.
+    ///
+    /// The panic is raised by an out-of-bounds index rather than `panic!`,
+    /// which is denied workspace-wide.
+    #[derive(Debug)]
+    struct PanickingUndoCommand;
+
+    impl Command for PanickingUndoCommand {
+        fn execute(
+            &mut self,
+            _buffer: &mut TextBuffer,
+            _cursor: &mut (usize, usize),
+        ) {
+        }
+
+        fn undo(
+            &mut self,
+            _buffer: &mut TextBuffer,
+            _cursor: &mut (usize, usize),
+        ) {
+            let empty: Vec<u8> = Vec::new();
+            let _ = empty[0];
+        }
+    }
+
+    /// A panic inside a caller's `Command` poisons the history mutex on this
+    /// very thread, because `undo` runs the command while holding the guard.
+    /// Every later call must still work: `can_undo` is on the render path, so
+    /// panicking again there would take the whole editor down permanently.
+    ///
+    /// Compiled only under `panic = "unwind"`; the release profile sets
+    /// `panic = "abort"`, where the panic below cannot be caught at all.
+    #[test]
+    #[cfg(panic = "unwind")]
+    fn test_history_survives_a_panicking_command() {
+        let mut buffer = TextBuffer::new("hello");
+        let mut cursor = (0, 5);
+        let history = CommandHistory::new(10);
+        history.push(Box::new(PanickingUndoCommand));
+        assert_eq!(history.undo_count(), 1);
+
+        // Swallow the panic message so the test output stays readable, then
+        // restore the default hook for the rest of the suite.
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                history.undo(&mut buffer, &mut cursor)
+            }));
+        std::panic::set_hook(previous_hook);
+        assert!(outcome.is_err(), "the command under test must panic");
+
+        // The mutex is now poisoned. Every read must still answer rather than
+        // panic, and the state is the one the unwind left behind: `undo` had
+        // already popped the command off the undo stack, and never reached the
+        // push onto the redo stack.
+        assert!(!history.can_undo());
+        assert!(!history.can_redo());
+        assert_eq!(history.undo_count(), 0);
+        assert_eq!(history.redo_count(), 0);
+        assert!(!history.is_modified());
+
+        // The history must also remain usable, not merely readable.
+        history.clear();
+
+        let mut command = InsertCharCommand::new(0, 5, '!', cursor);
+        command.execute(&mut buffer, &mut cursor);
+        history.push(Box::new(command));
+        assert!(history.undo(&mut buffer, &mut cursor));
+        assert_eq!(buffer.to_string(), "hello");
     }
 }

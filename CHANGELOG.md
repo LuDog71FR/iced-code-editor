@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Each hover/completion/definition request added an entry to `pending_requests`, removed only when a matching response arrived; a hung or crashed server left every outstanding entry there for the client's whole lifetime
   - Requests older than 30 seconds are now evicted whenever a new one is registered, bounding the growth
 
+- security: **A panic inside a caller's `Command` implementation permanently bricked `CommandHistory`**
+  - `CommandHistory` locked its shared state with `.lock().unwrap()` at all 14 call sites, opted out of the workspace's `unwrap_used` and `missing_panics_doc` lints module-wide, and justified it with "the Mutex cannot be poisoned in our single-threaded context". Both halves of that were wrong: poisoning does not require a second thread, and `undo`/`redo` run `Command::undo`/`Command::execute` *while holding the guard*. Since `Command` is a public trait and `push` accepts `Box<dyn Command>` from library users, a panic in a downstream implementation poisoned the mutex on that very thread — after which every later call panicked, including `can_undo()` on the render path, and on every `Clone` of the handle, since they all share one `Arc<Mutex<_>>`
+  - All 14 sites now go through one private `lock_inner()` that recovers the guard with `unwrap_or_else(|error| error.into_inner())`, matching the policy the LSP client already applied to its own shared state at all 10 of its lock sites — the two modules had opposite policies with nothing explaining the split. The only invariant a poisoned `HistoryInner` can break is "the undo stack matches the buffer", which a caller recovers from with `clear()`, so recovering the guard is strictly better than an unrecoverable panic loop
+  - Both `#![allow(...)]` lines are gone, so `missing_panics_doc` applies to this module again — with no panic left to document, no `# Panics` section was needed
+  - Covered by a regression test that poisons the mutex through a real unwind and asserts the history stays both readable and usable afterwards; it is gated on `#[cfg(panic = "unwind")]` because the release profile sets `panic = "abort"`, where the panic cannot be caught at all
+
 ### Changed
 
 - refactor: **Collapsed the demo app's eleven editor-toggle checkboxes into one data-driven path** (demo app)
