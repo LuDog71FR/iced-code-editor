@@ -200,4 +200,203 @@ mod tests {
         assert_eq!(editor.buffer.line(0), "    let x = 1;");
         assert_eq!(editor.cursors.primary_position(), (0, 8));
     }
+
+    // =========================================================================
+    // Line move / duplicate
+    // =========================================================================
+    //
+    // `MoveLinesCommand` and `DuplicateLinesCommand` are well covered in
+    // `editing/command/lines.rs`; what the tests below pin is the handler
+    // logic layered on top of them, none of which lives in the commands: the
+    // buffer-edge rejection, the cursor/anchor shift that keeps a selection
+    // attached to the lines it follows, and `primary_line_range`'s VS Code
+    // convention for a selection ending at column 0.
+
+    /// Places the primary cursor at `position` with no selection.
+    fn cursor_at(editor: &mut CodeEditor, position: (usize, usize)) {
+        editor.cursors.primary_mut().anchor = None;
+        editor.cursors.primary_mut().position = position;
+    }
+
+    /// Selects from `anchor` to `position` with the primary cursor.
+    fn select(
+        editor: &mut CodeEditor,
+        anchor: (usize, usize),
+        position: (usize, usize),
+    ) {
+        editor.cursors.primary_mut().anchor = Some(anchor);
+        editor.cursors.primary_mut().position = position;
+    }
+
+    /// Returns the primary cursor's selection anchor, if any.
+    fn anchor_of(editor: &CodeEditor) -> Option<(usize, usize)> {
+        editor.cursors.primary().anchor
+    }
+
+    #[test]
+    fn test_move_line_down_swaps_with_the_line_below() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree", "txt");
+        cursor_at(&mut editor, (0, 1));
+
+        let _ = editor.update(&Message::MoveLineDown);
+
+        assert_eq!(editor.buffer.to_string(), "two\none\nthree");
+        // The cursor follows the line it was on, keeping its column.
+        assert_eq!(editor.cursors.primary_position(), (1, 1));
+    }
+
+    #[test]
+    fn test_move_line_up_swaps_with_the_line_above() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree", "txt");
+        cursor_at(&mut editor, (2, 2));
+
+        let _ = editor.update(&Message::MoveLineUp);
+
+        assert_eq!(editor.buffer.to_string(), "one\nthree\ntwo");
+        assert_eq!(editor.cursors.primary_position(), (1, 2));
+    }
+
+    #[test]
+    fn test_move_line_is_undoable() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree", "txt");
+        cursor_at(&mut editor, (0, 1));
+
+        let _ = editor.update(&Message::MoveLineDown);
+        assert_eq!(editor.buffer.to_string(), "two\none\nthree");
+
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.to_string(), "one\ntwo\nthree");
+        assert_eq!(editor.cursors.primary_position(), (0, 1));
+    }
+
+    #[test]
+    fn test_move_line_at_the_buffer_edge_is_a_no_op() {
+        let mut editor = CodeEditor::new("one\ntwo", "txt");
+
+        // Up from the first line has nowhere to go.
+        cursor_at(&mut editor, (0, 0));
+        let _ = editor.update(&Message::MoveLineUp);
+        assert_eq!(editor.buffer.to_string(), "one\ntwo");
+
+        // Nor down from the last line.
+        cursor_at(&mut editor, (1, 0));
+        let _ = editor.update(&Message::MoveLineDown);
+        assert_eq!(editor.buffer.to_string(), "one\ntwo");
+
+        // The rejection happens before the command is built, so no empty
+        // entry lands on the undo stack for the user to step through.
+        assert!(!editor.can_undo());
+    }
+
+    #[test]
+    fn test_move_lines_carries_a_multi_line_selection_along() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree", "txt");
+        // Lines 0..=1 selected, cursor at the end of "two".
+        select(&mut editor, (0, 0), (1, 3));
+
+        let _ = editor.update(&Message::MoveLineDown);
+
+        assert_eq!(editor.buffer.to_string(), "three\none\ntwo");
+        // Both ends of the selection shift with the block, so the same text
+        // stays selected afterwards.
+        assert_eq!(editor.cursors.primary_position(), (2, 3));
+        assert_eq!(anchor_of(&editor), Some((1, 0)));
+    }
+
+    #[test]
+    fn test_a_selection_ending_at_column_zero_excludes_that_line() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree\nfour", "txt");
+        // Selection stops at the very start of line 2, which by the VS Code
+        // convention means lines 0..=1 are affected, not 0..=2.
+        select(&mut editor, (0, 0), (2, 0));
+
+        let _ = editor.update(&Message::MoveLineDown);
+
+        // "three" — the line just past the range — is what moves up. Had line
+        // 2 been included, "four" would have moved instead.
+        assert_eq!(editor.buffer.to_string(), "three\none\ntwo\nfour");
+    }
+
+    #[test]
+    fn test_duplicate_line_down_puts_the_cursor_on_the_copy() {
+        let mut editor = CodeEditor::new("one\ntwo", "txt");
+        cursor_at(&mut editor, (0, 2));
+
+        let _ = editor.update(&Message::DuplicateLineDown);
+
+        assert_eq!(editor.buffer.to_string(), "one\none\ntwo");
+        // Downward duplication moves the cursor onto the new copy below.
+        assert_eq!(editor.cursors.primary_position(), (1, 2));
+    }
+
+    #[test]
+    fn test_duplicate_line_up_leaves_the_cursor_on_the_upper_copy() {
+        let mut editor = CodeEditor::new("one\ntwo", "txt");
+        cursor_at(&mut editor, (1, 2));
+
+        let _ = editor.update(&Message::DuplicateLineUp);
+
+        assert_eq!(editor.buffer.to_string(), "one\ntwo\ntwo");
+        // The copy is inserted above, so the original index now names the
+        // copy and the cursor does not move.
+        assert_eq!(editor.cursors.primary_position(), (1, 2));
+    }
+
+    #[test]
+    fn test_duplicate_lines_down_shifts_the_cursor_by_the_whole_block() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree", "txt");
+        select(&mut editor, (0, 0), (1, 3));
+
+        let _ = editor.update(&Message::DuplicateLineDown);
+
+        assert_eq!(editor.buffer.to_string(), "one\ntwo\none\ntwo\nthree");
+        // Shifted by the block length (2), not by one line.
+        assert_eq!(editor.cursors.primary_position(), (3, 3));
+        assert_eq!(anchor_of(&editor), Some((2, 0)));
+    }
+
+    #[test]
+    fn test_duplicate_line_works_at_the_buffer_edges() {
+        // Unlike moving, duplicating is always legal: there is no neighbour
+        // to swap with, so neither edge is rejected.
+        let mut editor = CodeEditor::new("one\ntwo", "txt");
+        cursor_at(&mut editor, (1, 0));
+        let _ = editor.update(&Message::DuplicateLineDown);
+        assert_eq!(editor.buffer.to_string(), "one\ntwo\ntwo");
+
+        let mut editor = CodeEditor::new("one\ntwo", "txt");
+        cursor_at(&mut editor, (0, 0));
+        let _ = editor.update(&Message::DuplicateLineUp);
+        assert_eq!(editor.buffer.to_string(), "one\none\ntwo");
+    }
+
+    #[test]
+    fn test_duplicate_lines_is_one_undo_step_for_the_whole_block() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree", "txt");
+        select(&mut editor, (0, 0), (1, 3));
+
+        let _ = editor.update(&Message::DuplicateLineDown);
+        assert_eq!(editor.buffer.to_string(), "one\ntwo\none\ntwo\nthree");
+        assert_eq!(editor.history.undo_count(), 1);
+
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.to_string(), "one\ntwo\nthree");
+    }
+
+    #[test]
+    fn test_line_operations_collapse_secondary_cursors() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree", "txt");
+        cursor_at(&mut editor, (0, 0));
+        editor.cursors.add_cursor((2, 0));
+        assert!(editor.cursors.is_multi());
+
+        // These commands act on the primary cursor's range only, so they
+        // collapse the extra cursors rather than silently ignoring them.
+        let _ = editor.update(&Message::MoveLineDown);
+        assert!(!editor.cursors.is_multi());
+
+        editor.cursors.add_cursor((2, 0));
+        let _ = editor.update(&Message::DuplicateLineDown);
+        assert!(!editor.cursors.is_multi());
+    }
 }

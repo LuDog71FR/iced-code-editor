@@ -101,6 +101,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - For Replace Next: that it replaces only the current match, that each call is its own undo entry (unlike Replace All), and that the cursor lands on the *following* match at the right column — which is what pins the otherwise invisible ordering dependency where the handler re-reads `current_match()` only after `finish_edit_operation` has refreshed the match list
   - Both no-match paths are asserted to push nothing to history, so an empty undo entry cannot creep in
   - The reverse-order iteration in Replace All is a load-bearing invariant with nothing previously guarding it: replacing left-to-right would leave every match after the first pointing at a stale column once the line length changed. Verified by mutation — removing `.rev()` fails exactly two of the new tests
+  - `features/search/update.rs` went from 38.3% to 86.0% region coverage
+
+- test: **`move_lines` and `duplicate_lines` had no tests** (no behavior change)
+  - `input/update/line_ops.rs` sat at 54.9% region coverage: its three tests all covered `toggle_comment`, leaving the Alt+Up / Alt+Down / Shift+Alt+Up / Shift+Alt+Down handlers — keyboard-reachable, buffer-mutating, and undoable — entirely unexercised. The underlying `MoveLinesCommand`/`DuplicateLinesCommand` were already at 98%; what had no coverage was the handler logic layered on top of them
+  - Added 12 unit tests for exactly that layer: the buffer-edge rejection, the cursor/anchor shift that keeps a selection attached to the lines it follows, the block-length (not one-line) shift when duplicating downward, duplication being legal at both edges where moving is not, single-undo restoration of a duplicated block, and the collapse of secondary cursors
+  - Also pins `primary_line_range`'s VS Code convention: a selection ending at column 0 does *not* include that trailing line. The test distinguishes the two readings by which line gets moved, so an accidental off-by-one is caught rather than silently changing which lines an Alt+Down affects
+  - The buffer-edge guard turns out to prevent a crash, not just a wrong result: `MoveLinesCommand::new` computes `cursor.0 - 1` for an upward move, so without the handler's `start == 0` rejection, Alt+Up on the first line panics on arithmetic underflow. Confirmed by mutation, along with the column-0 convention and the block-length shift — each mutation fails exactly the one test meant to catch it
+  - `input/update/line_ops.rs` went from 54.9% to 99.8% region coverage; the workspace total moved from 75.5% to 76.7%
 
 
 ## [0.4.0] - 2026-08-16
