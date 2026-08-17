@@ -18,6 +18,14 @@ use crate::canvas_editor::{
 /// layout-modified glyph. Letter shortcuts are unaffected either way, so
 /// this is safe to use uniformly for any single-character shortcut.
 ///
+/// Every single-character shortcut in this file goes through here, letters
+/// included. Only the symbol ones strictly need it, but leaving the letters
+/// on a raw `matches!` left two spellings for the same check, with the
+/// layout-aware one in the minority — so the next symbol shortcut would most
+/// likely be copied from a raw call site and reintroduce the AZERTY bug this
+/// helper exists to prevent. With no raw form left to copy, the rule enforces
+/// itself.
+///
 /// # Examples
 ///
 /// ```text
@@ -53,13 +61,14 @@ fn is_key_char(
 /// (`Ctrl/Cmd+V`, handled by [`clipboard_shortcut`]).
 fn vim_toggle_shortcut(
     key: &keyboard::Key,
+    modified_key: &keyboard::Key,
     modifiers: &keyboard::Modifiers,
 ) -> Option<Action<Message>> {
     let command_pressed = modifiers.command() || modifiers.control();
     if command_pressed
         && modifiers.alt()
         && !modifiers.shift()
-        && matches!(key, keyboard::Key::Character(v) if v.as_str() == "v")
+        && is_key_char(key, modified_key, "v")
     {
         return Some(Action::publish(Message::ToggleVimMode).and_capture());
     }
@@ -70,13 +79,14 @@ fn vim_toggle_shortcut(
 /// Vim's `:w`.
 fn write_shortcut(
     key: &keyboard::Key,
+    modified_key: &keyboard::Key,
     modifiers: &keyboard::Modifiers,
 ) -> Option<Action<Message>> {
     let command_pressed = modifiers.command() || modifiers.control();
     if command_pressed
         && !modifiers.alt()
         && !modifiers.shift()
-        && matches!(key, keyboard::Key::Character(s) if s.as_str() == "s")
+        && is_key_char(key, modified_key, "s")
     {
         return Some(Action::publish(Message::WriteRequested).and_capture());
     }
@@ -88,12 +98,12 @@ fn write_shortcut(
 /// clipboard and forwarded as an empty [`Message::Paste`]).
 fn clipboard_shortcut(
     key: &keyboard::Key,
+    modified_key: &keyboard::Key,
     modifiers: &keyboard::Modifiers,
 ) -> Option<Action<Message>> {
     let command_pressed = modifiers.command() || modifiers.control();
 
-    if (command_pressed
-        && matches!(key, keyboard::Key::Character(c) if c.as_str() == "c"))
+    if (command_pressed && is_key_char(key, modified_key, "c"))
         || (modifiers.control()
             && matches!(
                 key,
@@ -103,20 +113,15 @@ fn clipboard_shortcut(
         return Some(Action::publish(Message::Copy).and_capture());
     }
 
-    if command_pressed
-        && matches!(key, keyboard::Key::Character(x) if x.as_str() == "x")
-    {
+    if command_pressed && is_key_char(key, modified_key, "x") {
         return Some(Action::publish(Message::Cut).and_capture());
     }
 
-    if command_pressed
-        && matches!(key, keyboard::Key::Character(a) if a.as_str() == "a")
-    {
+    if command_pressed && is_key_char(key, modified_key, "a") {
         return Some(Action::publish(Message::SelectAll).and_capture());
     }
 
-    if (command_pressed
-        && matches!(key, keyboard::Key::Character(v) if v.as_str() == "v"))
+    if (command_pressed && is_key_char(key, modified_key, "v"))
         || (modifiers.shift()
             && matches!(
                 key,
@@ -133,13 +138,12 @@ fn clipboard_shortcut(
 /// (add a cursor above/below the current one).
 fn multi_cursor_shortcut(
     key: &keyboard::Key,
+    modified_key: &keyboard::Key,
     modifiers: &keyboard::Modifiers,
 ) -> Option<Action<Message>> {
     let command_pressed = modifiers.command() || modifiers.control();
 
-    if command_pressed
-        && matches!(key, keyboard::Key::Character(d) if d.as_str() == "d")
-    {
+    if command_pressed && is_key_char(key, modified_key, "d") {
         return Some(
             Action::publish(Message::SelectNextOccurrence).and_capture(),
         );
@@ -287,14 +291,14 @@ impl CodeEditor {
         modified_key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
     ) -> Option<Action<Message>> {
-        vim_toggle_shortcut(key, modifiers)
-            .or_else(|| write_shortcut(key, modifiers))
+        vim_toggle_shortcut(key, modified_key, modifiers)
+            .or_else(|| write_shortcut(key, modified_key, modifiers))
             .or_else(|| self.focus_navigation_shortcut(key, modifiers))
-            .or_else(|| clipboard_shortcut(key, modifiers))
-            .or_else(|| self.history_shortcut(key, modifiers))
-            .or_else(|| self.dialog_shortcut(key, modifiers))
+            .or_else(|| clipboard_shortcut(key, modified_key, modifiers))
+            .or_else(|| self.history_shortcut(key, modified_key, modifiers))
+            .or_else(|| self.dialog_shortcut(key, modified_key, modifiers))
             .or_else(|| self.escape_shortcut(key))
-            .or_else(|| multi_cursor_shortcut(key, modifiers))
+            .or_else(|| multi_cursor_shortcut(key, modified_key, modifiers))
             .or_else(|| editing_shortcut(key, modified_key, modifiers))
             .or_else(|| line_move_shortcut(key, modifiers))
             .or_else(|| navigation_shortcut(key, modifiers))
@@ -329,21 +333,21 @@ impl CodeEditor {
     fn history_shortcut(
         &self,
         key: &keyboard::Key,
+        modified_key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
     ) -> Option<Action<Message>> {
         let command_pressed = modifiers.command() || modifiers.control();
 
         if command_pressed
             && !modifiers.shift()
-            && matches!(key, keyboard::Key::Character(z) if z.as_str() == "z")
+            && is_key_char(key, modified_key, "z")
         {
             return Some(Action::publish(Message::Undo).and_capture());
         }
 
         if command_pressed
-            && (matches!(key, keyboard::Key::Character(y) if y.as_str() == "y")
-                || (modifiers.shift()
-                    && matches!(key, keyboard::Key::Character(z) if z.as_str() == "z")))
+            && (is_key_char(key, modified_key, "y")
+                || (modifiers.shift() && is_key_char(key, modified_key, "z")))
         {
             return Some(Action::publish(Message::Redo).and_capture());
         }
@@ -352,7 +356,7 @@ impl CodeEditor {
             && self.vim_state.mode() == VimMode::Normal
             && modifiers.control()
             && !modifiers.shift()
-            && matches!(key, keyboard::Key::Character(r) if r.as_str() == "r")
+            && is_key_char(key, modified_key, "r")
         {
             return Some(Action::publish(Message::Redo).and_capture());
         }
@@ -367,19 +371,20 @@ impl CodeEditor {
     fn dialog_shortcut(
         &self,
         key: &keyboard::Key,
+        modified_key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
     ) -> Option<Action<Message>> {
         let command_pressed = modifiers.command() || modifiers.control();
 
         if command_pressed
-            && matches!(key, keyboard::Key::Character(f) if f.as_str() == "f")
+            && is_key_char(key, modified_key, "f")
             && self.search_replace_enabled
         {
             return Some(Action::publish(Message::OpenSearch).and_capture());
         }
 
         if command_pressed
-            && matches!(key, keyboard::Key::Character(h) if h.as_str() == "h")
+            && is_key_char(key, modified_key, "h")
             && self.search_replace_enabled
         {
             return Some(
@@ -387,9 +392,7 @@ impl CodeEditor {
             );
         }
 
-        if command_pressed
-            && matches!(key, keyboard::Key::Character(g) if g.as_str() == "g")
-        {
+        if command_pressed && is_key_char(key, modified_key, "g") {
             return Some(Action::publish(Message::OpenGotoLine).and_capture());
         }
 
@@ -472,7 +475,7 @@ impl CodeEditor {
         if modifiers.control()
             && !modifiers.shift()
             && !modifiers.alt()
-            && matches!(key, keyboard::Key::Character(c) if c.as_str() == "k")
+            && is_key_char(key, modified_key, "k")
         {
             return Some(Action::publish(Message::FoldAll).and_capture());
         }
@@ -480,7 +483,7 @@ impl CodeEditor {
         if modifiers.control()
             && !modifiers.shift()
             && !modifiers.alt()
-            && matches!(key, keyboard::Key::Character(c) if c.as_str() == "j")
+            && is_key_char(key, modified_key, "j")
         {
             return Some(Action::publish(Message::UnfoldAll).and_capture());
         }
@@ -1046,6 +1049,58 @@ mod tests {
             .map(|action| action.into_inner().0);
 
         assert!(matches!(message, Some(Some(Message::ToggleComment))));
+    }
+
+    #[test]
+    fn test_every_single_character_shortcut_consults_the_modified_key() {
+        let editor = CodeEditor::new("fn a() {\n}\n", "rs");
+        let ctrl = keyboard::Modifiers::CTRL;
+        let ctrl_alt = keyboard::Modifiers::CTRL | keyboard::Modifiers::ALT;
+        // A base key that matches no shortcut, so only `modified_key` can
+        // possibly satisfy the check.
+        let unmatched = character("&");
+
+        // Every single-character binding in the chain, letters included. A
+        // call site reverted to a raw `matches!` on `key` alone would stop
+        // seeing the character here and fail — which is the point: only the
+        // symbol shortcuts are broken on AZERTY today, so nothing else would
+        // catch the letters drifting back.
+        /// One row of the table: the character, the modifiers it needs, and a
+        /// predicate matching the message it must publish.
+        type ShortcutCase =
+            (&'static str, keyboard::Modifiers, fn(&Message) -> bool);
+
+        let cases: [ShortcutCase; 15] = [
+            ("v", ctrl_alt, |m| matches!(m, Message::ToggleVimMode)),
+            ("s", ctrl, |m| matches!(m, Message::WriteRequested)),
+            ("c", ctrl, |m| matches!(m, Message::Copy)),
+            ("x", ctrl, |m| matches!(m, Message::Cut)),
+            ("a", ctrl, |m| matches!(m, Message::SelectAll)),
+            ("v", ctrl, |m| matches!(m, Message::Paste(_))),
+            ("d", ctrl, |m| matches!(m, Message::SelectNextOccurrence)),
+            ("z", ctrl, |m| matches!(m, Message::Undo)),
+            ("y", ctrl, |m| matches!(m, Message::Redo)),
+            ("f", ctrl, |m| matches!(m, Message::OpenSearch)),
+            ("h", ctrl, |m| matches!(m, Message::OpenSearchReplace)),
+            ("g", ctrl, |m| matches!(m, Message::OpenGotoLine)),
+            ("k", ctrl, |m| matches!(m, Message::FoldAll)),
+            ("j", ctrl, |m| matches!(m, Message::UnfoldAll)),
+            (".", ctrl, |m| matches!(m, Message::ToggleFoldAtCursor)),
+        ];
+
+        for (ch, modifiers, expected) in cases {
+            let message = editor
+                .handle_keyboard_shortcuts(
+                    &unmatched,
+                    &character(ch),
+                    &modifiers,
+                )
+                .and_then(|action| action.into_inner().0);
+            assert!(
+                message.as_ref().is_some_and(expected),
+                "shortcut for {ch:?} ignored `modified_key`, got {message:?}"
+            );
+        }
     }
 
     #[test]

@@ -60,6 +60,25 @@ impl CodeEditor {
         Task::none()
     }
 
+    /// Moves the primary cursor onto the current search match and scrolls it
+    /// into view, clearing any selection.
+    ///
+    /// Returns `Task::none()` when there is no current match, so callers can
+    /// end on it without special-casing an empty result.
+    ///
+    /// Deliberately leaves `overlay_cache` alone. Two of the three callers
+    /// must clear it even when nothing matched — a query that now matches
+    /// nothing still has to erase the previous highlights — so folding the
+    /// clear in here would silently skip it on exactly that path.
+    fn focus_current_match(&mut self) -> Task<Message> {
+        let Some(match_pos) = self.search_state.current_match() else {
+            return Task::none();
+        };
+        self.cursors.primary_mut().position = (match_pos.line, match_pos.col);
+        self.clear_selection();
+        self.scroll_to_cursor()
+    }
+
     /// Handles search query text changes.
     ///
     /// # Arguments
@@ -74,16 +93,10 @@ impl CodeEditor {
         query: &str,
     ) -> Task<Message> {
         self.search_state.set_query(query.to_string(), &self.buffer);
+        // Unconditional: the old highlights must go even when the new query
+        // matches nothing.
         self.overlay_cache.clear();
-
-        // Move cursor to first match if any
-        if let Some(match_pos) = self.search_state.current_match() {
-            self.cursors.primary_mut().position =
-                (match_pos.line, match_pos.col);
-            self.clear_selection();
-            return self.scroll_to_cursor();
-        }
-        Task::none()
+        self.focus_current_match()
     }
 
     /// Handles replace query text changes.
@@ -110,16 +123,10 @@ impl CodeEditor {
     /// A `Task<Message>` that scrolls to first match if any
     pub(crate) fn handle_toggle_case_sensitive_msg(&mut self) -> Task<Message> {
         self.search_state.toggle_case_sensitive(&self.buffer);
+        // Unconditional, as in `handle_search_query_changed_msg`: toggling can
+        // drop the match set to empty, and those highlights must still go.
         self.overlay_cache.clear();
-
-        // Move cursor to first match if any
-        if let Some(match_pos) = self.search_state.current_match() {
-            self.cursors.primary_mut().position =
-                (match_pos.line, match_pos.col);
-            self.clear_selection();
-            return self.scroll_to_cursor();
-        }
-        Task::none()
+        self.focus_current_match()
     }
 
     /// Handles finding the next or previous match.
@@ -133,21 +140,20 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` that scrolls to the matched position if any
     pub(crate) fn handle_find_match(&mut self, forward: bool) -> Task<Message> {
-        if !self.search_state.matches.is_empty() {
-            if forward {
-                self.search_state.next_match();
-            } else {
-                self.search_state.previous_match();
-            }
-            if let Some(match_pos) = self.search_state.current_match() {
-                self.cursors.primary_mut().position =
-                    (match_pos.line, match_pos.col);
-                self.clear_selection();
-                self.overlay_cache.clear();
-                return self.scroll_to_cursor();
-            }
+        if self.search_state.matches.is_empty() {
+            return Task::none();
         }
-        Task::none()
+
+        if forward {
+            self.search_state.next_match();
+        } else {
+            self.search_state.previous_match();
+        }
+        // Only the *current* match's highlight changed, so unlike the two
+        // callers above this clear is reached only when there was something to
+        // move between.
+        self.overlay_cache.clear();
+        self.focus_current_match()
     }
 
     /// Handles replacing the current match and moving to the next.
