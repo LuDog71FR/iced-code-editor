@@ -58,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Also locked in two silent behaviors that a message-only assertion cannot see: paste is the one clipboard shortcut published *without* capturing the event (the host reads the real clipboard and re-dispatches the text), and the `Ctrl+F`/`Ctrl+H`/`F3` bindings go inert when `search_replace_enabled` is off while `Ctrl+G` does not
   - Every test routes through `handle_keyboard_shortcuts` rather than calling a group directly, since it is the group *ordering* that encodes the precedence rules; `events.rs` went from 67.7% to 83.3% line coverage, and the whole dispatch table is now exercised
 
+- test: **`handle_mouse_event` had no tests at all** (no behavior change)
+  - The canvas's entire mouse surface — click, double/triple click, Alt+Click, Ctrl+Click jump-to-definition, right-click context menu, drag, hover, release, fold-chevron click — sat at 0% coverage, including the routing that decides which of those a single left press becomes
+  - Added 12 unit tests covering every branch, plus the precedence rule inside the left-press arm: the fold chevron wins over the modifier bindings, so Alt+Click on a chevron toggles the fold instead of dropping a cursor in the gutter
+  - The tests use canvas bounds deliberately offset from the origin, because `handle_mouse_event` reports positions *relative* to the bounds: with bounds at (0, 0) a bounds-relative lookup and an absolute one are indistinguishable, and every position assertion would still pass if `position_in` were swapped for `position`
+  - Capture behavior is asserted alongside the published message, since the two are independent and invisible to each other: a plain click and a hover stay uncaptured so they can bubble up for focus management, while double/triple click, Alt+Click, drag, release, and the context menu all capture
+  - `handle_mouse_event` is now fully exercised (only its signature line is left uncovered); `events.rs` reached 91.1% line coverage and the workspace total moved from 71.0% to 72.4%
+
 
 ## [0.4.0] - 2026-08-16
 

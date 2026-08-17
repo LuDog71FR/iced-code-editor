@@ -879,7 +879,9 @@ impl CodeEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::canvas_editor::metrics::compare_floats;
     use iced::event;
+    use std::cmp::Ordering;
 
     /// Shorthand for a printable-character key.
     fn character(ch: &str) -> keyboard::Key {
@@ -1457,5 +1459,363 @@ mod tests {
         assert!(shortcut(&editor, &character("."), ctrl).is_none());
         assert!(shortcut(&editor, &character("k"), ctrl).is_none());
         assert!(shortcut(&editor, &character("j"), ctrl).is_none());
+    }
+
+    // =========================================================================
+    // Mouse events
+    // =========================================================================
+    //
+    // `handle_mouse_event` reports positions *relative to the canvas bounds*,
+    // so `MOUSE_BOUNDS` is deliberately offset from the origin: with bounds at
+    // (0, 0) an absolute-position lookup and a bounds-relative one are
+    // indistinguishable, and every position assertion below would still pass
+    // if `position_in` were swapped for `position`.
+
+    /// Canvas bounds shared by the mouse tests, offset from the origin on
+    /// purpose — see the note above.
+    const MOUSE_BOUNDS: Rectangle =
+        Rectangle { x: 10.0, y: 20.0, width: 400.0, height: 300.0 };
+
+    /// A cursor sitting at `(x, y)` measured from [`MOUSE_BOUNDS`]'s top-left
+    /// corner, i.e. in the same coordinate space as the published messages.
+    fn cursor_at(x: f32, y: f32) -> mouse::Cursor {
+        mouse::Cursor::Available(Point::new(
+            MOUSE_BOUNDS.x + x,
+            MOUSE_BOUNDS.y + y,
+        ))
+    }
+
+    /// Feeds `event` to the editor and returns the message it publishes.
+    ///
+    /// Not idempotent for left presses: each one advances the editor's
+    /// click-count state, so calling this twice at the same spot yields a
+    /// double click. Use a fresh editor when a test needs two independent
+    /// single clicks.
+    fn mouse_message(
+        editor: &CodeEditor,
+        event: &mouse::Event,
+        cursor: &mouse::Cursor,
+    ) -> Option<Message> {
+        editor
+            .handle_mouse_event(event, MOUSE_BOUNDS, cursor)
+            .and_then(|action| action.into_inner().0)
+    }
+
+    /// Returns the event status the editor reports for `event`.
+    fn mouse_status(
+        editor: &CodeEditor,
+        event: &mouse::Event,
+        cursor: &mouse::Cursor,
+    ) -> Option<event::Status> {
+        editor
+            .handle_mouse_event(event, MOUSE_BOUNDS, cursor)
+            .map(|action| action.into_inner().2)
+    }
+
+    /// Extracts the canvas position carried by the position-bearing mouse
+    /// messages, so a test can assert on it without destructuring (`panic!`
+    /// is denied workspace-wide, which rules out a `let ... else` binding).
+    fn message_position(message: &Option<Message>) -> Option<Point> {
+        match message {
+            Some(
+                Message::MouseClick(position)
+                | Message::MouseHover(position)
+                | Message::MouseDrag(position)
+                | Message::AltClick(position)
+                | Message::JumpClick(position)
+                | Message::ContextMenuRequested(position),
+            ) => Some(*position),
+            _ => None,
+        }
+    }
+
+    /// Asserts `message` carries the position `(x, y)`, compared within the
+    /// project's float epsilon (`float_cmp` is denied workspace-wide).
+    fn assert_position(message: &Option<Message>, x: f32, y: f32) {
+        let position = message_position(message);
+        assert!(
+            position.is_some_and(|position| {
+                compare_floats(position.x, x) == Ordering::Equal
+                    && compare_floats(position.y, y) == Ordering::Equal
+            }),
+            "expected position ({x}, {y}), got {message:?}"
+        );
+    }
+
+    /// A left-button press, the event most of the mouse tests start from.
+    const LEFT_PRESS: mouse::Event =
+        mouse::Event::ButtonPressed(mouse::Button::Left);
+
+    #[test]
+    fn test_left_click_publishes_a_bounds_relative_position() {
+        let editor = CodeEditor::new("one\ntwo", "txt");
+
+        let message =
+            mouse_message(&editor, &LEFT_PRESS, &cursor_at(30.0, 40.0));
+        assert!(
+            matches!(message, Some(Message::MouseClick(_))),
+            "expected a MouseClick, got {message:?}"
+        );
+        assert_position(&message, 30.0, 40.0);
+
+        // A plain click stays uncaptured so it can bubble up for focus
+        // management — unlike every other left-click outcome below. Checked on
+        // a fresh editor because left clicks accumulate click-count state.
+        let editor = CodeEditor::new("one\ntwo", "txt");
+        assert!(matches!(
+            mouse_status(&editor, &LEFT_PRESS, &cursor_at(30.0, 40.0)),
+            Some(event::Status::Ignored)
+        ));
+    }
+
+    #[test]
+    fn test_mouse_events_outside_the_canvas_are_left_alone() {
+        let editor = CodeEditor::new("one\ntwo", "txt");
+        let outside = mouse::Cursor::Available(Point::new(
+            MOUSE_BOUNDS.x + MOUSE_BOUNDS.width + 5.0,
+            MOUSE_BOUNDS.y + MOUSE_BOUNDS.height + 5.0,
+        ));
+        let release = mouse::Event::ButtonReleased(mouse::Button::Left);
+        let moved = mouse::Event::CursorMoved { position: Point::ORIGIN };
+
+        for event in [&LEFT_PRESS, &release, &moved] {
+            assert!(
+                editor
+                    .handle_mouse_event(event, MOUSE_BOUNDS, &outside)
+                    .is_none(),
+                "{event:?} outside the canvas must not be handled"
+            );
+            assert!(
+                editor
+                    .handle_mouse_event(
+                        event,
+                        MOUSE_BOUNDS,
+                        &mouse::Cursor::Unavailable
+                    )
+                    .is_none(),
+                "{event:?} with no cursor must not be handled"
+            );
+        }
+    }
+
+    #[test]
+    fn test_right_click_requests_the_context_menu() {
+        let editor = CodeEditor::new("one\ntwo", "txt");
+        let right_press = mouse::Event::ButtonPressed(mouse::Button::Right);
+        let cursor = cursor_at(15.0, 25.0);
+
+        let message = mouse_message(&editor, &right_press, &cursor);
+        assert!(
+            matches!(message, Some(Message::ContextMenuRequested(_))),
+            "expected a ContextMenuRequested, got {message:?}"
+        );
+        assert_position(&message, 15.0, 25.0);
+        assert!(matches!(
+            mouse_status(&editor, &right_press, &cursor),
+            Some(event::Status::Captured)
+        ));
+    }
+
+    #[test]
+    fn test_cursor_moved_hovers_when_idle_and_drags_while_dragging() {
+        let mut editor = CodeEditor::new("one\ntwo", "txt");
+        let moved = mouse::Event::CursorMoved {
+            // Ignored by the handler, which reads the cursor rather than the
+            // event payload; set to a decoy value to prove it.
+            position: Point::new(999.0, 999.0),
+        };
+        let cursor = cursor_at(50.0, 60.0);
+
+        assert!(!editor.is_dragging);
+        let message = mouse_message(&editor, &moved, &cursor);
+        assert!(
+            matches!(message, Some(Message::MouseHover(_))),
+            "expected a MouseHover, got {message:?}"
+        );
+        assert_position(&message, 50.0, 60.0);
+        // Hover must stay uncaptured or it would swallow motion events the
+        // host may need.
+        assert!(matches!(
+            mouse_status(&editor, &moved, &cursor),
+            Some(event::Status::Ignored)
+        ));
+
+        editor.is_dragging = true;
+        let message = mouse_message(&editor, &moved, &cursor);
+        assert!(
+            matches!(message, Some(Message::MouseDrag(_))),
+            "expected a MouseDrag, got {message:?}"
+        );
+        assert_position(&message, 50.0, 60.0);
+        assert!(matches!(
+            mouse_status(&editor, &moved, &cursor),
+            Some(event::Status::Captured)
+        ));
+    }
+
+    #[test]
+    fn test_left_release_is_handled_only_over_the_canvas() {
+        let editor = CodeEditor::new("one\ntwo", "txt");
+        let release = mouse::Event::ButtonReleased(mouse::Button::Left);
+
+        assert!(matches!(
+            mouse_message(&editor, &release, &cursor_at(5.0, 5.0)),
+            Some(Message::MouseRelease)
+        ));
+        assert!(matches!(
+            mouse_status(&editor, &release, &cursor_at(5.0, 5.0)),
+            Some(event::Status::Captured)
+        ));
+    }
+
+    #[test]
+    fn test_alt_click_adds_a_cursor_unless_vim_is_enabled() {
+        let mut editor = CodeEditor::new("one\ntwo", "txt");
+        editor.modifiers.set(keyboard::Modifiers::ALT);
+        let cursor = cursor_at(70.0, 10.0);
+
+        let message = mouse_message(&editor, &LEFT_PRESS, &cursor);
+        assert!(
+            matches!(message, Some(Message::AltClick(_))),
+            "expected an AltClick, got {message:?}"
+        );
+        assert_position(&message, 70.0, 10.0);
+
+        // Vim owns its own multi-cursor model, so Alt+Click degrades to a
+        // plain click rather than adding an editor cursor behind its back.
+        editor.set_vim_enabled(true);
+        assert!(matches!(
+            mouse_message(&editor, &LEFT_PRESS, &cursor),
+            Some(Message::MouseClick(_))
+        ));
+    }
+
+    #[test]
+    fn test_control_click_jumps_to_definition_without_capturing() {
+        let editor = CodeEditor::new("one\ntwo", "txt");
+        // COMMAND is CTRL on every platform but macOS, where the handler reads
+        // `command()` instead; setting both exercises the same branch on each.
+        editor
+            .modifiers
+            .set(keyboard::Modifiers::CTRL | keyboard::Modifiers::COMMAND);
+        let cursor = cursor_at(80.0, 12.0);
+
+        let message = mouse_message(&editor, &LEFT_PRESS, &cursor);
+        assert!(
+            matches!(message, Some(Message::JumpClick(_))),
+            "expected a JumpClick, got {message:?}"
+        );
+        assert_position(&message, 80.0, 12.0);
+
+        // Left uncaptured: the host resolves the jump and may decline it.
+        assert!(matches!(
+            mouse_status(&editor, &LEFT_PRESS, &cursor),
+            Some(event::Status::Ignored)
+        ));
+    }
+
+    #[test]
+    fn test_repeated_clicks_at_one_spot_escalate_to_double_then_triple() {
+        let editor = CodeEditor::new("one two three", "txt");
+        let cursor = cursor_at(90.0, 5.0);
+
+        assert!(matches!(
+            mouse_message(&editor, &LEFT_PRESS, &cursor),
+            Some(Message::MouseClick(_))
+        ));
+        assert!(matches!(
+            mouse_message(&editor, &LEFT_PRESS, &cursor),
+            Some(Message::DoubleClick(_))
+        ));
+        assert!(matches!(
+            mouse_message(&editor, &LEFT_PRESS, &cursor),
+            Some(Message::TripleClick(_))
+        ));
+        // A fourth click wraps back to a single click rather than sticking at
+        // triple.
+        assert!(matches!(
+            mouse_message(&editor, &LEFT_PRESS, &cursor),
+            Some(Message::MouseClick(_))
+        ));
+    }
+
+    #[test]
+    fn test_a_click_far_from_the_previous_one_stays_a_single_click() {
+        let editor = CodeEditor::new("one two three", "txt");
+
+        assert!(matches!(
+            mouse_message(&editor, &LEFT_PRESS, &cursor_at(20.0, 5.0)),
+            Some(Message::MouseClick(_))
+        ));
+        // Beyond the 6px tolerance, so this is a new click sequence.
+        assert!(matches!(
+            mouse_message(&editor, &LEFT_PRESS, &cursor_at(120.0, 80.0)),
+            Some(Message::MouseClick(_))
+        ));
+    }
+
+    #[test]
+    fn test_clicking_the_fold_chevron_toggles_the_block() {
+        let editor = CodeEditor::new("fn a() {\n    body\n}\n", "rs");
+        assert!(editor.folding_enabled);
+
+        // The chevron column sits between the line-number area and the text;
+        // aim at its middle, on the first visual line.
+        let x = f32::midpoint(
+            editor.line_number_gutter_width(),
+            editor.gutter_width(),
+        );
+        let y = editor.line_height * 0.5;
+        let cursor = cursor_at(x, y);
+
+        assert!(matches!(
+            mouse_message(&editor, &LEFT_PRESS, &cursor),
+            Some(Message::ToggleFold(0))
+        ));
+
+        // The chevron wins over the modifier-click bindings: Alt+Click on it
+        // toggles the fold instead of dropping a cursor in the gutter.
+        editor.modifiers.set(keyboard::Modifiers::ALT);
+        assert!(matches!(
+            mouse_message(&editor, &LEFT_PRESS, &cursor),
+            Some(Message::ToggleFold(0))
+        ));
+    }
+
+    #[test]
+    fn test_clicking_the_text_area_is_not_a_fold_toggle() {
+        let editor = CodeEditor::new("fn a() {\n    body\n}\n", "rs");
+
+        // Same line, but past the gutter: this is ordinary caret placement.
+        let cursor =
+            cursor_at(editor.gutter_width() + 20.0, editor.line_height * 0.5);
+        assert!(matches!(
+            mouse_message(&editor, &LEFT_PRESS, &cursor),
+            Some(Message::MouseClick(_))
+        ));
+    }
+
+    #[test]
+    fn test_unhandled_mouse_events_are_ignored() {
+        let editor = CodeEditor::new("one\ntwo", "txt");
+        let cursor = cursor_at(30.0, 30.0);
+        let events = [
+            mouse::Event::ButtonPressed(mouse::Button::Middle),
+            mouse::Event::ButtonReleased(mouse::Button::Right),
+            mouse::Event::CursorEntered,
+            mouse::Event::CursorLeft,
+            mouse::Event::WheelScrolled {
+                delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
+            },
+        ];
+
+        for event in &events {
+            assert!(
+                editor
+                    .handle_mouse_event(event, MOUSE_BOUNDS, &cursor)
+                    .is_none(),
+                "{event:?} should not be handled here"
+            );
+        }
     }
 }
