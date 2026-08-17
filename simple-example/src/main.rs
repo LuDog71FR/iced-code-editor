@@ -1,16 +1,29 @@
+//! Minimal example of embedding [`CodeEditor`] in an Iced application.
+//!
+//! Shows the three things a host has to wire up: forwarding the editor's
+//! messages through its own `Message` type, rendering it with `view()`, and
+//! releasing editor focus when another widget takes over — without which the
+//! editor would keep swallowing keystrokes meant for the text input above it.
+
 use iced::widget::{column, container, mouse_area, text_input};
 use iced::{Element, Task};
 use iced_code_editor::{CodeEditor, Message as EditorMessage};
 
+/// Application state: the editor plus an unrelated text input, present to
+/// demonstrate focus hand-off between the two.
 struct MyApp {
     editor: CodeEditor,
     input_value: String,
 }
 
+/// Messages handled by the application.
 #[derive(Debug, Clone)]
 enum Message {
+    /// A message emitted by the embedded editor.
     EditorEvent(EditorMessage),
+    /// The text input's contents changed.
     InputChanged(String),
+    /// The text input was clicked, which must take focus from the editor.
     TextInputClicked,
 }
 

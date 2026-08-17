@@ -110,6 +110,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The buffer-edge guard turns out to prevent a crash, not just a wrong result: `MoveLinesCommand::new` computes `cursor.0 - 1` for an upward move, so without the handler's `start == 0` rejection, Alt+Up on the first line panics on arithmetic underflow. Confirmed by mutation, along with the column-0 convention and the block-length shift — each mutation fails exactly the one test meant to catch it
   - `input/update/line_ops.rs` went from 54.9% to 99.8% region coverage; the workspace total moved from 75.5% to 76.7%
 
+- fix: **An environment-set language-server path was used untrimmed**
+  - `resolve_program_from_envs_with` tested `!path.trim().is_empty()` but returned the value **untrimmed**, so what was validated and what was returned disagreed. `GOPLS=" /usr/bin/gopls"` — a shell-config typo, or a CI variable carrying a trailing newline — passed the guard and was then handed to `Command::new` verbatim, which fails with a confusing "No such file or directory" rather than pointing at the variable
+  - The returned value is now trimmed, matching the emptiness check. Covered by a test that reproduces the old behavior when the trim is removed
+
+- refactor: **`simple-example` inherited none of the workspace lints**
+  - `iced-code-editor` and `demo-app` both carry `[lints] workspace = true`, but `simple-example` had no `[lints]` section at all, so the entire `[workspace.lints]` block — `unsafe_code = "forbid"`, `missing_docs`, `unwrap_used`, `panic`, all 25 of them — was silently inapplicable to a crate that `cargo build --workspace` still builds
+  - Opted it in. This immediately surfaced what the exemption had been hiding: the crate had no documentation at all, failing `missing_docs`. Added a module header explaining what the example demonstrates (message forwarding, `view()`, and the focus hand-off that stops the editor swallowing keystrokes meant for another widget) plus doc comments on its state and message types
+
+- refactor: **Removed two stale `#[allow(clippy::unused_self)]` attributes**
+  - `handle_character_input` and `handle_mouse_event` (`input/events.rs`) both carry attributes left over from an earlier shape of those functions; both now use `self` extensively. The allows were not inert: `unused_self` is denied workspace-wide precisely to catch a method that has stopped depending on its receiver, and the comment block above the shortcut groups explicitly relies on that lint working. Verified that clippy stays clean without them
+
 
 ## [0.4.0] - 2026-08-16
 

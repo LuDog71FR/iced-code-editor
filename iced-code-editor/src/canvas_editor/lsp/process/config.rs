@@ -262,22 +262,31 @@ pub fn resolve_lsp_command(
 }
 
 /// Resolves a program path from a list of environment variables.
-/// Returns the first non-empty value found, or None if all are unset/empty.
+/// Returns the first non-empty value found, trimmed, or None if all are
+/// unset/blank.
 fn resolve_program_from_envs(env_vars: &[&str]) -> Option<String> {
     resolve_program_from_envs_with(env_vars, |var| std::env::var(var).ok())
 }
 
 /// Same as [`resolve_program_from_envs`], but takes an injectable lookup so the
 /// priority order can be unit-tested without touching real process environment.
+///
+/// The returned value is trimmed. Emptiness is judged on the trimmed value, so
+/// returning it untrimmed would accept a variable holding only whitespace as a
+/// "found" path — and hand a value like `" /usr/bin/gopls"` (a shell-config
+/// typo, or a CI variable with a trailing newline) straight to
+/// `Command::new`, which then fails with a confusing "No such file or
+/// directory".
 fn resolve_program_from_envs_with(
     env_vars: &[&str],
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Option<String> {
     for var in env_vars {
-        if let Some(path) = lookup(var)
-            && !path.trim().is_empty()
-        {
-            return Some(path);
+        if let Some(path) = lookup(var) {
+            let path = path.trim();
+            if !path.is_empty() {
+                return Some(path.to_string());
+            }
         }
     }
     None
@@ -545,6 +554,18 @@ mod tests {
         let result =
             resolve_program_from_envs_with(&["FIRST", "SECOND"], lookup);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_resolve_program_from_envs_with_trims_surrounding_whitespace() {
+        // Emptiness is judged on the trimmed value, so the returned value must
+        // be trimmed too. A shell-config typo or a CI variable carrying a
+        // trailing newline would otherwise reach `Command::new` verbatim and
+        // fail with a confusing "No such file or directory".
+        let lookup = lookup_from(&[("FIRST", "  /bin/first\n")]);
+        let result =
+            resolve_program_from_envs_with(&["FIRST", "SECOND"], lookup);
+        assert_eq!(result, Some("/bin/first".to_string()));
     }
 
     // ---- resolve_rust_analyzer_command_with ----

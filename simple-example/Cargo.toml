@@ -10,3 +10,6 @@ path = "src/main.rs"
 [dependencies]
 iced = { version = "0.14", features = ["advanced", "highlighter", "canvas", "markdown"] }
 iced-code-editor = { path = "../iced-code-editor" }
+
+[lints]
+workspace = true

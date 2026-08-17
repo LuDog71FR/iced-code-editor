@@ -510,7 +510,6 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `Some(Action<Message>)` if input should be processed, `None` otherwise
-    #[allow(clippy::unused_self)]
     fn handle_character_input(
         &self,
         key: &keyboard::Key,
@@ -737,7 +736,6 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `Some(Action<Message>)` if the event was handled, `None` otherwise
-    #[allow(clippy::unused_self)]
     pub(crate) fn handle_mouse_event(
         &self,
         event: &mouse::Event,
