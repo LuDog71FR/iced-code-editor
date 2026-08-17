@@ -24,6 +24,14 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use url::Url;
 
+/// Maximum LSP events processed in one [`DemoApp::drain_lsp_events`] call.
+///
+/// The event channel is unbounded, so without a per-tick budget a server that
+/// floods it would hold the UI thread in the drain loop for as long as the
+/// backlog took to process. Whatever is left over is picked up on the next
+/// tick, which keeps the frame time bounded instead of the queue.
+const MAX_LSP_EVENTS_PER_TICK: usize = 256;
+
 /// Returns the LSP language for a built-in template (all use Lua).
 fn lsp_language_for_template(template: Template) -> Option<LspLanguage> {
     lsp_language_for_extension(match template {
@@ -504,16 +512,23 @@ impl DemoApp {
         }
     }
 
-    /// Drains and processes all pending LSP events from the event channel
-    /// Handles hover responses and completion items from the LSP server
+    /// Drains and processes pending LSP events from the event channel.
+    ///
+    /// Handles hover responses and completion items from the LSP server, up to
+    /// [`MAX_LSP_EVENTS_PER_TICK`] per call. Anything still queued is picked up
+    /// on the next tick: the channel is unbounded, so a server that floods it
+    /// (rust-analyzer emits substantial output on a large workspace) would
+    /// otherwise hold the UI thread here for as long as the backlog took to
+    /// process.
     pub(super) fn drain_lsp_events(&mut self) -> Task<Message> {
         let Some(receiver) = self.lsp_events.take() else {
             return Task::none();
         };
         let receiver = receiver;
         let mut messages = Vec::new();
+        let mut disconnected = false;
 
-        loop {
+        for _ in 0..MAX_LSP_EVENTS_PER_TICK {
             match receiver.try_recv() {
                 Ok(event) => match event {
                     // Handle hover response from LSP server
@@ -593,16 +608,20 @@ impl DemoApp {
                     }
                 },
                 // No more events available right now
-                Err(mpsc::TryRecvError::Empty) => {
-                    self.lsp_events = Some(receiver);
-                    break;
-                }
+                Err(mpsc::TryRecvError::Empty) => break,
                 // LSP process has disconnected
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.lsp_events = None;
+                    disconnected = true;
                     break;
                 }
             }
+        }
+
+        // Keep the receiver unless the server is gone — including when the
+        // per-tick budget ran out with events still queued, which is the case
+        // the loop exits without taking either branch above.
+        if !disconnected {
+            self.lsp_events = Some(receiver);
         }
 
         if messages.is_empty() {
@@ -896,6 +915,45 @@ mod tests {
         let _ = app.drain_lsp_events();
 
         assert!(app.lsp_events.is_none());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_drain_lsp_events_stops_at_the_per_tick_budget() {
+        let (mut app, _) = DemoApp::new();
+        let (tx, rx) = mpsc::channel();
+        app.lsp_events = Some(rx);
+
+        let queued = MAX_LSP_EVENTS_PER_TICK + 20;
+        for index in 0..queued {
+            tx.send(LspEvent::Log {
+                server_key: "gopls".to_string(),
+                message: index.to_string(),
+            })
+            .unwrap();
+        }
+        let logs_before = app.log_messages.len();
+
+        let _ = app.drain_lsp_events();
+
+        // One tick handles at most the budget, so a flooding server cannot
+        // hold the UI thread here until the whole backlog is drained.
+        assert_eq!(
+            app.log_messages.len() - logs_before,
+            MAX_LSP_EVENTS_PER_TICK
+        );
+
+        // The receiver must survive a budget-limited exit, or the remaining
+        // events — and every later one — would be lost with it.
+        assert!(app.lsp_events.is_some());
+
+        // The leftovers arrive on the following ticks, in order.
+        let _ = app.drain_lsp_events();
+        assert_eq!(app.log_messages.len() - logs_before, queued);
+        assert_eq!(
+            app.log_messages.last().map(String::as_str),
+            Some(format!("[LSP] [gopls] {}", queued - 1).as_str())
+        );
     }
 
     // ---- process_lsp_hover_timers ----

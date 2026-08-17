@@ -22,6 +22,35 @@ const PROGRESS_KIND_END: &str = "end";
 /// multi-gigabyte frame would force an unbounded allocation and take the
 /// editor down. Real LSP payloads stay orders of magnitude below this.
 const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum accepted length for a single header line (8 KiB).
+///
+/// `BufRead::read_line` grows its buffer until it finds a newline, so a server
+/// that opens a header line and never terminates it would force an unbounded
+/// allocation — the same hazard [`MAX_MESSAGE_BYTES`] guards on the body, on
+/// the path that reaches it. Real LSP headers are a few dozen bytes.
+const MAX_HEADER_LINE_BYTES: u64 = 8 * 1024;
+/// Maximum accepted number of header lines before the blank separator.
+///
+/// Each line is individually bounded by [`MAX_HEADER_LINE_BYTES`], so an
+/// endless stream of well-formed headers is not a memory hazard — but without
+/// a cap the reader would spin on it forever and never yield a message. Real
+/// LSP frames send one or two headers.
+const MAX_HEADER_LINES: usize = 64;
+/// Maximum bytes kept from a single language-server stderr line (8 KiB).
+///
+/// `BufRead::lines` grows its buffer until it finds a newline, so one
+/// unterminated line from a chatty or hostile server would grow without bound
+/// — the same hazard [`MAX_HEADER_LINE_BYTES`] guards on the protocol stream.
+/// Diagnostics are free-form text rather than framed protocol, so an oversized
+/// line is truncated and reading resumes at the next line, instead of tearing
+/// down the stream the way an unparseable frame must.
+const MAX_LOG_LINE_BYTES: u64 = 8 * 1024;
+/// Maximum bytes discarded while resynchronising after an oversized log line.
+///
+/// Bounds the *time* spent skipping, where [`MAX_LOG_LINE_BYTES`] bounds the
+/// memory kept: a line that never ends has no newline to find, so an
+/// unbudgeted skip would never return. See [`skip_to_newline`].
+const MAX_LOG_SKIP_BYTES: u64 = 1024 * 1024;
 
 use self::config::{
     LspCommand, ensure_rust_analyzer_config, lsp_server_config,
@@ -33,7 +62,7 @@ use crate::canvas_editor::lsp::{
 };
 use serde_json::json;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -480,9 +509,8 @@ impl LspProcessClient {
         });
 
         let stderr_thread = thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                let Ok(line) = line else { break };
+            let mut reader = BufReader::new(stderr);
+            while let Some(line) = read_log_line(&mut reader) {
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
@@ -599,8 +627,9 @@ impl LspProcessClient {
 /// Reads one `Content-Length`-framed message body from `reader`.
 ///
 /// Returns `None` when the stream ends, when the body cannot be read in full,
-/// or when the announced frame exceeds [`MAX_MESSAGE_BYTES`]. An oversized
-/// frame cannot be skipped reliably — the body length is exactly what is not
+/// when the announced frame exceeds [`MAX_MESSAGE_BYTES`], or when the header
+/// block breaches [`MAX_HEADER_LINE_BYTES`] or [`MAX_HEADER_LINES`]. None of
+/// these can be skipped reliably — the framing is exactly what is not
 /// trustworthy — so the caller must stop reading the stream rather than try to
 /// resynchronise mid-message.
 ///
@@ -611,13 +640,34 @@ fn read_message(reader: &mut impl BufRead) -> Option<Vec<u8>> {
     let mut content_length: Option<usize> = None;
     let mut line = String::new();
 
-    loop {
+    for _ in 0..MAX_HEADER_LINES {
         line.clear();
+        // Read through a `take` rather than calling `read_line` directly:
+        // `read_line` grows `line` until it finds a newline, so a server that
+        // never sends one would force an unbounded allocation here — the same
+        // hazard `MAX_MESSAGE_BYTES` guards on the body, one step earlier.
+        // Called through UFCS so `Self` is `&mut R`: written as a method call,
+        // the probe derefs to `R` and `take` moves the reader out from under
+        // the borrow.
+        let read = Read::take(&mut *reader, MAX_HEADER_LINE_BYTES)
+            .read_line(&mut line)
+            .ok()?;
+
         // A zero-length read means end of stream, not an empty header line.
-        reader.read_line(&mut line).ok().filter(|n| *n > 0)?;
+        if read == 0 {
+            return None;
+        }
+
+        // Hitting the cap with no newline means the line was oversized. The
+        // remainder is still queued in the stream with no way to tell where
+        // the next frame begins, so give up instead of resynchronising.
+        if !line.ends_with('\n') {
+            return None;
+        }
+
         let trimmed = line.trim();
         if trimmed.is_empty() {
-            break;
+            return read_body(reader, content_length);
         }
         if let Some(value) = trimmed.strip_prefix("Content-Length:")
             && let Ok(len) = value.trim().parse::<usize>()
@@ -626,6 +676,80 @@ fn read_message(reader: &mut impl BufRead) -> Option<Vec<u8>> {
         }
     }
 
+    // The header block never terminated. Each line is individually bounded, so
+    // this is not a memory hazard, but without a cap the loop would spin on a
+    // server emitting headers forever and never yield a message.
+    None
+}
+
+/// Reads one line of language-server stderr, truncated to
+/// [`MAX_LOG_LINE_BYTES`].
+///
+/// Returns `None` at end of stream. A line longer than the cap is cut at the
+/// cap, marked with a trailing `…`, and the remainder discarded (without being
+/// buffered) up to the next newline, so the following lines still start on a
+/// real boundary.
+///
+/// Invalid UTF-8 is replaced rather than treated as an error: server
+/// diagnostics are not worth tearing the log stream down over.
+fn read_log_line(reader: &mut impl BufRead) -> Option<String> {
+    let mut buf = Vec::new();
+    // Bounded like the protocol header lines, and for the same reason; see
+    // `read_message`.
+    let read = Read::take(&mut *reader, MAX_LOG_LINE_BYTES)
+        .read_until(b'\n', &mut buf)
+        .ok()?;
+    if read == 0 {
+        return None;
+    }
+
+    let truncated = !buf.ends_with(b"\n");
+    let mut line = String::from_utf8_lossy(&buf).into_owned();
+    if truncated {
+        skip_to_newline(reader);
+        line.push('…');
+    }
+    Some(line)
+}
+
+/// Advances `reader` past the next newline, discarding at most
+/// [`MAX_LOG_SKIP_BYTES`] on the way.
+///
+/// Used to resynchronise after an oversized log line. Works through
+/// `fill_buf`/`consume` rather than `read_until` so the skipped bytes are
+/// never buffered — otherwise recovering from an unbounded line would itself
+/// need unbounded memory.
+///
+/// The byte budget matters as much as the buffering: a server emitting a line
+/// that never ends has no newline to find, and an unbudgeted skip would spin
+/// in this loop for as long as it kept talking. Giving up instead lets the
+/// next [`read_log_line`] surface the following chunk as its own truncated
+/// line, so the reader always makes forward progress.
+fn skip_to_newline(reader: &mut impl BufRead) {
+    let mut skipped: u64 = 0;
+    while skipped < MAX_LOG_SKIP_BYTES {
+        let Ok(available) = reader.fill_buf() else { return };
+        if available.is_empty() {
+            return;
+        }
+        if let Some(index) = available.iter().position(|byte| *byte == b'\n') {
+            reader.consume(index + 1);
+            return;
+        }
+        let len = available.len();
+        reader.consume(len);
+        skipped = skipped.saturating_add(len as u64);
+    }
+}
+
+/// Reads the body announced by a header block's `Content-Length`.
+///
+/// A missing `Content-Length` is treated as a zero-length body; see
+/// [`read_message`].
+fn read_body(
+    reader: &mut impl BufRead,
+    content_length: Option<usize>,
+) -> Option<Vec<u8>> {
     let len = content_length.unwrap_or(0);
     if len > MAX_MESSAGE_BYTES {
         return None;
@@ -1284,6 +1408,134 @@ mod tests {
         // invalid JSON, then keeps reading.
         let mut stream = std::io::Cursor::new(b"X-Unknown: 1\r\n\r\n".to_vec());
         assert_eq!(read_message(&mut stream).as_deref(), Some(&b""[..]));
+    }
+
+    /// A reader that serves an endless run of `a` with no newline ever,
+    /// standing in for a server that opens a header line and never closes it.
+    ///
+    /// It counts what it served, which is what makes the bound observable: a
+    /// finite `Cursor` would end the line at EOF and so pass even with no cap
+    /// at all.
+    struct EndlessHeaderReader {
+        served: std::rc::Rc<std::cell::Cell<usize>>,
+    }
+
+    impl Read for EndlessHeaderReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            buf.fill(b'a');
+            self.served.set(self.served.get() + buf.len());
+            Ok(buf.len())
+        }
+    }
+
+    #[test]
+    fn test_read_message_stops_reading_an_unterminated_header_line() {
+        let served = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut stream = BufReader::new(EndlessHeaderReader {
+            served: std::rc::Rc::clone(&served),
+        });
+
+        assert!(read_message(&mut stream).is_none());
+
+        // The real property: the reader gave up near the cap instead of
+        // growing its buffer for as long as the server kept talking. Without
+        // the cap this test would not fail, it would never return.
+        let cap = MAX_HEADER_LINE_BYTES as usize;
+        assert!(
+            served.get() <= cap * 4,
+            "read {} bytes for one header line, cap is {cap}",
+            served.get()
+        );
+    }
+
+    #[test]
+    fn test_read_message_rejects_a_header_block_that_never_ends() {
+        // Well-formed headers, but no blank separator line ever arrives. Each
+        // line is individually bounded, so this is a livelock rather than a
+        // memory hazard — the line cap alone would not stop it.
+        let flood = "X-Pad: 1\r\n".repeat(MAX_HEADER_LINES + 10);
+        let mut stream = std::io::Cursor::new(flood.into_bytes());
+
+        assert!(read_message(&mut stream).is_none());
+    }
+
+    #[test]
+    fn test_read_log_line_reads_lines_in_order() {
+        let mut reader =
+            BufReader::new(std::io::Cursor::new(b"first\nsecond\n".to_vec()));
+
+        assert_eq!(read_log_line(&mut reader).as_deref(), Some("first\n"));
+        assert_eq!(read_log_line(&mut reader).as_deref(), Some("second\n"));
+        assert_eq!(read_log_line(&mut reader), None, "stream is exhausted");
+    }
+
+    #[test]
+    fn test_read_log_line_truncates_an_oversized_line_and_resyncs() {
+        let cap = MAX_LOG_LINE_BYTES as usize;
+        let flood = "a".repeat(cap * 3);
+        let stream = format!("{flood}\nnext\n");
+        let mut reader =
+            BufReader::new(std::io::Cursor::new(stream.into_bytes()));
+
+        let line = read_log_line(&mut reader);
+        assert!(
+            line.as_ref().is_some_and(|line| line.len() <= cap + 8),
+            "the kept prefix must be bounded by the cap"
+        );
+        assert!(
+            line.as_ref().is_some_and(|line| line.ends_with('…')),
+            "a truncated line must say so"
+        );
+
+        // The remainder was skipped rather than buffered, so the next line
+        // still starts on a real boundary instead of mid-flood.
+        assert_eq!(read_log_line(&mut reader).as_deref(), Some("next\n"));
+    }
+
+    #[test]
+    fn test_read_log_line_replaces_invalid_utf8_instead_of_ending_the_stream() {
+        // Server diagnostics are not worth tearing the log stream down over:
+        // a bad byte must not cost us every later line.
+        let mut reader = BufReader::new(std::io::Cursor::new(
+            b"bad \xff byte\nnext\n".to_vec(),
+        ));
+
+        let line = read_log_line(&mut reader);
+        assert!(
+            line.as_ref().is_some_and(|line| line.contains('\u{fffd}')),
+            "the invalid byte should become a replacement character, got {line:?}"
+        );
+        assert_eq!(read_log_line(&mut reader).as_deref(), Some("next\n"));
+    }
+
+    #[test]
+    fn test_read_log_line_stops_reading_an_unterminated_line() {
+        let served = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut reader = BufReader::new(EndlessHeaderReader {
+            served: std::rc::Rc::clone(&served),
+        });
+
+        // The line never ends, so the skip-ahead never finds a newline either;
+        // both must stay bounded rather than buffering the whole flood.
+        let line = read_log_line(&mut reader);
+        let cap = MAX_LOG_LINE_BYTES as usize;
+        assert!(line.is_some_and(|line| line.len() <= cap + 8));
+    }
+
+    #[test]
+    fn test_read_message_accepts_headers_just_inside_the_caps() {
+        // The caps must not reject legitimate traffic: a long-but-bounded
+        // header line, and more headers than a real server sends but fewer
+        // than the limit, still produce the framed body.
+        let padding = "x".repeat(MAX_HEADER_LINE_BYTES as usize / 2);
+        let mut frame = format!("X-Pad: {padding}\r\n");
+        for _ in 0..MAX_HEADER_LINES - 3 {
+            frame.push_str("X-Small: 1\r\n");
+        }
+        frame.push_str("Content-Length: 2\r\n\r\n{}");
+        let mut stream = std::io::Cursor::new(frame.into_bytes());
+
+        assert_eq!(read_message(&mut stream).as_deref(), Some(&b"{}"[..]));
     }
 
     // -------------------------------------------------------------------------
