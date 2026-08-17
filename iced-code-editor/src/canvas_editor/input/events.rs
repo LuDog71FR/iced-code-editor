@@ -879,6 +879,47 @@ impl CodeEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iced::event;
+
+    /// Shorthand for a printable-character key.
+    fn character(ch: &str) -> keyboard::Key {
+        keyboard::Key::Character(ch.into())
+    }
+
+    /// Shorthand for a named (non-printable) key.
+    fn named(key: keyboard::key::Named) -> keyboard::Key {
+        keyboard::Key::Named(key)
+    }
+
+    /// Runs `key` + `modifiers` through the whole shortcut chain and returns
+    /// the message it publishes, if any.
+    ///
+    /// `modified_key` is passed as a copy of `key`, which is what a QWERTY
+    /// layout reports; the AZERTY tests supply the two separately to exercise
+    /// [`is_key_char`]. Going through [`CodeEditor::handle_keyboard_shortcuts`]
+    /// rather than calling each group directly is deliberate: it is the group
+    /// *ordering* that encodes the shared-key precedence rules, so a test that
+    /// bypassed the chain would not catch a group being reordered.
+    fn shortcut(
+        editor: &CodeEditor,
+        key: &keyboard::Key,
+        modifiers: keyboard::Modifiers,
+    ) -> Option<Message> {
+        editor
+            .handle_keyboard_shortcuts(key, key, &modifiers)
+            .and_then(|action| action.into_inner().0)
+    }
+
+    /// Returns the event status the shortcut chain reports for `key`.
+    fn shortcut_status(
+        editor: &CodeEditor,
+        key: &keyboard::Key,
+        modifiers: keyboard::Modifiers,
+    ) -> Option<event::Status> {
+        editor
+            .handle_keyboard_shortcuts(key, key, &modifiers)
+            .map(|action| action.into_inner().2)
+    }
 
     #[test]
     fn test_vim_navigation_keyboard_route_uses_dedicated_message() {
@@ -1056,5 +1097,365 @@ mod tests {
             .map(|action| action.into_inner().0);
 
         assert!(matches!(message, Some(Some(Message::CloseSearch))));
+    }
+
+    // =========================================================================
+    // Shortcut groups
+    // =========================================================================
+    //
+    // One test per group declared above the `impl CodeEditor` block, plus the
+    // cross-group precedence cases where two groups share a physical key. The
+    // groups are only correct as an ordered chain, so every case below goes
+    // through `handle_keyboard_shortcuts` rather than calling a group directly.
+
+    #[test]
+    fn test_clipboard_shortcuts_route_copy_cut_select_all_and_paste() {
+        let editor = CodeEditor::new("one\ntwo", "txt");
+        let ctrl = keyboard::Modifiers::CTRL;
+
+        assert!(matches!(
+            shortcut(&editor, &character("c"), ctrl),
+            Some(Message::Copy)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &character("x"), ctrl),
+            Some(Message::Cut)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &character("a"), ctrl),
+            Some(Message::SelectAll)
+        ));
+        // Paste carries an empty string: the host reads the real clipboard
+        // and re-dispatches the text.
+        assert!(matches!(
+            shortcut(&editor, &character("v"), ctrl),
+            Some(Message::Paste(text)) if text.is_empty()
+        ));
+    }
+
+    #[test]
+    fn test_clipboard_shortcuts_accept_the_insert_key_bindings() {
+        let editor = CodeEditor::new("one\ntwo", "txt");
+        let insert = named(keyboard::key::Named::Insert);
+
+        assert!(matches!(
+            shortcut(&editor, &insert, keyboard::Modifiers::CTRL),
+            Some(Message::Copy)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &insert, keyboard::Modifiers::SHIFT),
+            Some(Message::Paste(_))
+        ));
+    }
+
+    #[test]
+    fn test_paste_is_the_only_clipboard_shortcut_left_uncaptured() {
+        let editor = CodeEditor::new("one", "txt");
+        let ctrl = keyboard::Modifiers::CTRL;
+
+        for ch in ["c", "x", "a"] {
+            assert!(
+                matches!(
+                    shortcut_status(&editor, &character(ch), ctrl),
+                    Some(event::Status::Captured)
+                ),
+                "Ctrl+{ch} should capture the event"
+            );
+        }
+
+        // Paste is published without `.and_capture()`, unlike every other
+        // shortcut in the chain. Locking that in here because it is a silent
+        // asymmetry: the message alone looks identical to the captured ones.
+        assert!(matches!(
+            shortcut_status(&editor, &character("v"), ctrl),
+            Some(event::Status::Ignored)
+        ));
+    }
+
+    #[test]
+    fn test_multi_cursor_shortcuts_select_occurrence_and_add_cursors() {
+        let editor = CodeEditor::new("one\ntwo\nthree", "txt");
+        let ctrl_alt = keyboard::Modifiers::CTRL | keyboard::Modifiers::ALT;
+
+        assert!(matches!(
+            shortcut(&editor, &character("d"), keyboard::Modifiers::CTRL),
+            Some(Message::SelectNextOccurrence)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &named(keyboard::key::Named::ArrowUp), ctrl_alt),
+            Some(Message::AddCursorAbove)
+        ));
+        assert!(matches!(
+            shortcut(
+                &editor,
+                &named(keyboard::key::Named::ArrowDown),
+                ctrl_alt
+            ),
+            Some(Message::AddCursorBelow)
+        ));
+    }
+
+    #[test]
+    fn test_shift_delete_deletes_the_selection() {
+        let editor = CodeEditor::new("one\ntwo", "txt");
+
+        assert!(matches!(
+            shortcut(
+                &editor,
+                &named(keyboard::key::Named::Delete),
+                keyboard::Modifiers::SHIFT
+            ),
+            Some(Message::DeleteSelection)
+        ));
+    }
+
+    #[test]
+    fn test_line_move_shortcuts_move_and_duplicate_lines() {
+        let editor = CodeEditor::new("one\ntwo\nthree", "txt");
+        let alt = keyboard::Modifiers::ALT;
+        let shift_alt = keyboard::Modifiers::SHIFT | keyboard::Modifiers::ALT;
+        let up = named(keyboard::key::Named::ArrowUp);
+        let down = named(keyboard::key::Named::ArrowDown);
+
+        assert!(matches!(
+            shortcut(&editor, &up, alt),
+            Some(Message::MoveLineUp)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &down, alt),
+            Some(Message::MoveLineDown)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &up, shift_alt),
+            Some(Message::DuplicateLineUp)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &down, shift_alt),
+            Some(Message::DuplicateLineDown)
+        ));
+    }
+
+    #[test]
+    fn test_control_alt_arrows_add_cursors_instead_of_moving_lines() {
+        let editor = CodeEditor::new("one\ntwo\nthree", "txt");
+        let ctrl_alt = keyboard::Modifiers::CTRL | keyboard::Modifiers::ALT;
+
+        // `line_move_shortcut` excludes Control precisely so Ctrl+Alt+Arrow
+        // stays with the multi-cursor group. Same class of clash as the
+        // Ctrl+Alt+K fold-all bug tested above.
+        assert!(!matches!(
+            shortcut(&editor, &named(keyboard::key::Named::ArrowUp), ctrl_alt),
+            Some(Message::MoveLineUp | Message::DuplicateLineUp)
+        ));
+        assert!(!matches!(
+            shortcut(
+                &editor,
+                &named(keyboard::key::Named::ArrowDown),
+                ctrl_alt
+            ),
+            Some(Message::MoveLineDown | Message::DuplicateLineDown)
+        ));
+    }
+
+    #[test]
+    fn test_navigation_shortcuts_jump_to_document_bounds() {
+        let editor = CodeEditor::new("one\ntwo", "txt");
+        let ctrl = keyboard::Modifiers::CTRL;
+
+        assert!(matches!(
+            shortcut(&editor, &named(keyboard::key::Named::Home), ctrl),
+            Some(Message::CtrlHome)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &named(keyboard::key::Named::End), ctrl),
+            Some(Message::CtrlEnd)
+        ));
+    }
+
+    #[test]
+    fn test_shift_tab_navigates_focus_unless_the_search_dialog_is_open() {
+        let mut editor = CodeEditor::new("one", "txt");
+        let tab = named(keyboard::key::Named::Tab);
+        let shift = keyboard::Modifiers::SHIFT;
+
+        assert!(!editor.search_state.is_open);
+        assert!(matches!(
+            shortcut(&editor, &tab, shift),
+            Some(Message::FocusNavigationShiftTab)
+        ));
+
+        // With the dialog open, Tab/Shift+Tab cycle its fields instead of
+        // leaving the editor.
+        editor.search_state.is_open = true;
+        assert!(matches!(
+            shortcut(&editor, &tab, shift),
+            Some(Message::SearchDialogShiftTab)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &tab, keyboard::Modifiers::NONE),
+            Some(Message::SearchDialogTab)
+        ));
+    }
+
+    #[test]
+    fn test_history_shortcuts_route_undo_and_both_redo_bindings() {
+        let editor = CodeEditor::new("one", "txt");
+        let ctrl = keyboard::Modifiers::CTRL;
+        let ctrl_shift = keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT;
+
+        assert!(matches!(
+            shortcut(&editor, &character("z"), ctrl),
+            Some(Message::Undo)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &character("y"), ctrl),
+            Some(Message::Redo)
+        ));
+        // Shift+Ctrl/Cmd+Z is the macOS redo binding, accepted everywhere.
+        assert!(matches!(
+            shortcut(&editor, &character("z"), ctrl_shift),
+            Some(Message::Redo)
+        ));
+    }
+
+    #[test]
+    fn test_dialog_shortcuts_open_dialogs_and_drive_find_next_previous() {
+        let editor = CodeEditor::new("one\ntwo", "txt");
+        let ctrl = keyboard::Modifiers::CTRL;
+        let f3 = named(keyboard::key::Named::F3);
+
+        assert!(editor.search_replace_enabled);
+        assert!(matches!(
+            shortcut(&editor, &character("f"), ctrl),
+            Some(Message::OpenSearch)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &character("h"), ctrl),
+            Some(Message::OpenSearchReplace)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &f3, keyboard::Modifiers::NONE),
+            Some(Message::FindNext)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &f3, keyboard::Modifiers::SHIFT),
+            Some(Message::FindPrevious)
+        ));
+    }
+
+    #[test]
+    fn test_search_shortcuts_are_inert_when_search_replace_is_disabled() {
+        let mut editor = CodeEditor::new("one\ntwo", "txt");
+        editor.set_search_replace_enabled(false);
+        let ctrl = keyboard::Modifiers::CTRL;
+
+        assert!(shortcut(&editor, &character("f"), ctrl).is_none());
+        assert!(shortcut(&editor, &character("h"), ctrl).is_none());
+        assert!(
+            shortcut(
+                &editor,
+                &named(keyboard::key::Named::F3),
+                keyboard::Modifiers::NONE
+            )
+            .is_none()
+        );
+
+        // Goto-line is not gated on the search/replace setting.
+        assert!(matches!(
+            shortcut(&editor, &character("g"), ctrl),
+            Some(Message::OpenGotoLine)
+        ));
+    }
+
+    #[test]
+    fn test_escape_closes_the_goto_line_dialog_before_the_search_dialog() {
+        let mut editor = CodeEditor::new("one\ntwo", "txt");
+        let escape = named(keyboard::key::Named::Escape);
+        let none = keyboard::Modifiers::NONE;
+
+        editor.goto_line_state.is_open = true;
+        assert!(matches!(
+            shortcut(&editor, &escape, none),
+            Some(Message::CloseGotoLine)
+        ));
+
+        // Both open: goto-line is the innermost dialog, so it closes first.
+        editor.search_state.is_open = true;
+        assert!(matches!(
+            shortcut(&editor, &escape, none),
+            Some(Message::CloseGotoLine)
+        ));
+
+        editor.goto_line_state.is_open = false;
+        assert!(matches!(
+            shortcut(&editor, &escape, none),
+            Some(Message::CloseSearch)
+        ));
+    }
+
+    #[test]
+    fn test_escape_reaches_vim_only_when_no_dialog_is_open() {
+        let mut editor = CodeEditor::new("one", "txt").with_vim_enabled(true);
+        let escape = named(keyboard::key::Named::Escape);
+        let none = keyboard::Modifiers::NONE;
+
+        assert!(matches!(
+            shortcut(&editor, &escape, none),
+            Some(Message::VimKey('\u{1b}'))
+        ));
+
+        // With a dialog open, Escape closes it rather than being swallowed by
+        // Vim's modal state machine — otherwise the dialog would be
+        // unclosable while Vim is on.
+        editor.search_state.is_open = true;
+        assert!(matches!(
+            shortcut(&editor, &escape, none),
+            Some(Message::CloseSearch)
+        ));
+    }
+
+    #[test]
+    fn test_folding_shortcuts_toggle_fold_and_unfold_everything() {
+        let editor = CodeEditor::new("fn a() {\n}\n", "rs");
+        let ctrl = keyboard::Modifiers::CTRL;
+        assert!(editor.folding_enabled);
+
+        // QWERTY counterpart of the AZERTY test above: `.` needs no Shift, so
+        // it arrives as the base key.
+        assert!(matches!(
+            shortcut(&editor, &character("."), ctrl),
+            Some(Message::ToggleFoldAtCursor)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &character("k"), ctrl),
+            Some(Message::FoldAll)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &character("j"), ctrl),
+            Some(Message::UnfoldAll)
+        ));
+    }
+
+    #[test]
+    fn test_fold_all_and_unfold_all_exclude_shift() {
+        let editor = CodeEditor::new("fn a() {\n}\n", "rs");
+        let ctrl_shift = keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT;
+
+        // Same guard as `test_ctrl_alt_k_does_not_fold_all`: the fold
+        // bindings exclude Shift and Alt so those combinations stay free.
+        assert!(shortcut(&editor, &character("k"), ctrl_shift).is_none());
+        assert!(shortcut(&editor, &character("j"), ctrl_shift).is_none());
+    }
+
+    #[test]
+    fn test_folding_shortcuts_are_inert_when_folding_is_disabled() {
+        let editor =
+            CodeEditor::new("fn a() {\n}\n", "rs").with_folding_enabled(false);
+        let ctrl = keyboard::Modifiers::CTRL;
+
+        assert!(!editor.folding_enabled);
+        assert!(shortcut(&editor, &character("."), ctrl).is_none());
+        assert!(shortcut(&editor, &character("k"), ctrl).is_none());
+        assert!(shortcut(&editor, &character("j"), ctrl).is_none());
     }
 }
