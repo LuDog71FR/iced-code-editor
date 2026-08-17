@@ -370,6 +370,23 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task` that may produce a `Message` (e.g., if scrolling is needed).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("one\ntwo\nthree", "txt");
+    ///
+    /// let _task = editor.set_cursor(1, 2);
+    /// assert_eq!(editor.cursor_position(), (1, 2));
+    ///
+    /// // Out-of-range coordinates clamp to the document rather than failing,
+    /// // which is what makes this safe to call with a position from an
+    /// // external source such as an LSP jump target.
+    /// let _task = editor.set_cursor(99, 99);
+    /// assert_eq!(editor.cursor_position(), (2, 5));
+    /// ```
     pub fn set_cursor(&mut self, line: usize, col: usize) -> Task<Message> {
         let line = line.min(self.buffer.line_count().saturating_sub(1));
         let line_len = self.buffer.line(line).chars().count();

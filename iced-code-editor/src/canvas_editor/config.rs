@@ -9,6 +9,28 @@ use crate::theme::Style;
 
 impl CodeEditor {
     /// Replaces the custom context-menu entries.
+    ///
+    /// Custom entries are shown in addition to the built-in editing actions;
+    /// see [`Self::set_default_context_menu_enabled`] to hide those.
+    ///
+    /// # Arguments
+    ///
+    /// * `entries` - The entries to display, in order
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, ContextMenuEntry};
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_custom_context_menu_entries(vec![
+    ///     ContextMenuEntry::item("format", "Format Document")
+    ///         .with_shortcut("Ctrl+Shift+F"),
+    ///     ContextMenuEntry::separator(),
+    ///     ContextMenuEntry::item("rename", "Rename Symbol").with_enabled(false),
+    /// ]);
+    /// assert_eq!(editor.custom_context_menu_entries().len(), 3);
+    /// ```
     pub fn set_custom_context_menu_entries(
         &mut self,
         entries: Vec<ContextMenuEntry>,
@@ -17,6 +39,26 @@ impl CodeEditor {
     }
 
     /// Replaces the custom context-menu entries using the builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `entries` - The entries to display, in order
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, ContextMenuEntry};
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_custom_context_menu_entries(vec![
+    ///         ContextMenuEntry::item("format", "Format Document"),
+    ///     ]);
+    /// assert_eq!(editor.custom_context_menu_entries().len(), 1);
+    /// ```
     #[must_use]
     pub fn with_custom_context_menu_entries(
         mut self,
@@ -27,16 +69,65 @@ impl CodeEditor {
     }
 
     /// Returns the custom context-menu entries in display order.
+    ///
+    /// # Returns
+    ///
+    /// The entries previously set, or an empty slice if none were set
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert!(editor.custom_context_menu_entries().is_empty());
+    /// ```
     pub fn custom_context_menu_entries(&self) -> &[ContextMenuEntry] {
         &self.custom_context_menu_entries
     }
 
     /// Sets whether the built-in editing actions appear in the context menu.
+    ///
+    /// The built-in actions are undo/redo, cut/copy/paste, and select all.
+    /// Disabling them leaves only the custom entries, which is how a host
+    /// application replaces the menu wholesale rather than extending it.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to show the built-in actions
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_default_context_menu_enabled(false);
+    /// assert!(!editor.default_context_menu_enabled());
+    /// ```
     pub fn set_default_context_menu_enabled(&mut self, enabled: bool) {
         self.default_context_menu_enabled = enabled;
     }
 
     /// Sets built-in context-menu visibility using the builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to show the built-in actions
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_default_context_menu_enabled(false);
+    /// assert!(!editor.default_context_menu_enabled());
+    /// ```
     #[must_use]
     pub fn with_default_context_menu_enabled(mut self, enabled: bool) -> Self {
         self.set_default_context_menu_enabled(enabled);
@@ -44,16 +135,65 @@ impl CodeEditor {
     }
 
     /// Returns whether the built-in context-menu actions are enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the built-in actions are shown, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Shown by default.
+    /// assert!(editor.default_context_menu_enabled());
+    /// ```
     pub fn default_context_menu_enabled(&self) -> bool {
         self.default_context_menu_enabled
     }
 
     /// Sets whether the built-in reveal-in-file-manager action is shown.
+    ///
+    /// The action is only useful when the host application knows the file path
+    /// backing the editor, so it is off by default and the host opts in.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to show the reveal action
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_reveal_in_file_manager_enabled(true);
+    /// assert!(editor.reveal_in_file_manager_enabled());
+    /// ```
     pub fn set_reveal_in_file_manager_enabled(&mut self, enabled: bool) {
         self.reveal_in_file_manager_enabled = enabled;
     }
 
     /// Sets reveal-in-file-manager visibility using the builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to show the reveal action
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_reveal_in_file_manager_enabled(true);
+    /// assert!(editor.reveal_in_file_manager_enabled());
+    /// ```
     #[must_use]
     pub fn with_reveal_in_file_manager_enabled(
         mut self,
@@ -64,6 +204,20 @@ impl CodeEditor {
     }
 
     /// Returns whether the reveal-in-file-manager action is shown.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the reveal action is shown, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Off by default: the editor doesn't know its own file path.
+    /// assert!(!editor.reveal_in_file_manager_enabled());
+    /// ```
     pub fn reveal_in_file_manager_enabled(&self) -> bool {
         self.reveal_in_file_manager_enabled
     }
@@ -71,7 +225,24 @@ impl CodeEditor {
     /// Enables or disables Vim behavior for this editor instance.
     ///
     /// Changing this setting enters a clean Normal mode without modifying the
-    /// buffer or command history.
+    /// buffer or command history. Any secondary cursors are collapsed onto the
+    /// primary one, since Vim owns its own selection model.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable Vim behavior
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, VimMode};
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_vim_enabled(true);
+    ///
+    /// // Vim always starts in Normal mode.
+    /// assert_eq!(editor.vim_mode(), Some(VimMode::Normal));
+    /// ```
     pub fn set_vim_enabled(&mut self, enabled: bool) {
         if self.is_grouping {
             self.history.end_group();
@@ -91,6 +262,24 @@ impl CodeEditor {
     }
 
     /// Sets whether Vim behavior is enabled using the builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable Vim behavior
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_vim_enabled(true);
+    /// assert!(editor.vim_enabled());
+    /// ```
     #[must_use]
     pub fn with_vim_enabled(mut self, enabled: bool) -> Self {
         self.set_vim_enabled(enabled);
@@ -98,11 +287,45 @@ impl CodeEditor {
     }
 
     /// Returns whether Vim behavior is enabled for this editor instance.
+    ///
+    /// # Returns
+    ///
+    /// `true` if Vim behavior is enabled, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Off by default.
+    /// assert!(!editor.vim_enabled());
+    /// ```
     pub fn vim_enabled(&self) -> bool {
         self.vim_enabled
     }
 
     /// Returns the active Vim mode, or `None` when Vim behavior is disabled.
+    ///
+    /// Use this to drive a mode indicator in the host application's status bar.
+    ///
+    /// # Returns
+    ///
+    /// `Some(mode)` when Vim is enabled, `None` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, VimMode};
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// // `None` rather than a default mode, so a status bar can tell
+    /// // "Vim is off" apart from "Vim is in Normal mode".
+    /// assert_eq!(editor.vim_mode(), None);
+    ///
+    /// let editor = editor.with_vim_enabled(true);
+    /// assert_eq!(editor.vim_mode(), Some(VimMode::Normal));
+    /// ```
     pub fn vim_mode(&self) -> Option<VimMode> {
         self.vim_enabled.then(|| self.vim_state.mode())
     }
@@ -200,6 +423,19 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `true` if line wrapping is enabled, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Enabled by default.
+    /// assert!(editor.wrap_enabled());
+    ///
+    /// editor.set_wrap_enabled(false);
+    /// assert!(!editor.wrap_enabled());
+    /// ```
     pub fn wrap_enabled(&self) -> bool {
         self.wrap_enabled
     }
@@ -230,6 +466,23 @@ impl CodeEditor {
     }
 
     /// Returns whether visible whitespace rendering is enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` if whitespace characters are rendered, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Enabled by default.
+    /// assert!(editor.show_whitespace());
+    ///
+    /// editor.set_show_whitespace(false);
+    /// assert!(!editor.show_whitespace());
+    /// ```
     pub fn show_whitespace(&self) -> bool {
         self.show_whitespace
     }
@@ -260,6 +513,23 @@ impl CodeEditor {
     }
 
     /// Returns whether the matching-bracket/quote-pair highlight overlay is enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the highlight is enabled, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Enabled by default.
+    /// assert!(editor.bracket_match_highlight_enabled());
+    ///
+    /// editor.set_bracket_match_highlight_enabled(false);
+    /// assert!(!editor.bracket_match_highlight_enabled());
+    /// ```
     pub fn bracket_match_highlight_enabled(&self) -> bool {
         self.bracket_match_highlight_enabled
     }
@@ -291,6 +561,23 @@ impl CodeEditor {
     }
 
     /// Returns whether bracket-pair colorization (rainbow brackets) is enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` if bracket-pair colorization is enabled, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Enabled by default.
+    /// assert!(editor.bracket_pair_colorization_enabled());
+    ///
+    /// editor.set_bracket_pair_colorization_enabled(false);
+    /// assert!(!editor.bracket_pair_colorization_enabled());
+    /// ```
     pub fn bracket_pair_colorization_enabled(&self) -> bool {
         self.bracket_pair_colorization_enabled
     }
@@ -321,6 +608,23 @@ impl CodeEditor {
     }
 
     /// Returns whether code folding is enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` if code folding is enabled, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Enabled by default.
+    /// assert!(editor.folding_enabled());
+    ///
+    /// editor.set_folding_enabled(false);
+    /// assert!(!editor.folding_enabled());
+    /// ```
     pub fn folding_enabled(&self) -> bool {
         self.folding_enabled
     }
@@ -334,6 +638,16 @@ impl CodeEditor {
     /// # Arguments
     ///
     /// * `enabled` - `true` to enable auto-indentation, `false` to disable
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_auto_indent_enabled(false);
+    /// assert!(!editor.auto_indent_enabled());
+    /// ```
     pub fn set_auto_indent_enabled(&mut self, enabled: bool) {
         self.auto_indent_enabled = enabled;
     }
@@ -343,6 +657,16 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `true` if auto-indentation is enabled, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Enabled by default.
+    /// assert!(editor.auto_indent_enabled());
+    /// ```
     pub fn auto_indent_enabled(&self) -> bool {
         self.auto_indent_enabled
     }
@@ -377,6 +701,16 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `true` if auto-closing is enabled, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Enabled by default.
+    /// assert!(editor.auto_close_brackets());
+    /// ```
     pub fn auto_close_brackets(&self) -> bool {
         self.auto_close_brackets
     }
@@ -386,6 +720,22 @@ impl CodeEditor {
     /// # Arguments
     ///
     /// * `style` - The indentation style (`IndentStyle::Spaces(n)` or `IndentStyle::Tab`)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, IndentStyle};
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    ///
+    /// // Indent with a real tab character instead of the default 4 spaces.
+    /// editor.set_indent_style(IndentStyle::Tab);
+    /// assert_eq!(editor.indent_style(), IndentStyle::Tab);
+    ///
+    /// // Or pick a different space width.
+    /// editor.set_indent_style(IndentStyle::Spaces(2));
+    /// assert_eq!(editor.indent_style(), IndentStyle::Spaces(2));
+    /// ```
     pub fn set_indent_style(&mut self, style: IndentStyle) {
         self.indent_style = style;
     }
@@ -395,6 +745,15 @@ impl CodeEditor {
     /// # Returns
     ///
     /// The current [`IndentStyle`] configured for this editor
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, IndentStyle};
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert_eq!(editor.indent_style(), IndentStyle::Spaces(4));
+    /// ```
     pub fn indent_style(&self) -> IndentStyle {
         self.indent_style
     }
@@ -428,6 +787,19 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `true` if search/replace is enabled, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Enabled by default.
+    /// assert!(editor.search_replace_enabled());
+    ///
+    /// editor.set_search_replace_enabled(false);
+    /// assert!(!editor.search_replace_enabled());
+    /// ```
     pub fn search_replace_enabled(&self) -> bool {
         self.search_replace_enabled
     }
@@ -544,6 +916,19 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `true` if line numbers are displayed, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Displayed by default.
+    /// assert!(editor.line_numbers_enabled());
+    ///
+    /// editor.set_line_numbers_enabled(false);
+    /// assert!(!editor.line_numbers_enabled());
+    /// ```
     pub fn line_numbers_enabled(&self) -> bool {
         self.line_numbers_enabled
     }

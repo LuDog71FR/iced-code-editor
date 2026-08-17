@@ -13,7 +13,7 @@ use crate::canvas_editor::{CodeEditor, IndentStyle, Message};
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// assert_eq!(matching_close('('), Some(')'));
 /// assert_eq!(matching_close('"'), Some('"'));
 /// assert_eq!(matching_close('x'), None);

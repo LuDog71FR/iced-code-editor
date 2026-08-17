@@ -83,9 +83,7 @@ impl WrappingCalculator {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// use iced_code_editor::canvas_editor::wrapping::WrappingCalculator;
-    ///
+    /// ```text
     /// // Wrap at viewport width
     /// let calc = WrappingCalculator::new(true, None, 14.0, 8.4);
     ///

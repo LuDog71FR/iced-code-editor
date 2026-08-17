@@ -14,7 +14,7 @@ use super::Command;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// let end = insert_text_at(&mut buffer, 0, 0, "ab\ncd");
 /// assert_eq!(end, (1, 2));
 /// ```

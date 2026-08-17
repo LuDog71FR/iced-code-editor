@@ -295,6 +295,18 @@ impl Translations {
     }
 
     /// Returns the context-menu label for undo.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.context_menu_undo(), "Undo");
+    ///
+    /// let fr = Translations::new(Language::French);
+    /// assert_eq!(fr.context_menu_undo(), "Annuler");
+    /// ```
     #[must_use]
     pub fn context_menu_undo(&self) -> String {
         rust_i18n::t!("context_menu.undo", locale = self.language.to_locale())
@@ -302,6 +314,18 @@ impl Translations {
     }
 
     /// Returns the context-menu label for redo.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.context_menu_redo(), "Redo");
+    ///
+    /// let fr = Translations::new(Language::French);
+    /// assert_eq!(fr.context_menu_redo(), "Rétablir");
+    /// ```
     #[must_use]
     pub fn context_menu_redo(&self) -> String {
         rust_i18n::t!("context_menu.redo", locale = self.language.to_locale())
@@ -309,6 +333,18 @@ impl Translations {
     }
 
     /// Returns the context-menu label for cut.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.context_menu_cut(), "Cut");
+    ///
+    /// let de = Translations::new(Language::German);
+    /// assert_eq!(de.context_menu_cut(), "Ausschneiden");
+    /// ```
     #[must_use]
     pub fn context_menu_cut(&self) -> String {
         rust_i18n::t!("context_menu.cut", locale = self.language.to_locale())
@@ -316,6 +352,18 @@ impl Translations {
     }
 
     /// Returns the context-menu label for copy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.context_menu_copy(), "Copy");
+    ///
+    /// let it = Translations::new(Language::Italian);
+    /// assert_eq!(it.context_menu_copy(), "Copia");
+    /// ```
     #[must_use]
     pub fn context_menu_copy(&self) -> String {
         rust_i18n::t!("context_menu.copy", locale = self.language.to_locale())
@@ -323,6 +371,18 @@ impl Translations {
     }
 
     /// Returns the context-menu label for paste.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.context_menu_paste(), "Paste");
+    ///
+    /// let es = Translations::new(Language::Spanish);
+    /// assert_eq!(es.context_menu_paste(), "Pegar");
+    /// ```
     #[must_use]
     pub fn context_menu_paste(&self) -> String {
         rust_i18n::t!("context_menu.paste", locale = self.language.to_locale())
@@ -330,6 +390,18 @@ impl Translations {
     }
 
     /// Returns the context-menu label for select all.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.context_menu_select_all(), "Select All");
+    ///
+    /// let fr = Translations::new(Language::French);
+    /// assert_eq!(fr.context_menu_select_all(), "Tout sélectionner");
+    /// ```
     #[must_use]
     pub fn context_menu_select_all(&self) -> String {
         rust_i18n::t!(
@@ -340,6 +412,18 @@ impl Translations {
     }
 
     /// Returns the macOS context-menu label for revealing a file.
+    ///
+    /// Prefer [`Self::context_menu_reveal_in_file_manager`], which picks the
+    /// right one of the three platform wordings for you.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.context_menu_reveal_in_finder(), "Reveal in Finder");
+    /// ```
     #[must_use]
     pub fn context_menu_reveal_in_finder(&self) -> String {
         rust_i18n::t!(
@@ -350,6 +434,21 @@ impl Translations {
     }
 
     /// Returns the Windows context-menu label for revealing a file.
+    ///
+    /// Prefer [`Self::context_menu_reveal_in_file_manager`], which picks the
+    /// right one of the three platform wordings for you.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(
+    ///     en.context_menu_reveal_in_file_explorer(),
+    ///     "Reveal in File Explorer"
+    /// );
+    /// ```
     #[must_use]
     pub fn context_menu_reveal_in_file_explorer(&self) -> String {
         rust_i18n::t!(
@@ -360,6 +459,21 @@ impl Translations {
     }
 
     /// Returns the Linux context-menu label for opening a file's parent folder.
+    ///
+    /// Worded as "open the containing folder" rather than "reveal", matching
+    /// how Linux file managers describe the action.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(
+    ///     en.context_menu_open_containing_folder(),
+    ///     "Open Containing Folder"
+    /// );
+    /// ```
     #[must_use]
     pub fn context_menu_open_containing_folder(&self) -> String {
         rust_i18n::t!(
@@ -370,6 +484,27 @@ impl Translations {
     }
 
     /// Returns the platform-appropriate label for revealing a file.
+    ///
+    /// Resolves to "Reveal in Finder" on macOS, "Reveal in File Explorer" on
+    /// Windows, and "Open Containing Folder" elsewhere, so the menu matches
+    /// the wording users already know from their own file manager.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// let label = en.context_menu_reveal_in_file_manager();
+    ///
+    /// // Whichever platform this runs on, it matches that platform's wording.
+    /// #[cfg(target_os = "macos")]
+    /// assert_eq!(label, en.context_menu_reveal_in_finder());
+    /// #[cfg(target_os = "windows")]
+    /// assert_eq!(label, en.context_menu_reveal_in_file_explorer());
+    /// #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    /// assert_eq!(label, en.context_menu_open_containing_folder());
+    /// ```
     #[must_use]
     pub fn context_menu_reveal_in_file_manager(&self) -> String {
         if cfg!(target_os = "macos") {

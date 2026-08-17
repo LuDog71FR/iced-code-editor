@@ -10,12 +10,41 @@ impl CodeEditor {
     /// Attaches an LSP client and opens a document for the current buffer.
     ///
     /// This sends an initial `did_open` with the current buffer contents and
-    /// resets any pending LSP change state.
+    /// resets any pending LSP change state. It is a no-op while LSP support is
+    /// disabled — see [`Self::set_lsp_enabled`].
     ///
     /// # Arguments
     ///
     /// * `client` - The LSP client to notify
     /// * `document` - Document metadata describing the buffer
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::cell::RefCell;
+    /// use std::rc::Rc;
+    ///
+    /// use iced_code_editor::{CodeEditor, LspClient, LspDocument};
+    ///
+    /// /// Records the text the editor sent on `did_open`.
+    /// struct RecordingClient(Rc<RefCell<Option<String>>>);
+    ///
+    /// impl LspClient for RecordingClient {
+    ///     fn did_open(&mut self, _document: &LspDocument, text: &str) {
+    ///         *self.0.borrow_mut() = Some(text.to_string());
+    ///     }
+    /// }
+    ///
+    /// let opened = Rc::new(RefCell::new(None));
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.attach_lsp(
+    ///     Box::new(RecordingClient(Rc::clone(&opened))),
+    ///     LspDocument::new("file:///tmp/main.rs", "rust"),
+    /// );
+    ///
+    /// // Attaching opens the document with the buffer's current contents.
+    /// assert_eq!(opened.borrow().as_deref(), Some("fn main() {}"));
+    /// ```
     pub fn attach_lsp(
         &mut self,
         mut client: Box<dyn lsp::LspClient>,
@@ -34,11 +63,44 @@ impl CodeEditor {
     /// Opens a new document on the attached LSP client.
     ///
     /// If a document is already open, this will close it before opening the new
-    /// one and reset pending change tracking.
+    /// one and reset pending change tracking. Use this when the same editor
+    /// widget is reused for a different file, so the server is told about the
+    /// swap rather than seeing the old document mutate into the new one.
+    ///
+    /// Does nothing when no client is attached.
     ///
     /// # Arguments
     ///
     /// * `document` - Document metadata describing the buffer
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::cell::RefCell;
+    /// use std::rc::Rc;
+    ///
+    /// use iced_code_editor::{CodeEditor, LspClient, LspDocument};
+    ///
+    /// /// Records the URIs the editor closed.
+    /// struct ClosingClient(Rc<RefCell<Vec<String>>>);
+    ///
+    /// impl LspClient for ClosingClient {
+    ///     fn did_close(&mut self, document: &LspDocument) {
+    ///         self.0.borrow_mut().push(document.uri.clone());
+    ///     }
+    /// }
+    ///
+    /// let closed = Rc::new(RefCell::new(Vec::new()));
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.attach_lsp(
+    ///     Box::new(ClosingClient(Rc::clone(&closed))),
+    ///     LspDocument::new("file:///tmp/first.rs", "rust"),
+    /// );
+    ///
+    /// // Switching files closes the previous document first.
+    /// editor.lsp_open_document(LspDocument::new("file:///tmp/second.rs", "rust"));
+    /// assert_eq!(closed.borrow().as_slice(), ["file:///tmp/first.rs"]);
+    /// ```
     pub fn lsp_open_document(&mut self, document: lsp::LspDocument) {
         let Some(client) = self.lsp_client.as_mut() else { return };
         if let Some(current) = self.lsp_document.as_ref() {
@@ -88,7 +150,40 @@ impl CodeEditor {
 
     /// Detaches the current LSP client and closes any open document.
     ///
-    /// This clears all LSP-related state on the editor instance.
+    /// This clears all LSP-related state on the editor instance, including any
+    /// changes queued but not yet flushed. Safe to call when nothing is
+    /// attached.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::cell::RefCell;
+    /// use std::rc::Rc;
+    ///
+    /// use iced_code_editor::{CodeEditor, LspClient, LspDocument};
+    ///
+    /// /// Records whether the document was closed.
+    /// struct ClosingClient(Rc<RefCell<bool>>);
+    ///
+    /// impl LspClient for ClosingClient {
+    ///     fn did_close(&mut self, _document: &LspDocument) {
+    ///         *self.0.borrow_mut() = true;
+    ///     }
+    /// }
+    ///
+    /// let closed = Rc::new(RefCell::new(false));
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.attach_lsp(
+    ///     Box::new(ClosingClient(Rc::clone(&closed))),
+    ///     LspDocument::new("file:///tmp/main.rs", "rust"),
+    /// );
+    ///
+    /// editor.detach_lsp();
+    /// assert!(*closed.borrow());
+    ///
+    /// // Detaching again is harmless.
+    /// editor.detach_lsp();
+    /// ```
     pub fn detach_lsp(&mut self) {
         self.with_lsp(|client, document| client.did_close(document));
         self.lsp_client = None;
@@ -102,6 +197,38 @@ impl CodeEditor {
     }
 
     /// Sends a `did_save` notification with the current buffer contents.
+    ///
+    /// Call this after the host application has written the file to disk, so
+    /// servers that re-run diagnostics or formatting on save see the new state.
+    /// Does nothing when no client and document are attached.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::cell::RefCell;
+    /// use std::rc::Rc;
+    ///
+    /// use iced_code_editor::{CodeEditor, LspClient, LspDocument};
+    ///
+    /// /// Records the text sent on save.
+    /// struct SavingClient(Rc<RefCell<Option<String>>>);
+    ///
+    /// impl LspClient for SavingClient {
+    ///     fn did_save(&mut self, _document: &LspDocument, text: &str) {
+    ///         *self.0.borrow_mut() = Some(text.to_string());
+    ///     }
+    /// }
+    ///
+    /// let saved = Rc::new(RefCell::new(None));
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.attach_lsp(
+    ///     Box::new(SavingClient(Rc::clone(&saved))),
+    ///     LspDocument::new("file:///tmp/main.rs", "rust"),
+    /// );
+    ///
+    /// editor.lsp_did_save();
+    /// assert_eq!(saved.borrow().as_deref(), Some("fn main() {}"));
+    /// ```
     pub fn lsp_did_save(&mut self) {
         // Skip serializing the whole buffer when no client/document is
         // attached: `with_lsp` would just discard the closure unused, but the
@@ -115,6 +242,41 @@ impl CodeEditor {
     }
 
     /// Requests hover information at the current cursor position.
+    ///
+    /// The request is fire-and-forget: the reply reaches the host through
+    /// whatever channel the [`LspClient`] implementation uses, not through a
+    /// return value. Does nothing when no client is attached.
+    ///
+    /// [`LspClient`]: crate::LspClient
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::cell::RefCell;
+    /// use std::rc::Rc;
+    ///
+    /// use iced_code_editor::{CodeEditor, LspClient, LspDocument, LspPosition};
+    ///
+    /// /// Records the position each hover request asked about.
+    /// struct HoverClient(Rc<RefCell<Vec<LspPosition>>>);
+    ///
+    /// impl LspClient for HoverClient {
+    ///     fn request_hover(&mut self, _document: &LspDocument, position: LspPosition) {
+    ///         self.0.borrow_mut().push(position);
+    ///     }
+    /// }
+    ///
+    /// let hovers = Rc::new(RefCell::new(Vec::new()));
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.attach_lsp(
+    ///     Box::new(HoverClient(Rc::clone(&hovers))),
+    ///     LspDocument::new("file:///tmp/main.rs", "rust"),
+    /// );
+    ///
+    /// editor.lsp_request_hover();
+    /// // The cursor starts at the top of the document.
+    /// assert_eq!(hovers.borrow().as_slice(), [LspPosition { line: 0, character: 0 }]);
+    /// ```
     pub fn lsp_request_hover(&mut self) {
         let position = self.lsp_position_from_cursor();
         self.with_lsp(|client, document| {
@@ -124,8 +286,29 @@ impl CodeEditor {
 
     /// Requests hover information at a canvas point.
     ///
-    /// Returns `true` if the point maps to a valid buffer position and the
-    /// request was sent.
+    /// Use this to drive hover-on-mouse-move; [`Self::lsp_position_at_point`]
+    /// resolves the point first, so a point over the gutter sends nothing.
+    ///
+    /// # Arguments
+    ///
+    /// * `point` - The position in canvas coordinates
+    ///
+    /// # Returns
+    ///
+    /// `true` if the point maps to a valid buffer position and the request was
+    /// sent; `false` if it does not, or if no client is attached
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced::Point;
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    ///
+    /// // With no client attached there is nothing to send.
+    /// assert!(!editor.lsp_request_hover_at(Point::new(50.0, 5.0)));
+    /// ```
     pub fn lsp_request_hover_at(&mut self, point: iced::Point) -> bool {
         let Some(position) = self.lsp_position_from_point(point) else {
             return false;
@@ -138,7 +321,30 @@ impl CodeEditor {
 
     /// Requests hover information at an explicit LSP position.
     ///
-    /// Returns `true` if an LSP client is attached and the request was sent.
+    /// Unlike [`Self::lsp_request_hover_at`], this skips point-to-position
+    /// resolution — pair it with a position previously obtained from
+    /// [`Self::lsp_hover_anchor_at_point`] so a hover that lingers stays
+    /// anchored to the word rather than following the mouse.
+    ///
+    /// # Arguments
+    ///
+    /// * `position` - The zero-based document position to query
+    ///
+    /// # Returns
+    ///
+    /// `true` if a client is attached and the request was sent, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, LspPosition};
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// let position = LspPosition { line: 0, character: 3 };
+    ///
+    /// // With no client attached there is nothing to send.
+    /// assert!(!editor.lsp_request_hover_at_position(position));
+    /// ```
     pub fn lsp_request_hover_at_position(
         &mut self,
         position: lsp::LspPosition,
@@ -150,6 +356,37 @@ impl CodeEditor {
     }
 
     /// Converts a canvas point to an LSP position, if possible.
+    ///
+    /// Requires no attached client — this is pure hit-testing against the
+    /// editor's current layout.
+    ///
+    /// # Arguments
+    ///
+    /// * `point` - The position in canvas coordinates
+    ///
+    /// # Returns
+    ///
+    /// `Some(position)` when the point falls on text, `None` when it lands in
+    /// the gutter
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced::Point;
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    ///
+    /// // The origin sits in the line-number gutter, which maps to nothing.
+    /// assert!(editor.lsp_position_at_point(Point::ORIGIN).is_none());
+    ///
+    /// // A point past the end of the document clamps to its last position.
+    /// let position = editor
+    ///     .lsp_position_at_point(Point::new(5_000.0, 5_000.0))
+    ///     .expect("a point past the text clamps rather than failing");
+    /// assert_eq!(position.line, 0);
+    /// assert_eq!(position.character, 12);
+    /// ```
     pub fn lsp_position_at_point(
         &self,
         point: iced::Point,
@@ -160,8 +397,31 @@ impl CodeEditor {
     /// Returns the hover anchor position and its canvas point for a given
     /// cursor location.
     ///
-    /// The anchor is the start of the word under the cursor, which is useful
-    /// for LSP hover and definition requests.
+    /// The anchor is the start of the word under the cursor. Anchoring to the
+    /// word start rather than the exact mouse position keeps a hover popup from
+    /// jittering as the pointer moves within one identifier, and gives the host
+    /// a stable canvas point to position the popup against.
+    ///
+    /// # Arguments
+    ///
+    /// * `point` - The position in canvas coordinates
+    ///
+    /// # Returns
+    ///
+    /// `Some((position, anchor_point))` when the point falls on text, `None`
+    /// when it lands in the gutter
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced::Point;
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    ///
+    /// // A gutter point has no word to anchor to.
+    /// assert!(editor.lsp_hover_anchor_at_point(Point::ORIGIN).is_none());
+    /// ```
     pub fn lsp_hover_anchor_at_point(
         &self,
         point: iced::Point,
@@ -177,6 +437,40 @@ impl CodeEditor {
     }
 
     /// Requests completion items at the current cursor position.
+    ///
+    /// Like the hover requests, this is fire-and-forget; the items arrive
+    /// through the [`LspClient`] implementation. Does nothing when no client is
+    /// attached.
+    ///
+    /// [`LspClient`]: crate::LspClient
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::cell::RefCell;
+    /// use std::rc::Rc;
+    ///
+    /// use iced_code_editor::{CodeEditor, LspClient, LspDocument, LspPosition};
+    ///
+    /// /// Counts completion requests.
+    /// struct CompletionClient(Rc<RefCell<usize>>);
+    ///
+    /// impl LspClient for CompletionClient {
+    ///     fn request_completion(&mut self, _document: &LspDocument, _position: LspPosition) {
+    ///         *self.0.borrow_mut() += 1;
+    ///     }
+    /// }
+    ///
+    /// let requests = Rc::new(RefCell::new(0));
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.attach_lsp(
+    ///     Box::new(CompletionClient(Rc::clone(&requests))),
+    ///     LspDocument::new("file:///tmp/main.rs", "rust"),
+    /// );
+    ///
+    /// editor.lsp_request_completion();
+    /// assert_eq!(*requests.borrow(), 1);
+    /// ```
     pub fn lsp_request_completion(&mut self) {
         let position = self.lsp_position_from_cursor();
         self.with_lsp(|client, document| {
@@ -187,7 +481,44 @@ impl CodeEditor {
     /// Flushes pending LSP text changes to the attached client.
     ///
     /// This increments the document version and sends `did_change` with all
-    /// queued changes.
+    /// queued changes. Changes stay queued while no client is attached, so a
+    /// client attached later still receives a consistent document.
+    ///
+    /// Only needed when automatic flushing is off; see
+    /// [`Self::set_lsp_auto_flush`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::cell::RefCell;
+    /// use std::rc::Rc;
+    ///
+    /// use iced_code_editor::{CodeEditor, LspClient, LspDocument, LspTextChange};
+    ///
+    /// /// Records how many changes each batch carried.
+    /// struct BatchClient(Rc<RefCell<Vec<usize>>>);
+    ///
+    /// impl LspClient for BatchClient {
+    ///     fn did_change(&mut self, _document: &LspDocument, changes: &[LspTextChange]) {
+    ///         self.0.borrow_mut().push(changes.len());
+    ///     }
+    /// }
+    ///
+    /// let batches = Rc::new(RefCell::new(Vec::new()));
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    ///
+    /// // Take over flushing, then drive it from a debounce timer.
+    /// editor.set_lsp_auto_flush(false);
+    /// editor.attach_lsp(
+    ///     Box::new(BatchClient(Rc::clone(&batches))),
+    ///     LspDocument::new("file:///tmp/main.rs", "rust"),
+    /// );
+    ///
+    /// // Flushing an empty queue is a no-op, so a timer can call this
+    /// // unconditionally without sending empty notifications.
+    /// editor.lsp_flush_pending_changes();
+    /// assert!(batches.borrow().is_empty());
+    /// ```
     pub fn lsp_flush_pending_changes(&mut self) {
         if self.lsp_pending_changes.is_empty() {
             return;
@@ -207,6 +538,26 @@ impl CodeEditor {
     }
 
     /// Sets whether LSP changes are flushed automatically after edits.
+    ///
+    /// On by default, which is what most hosts want. Turn it off to batch
+    /// rapid typing behind a debounce timer and call
+    /// [`Self::lsp_flush_pending_changes`] yourself, so a chatty server isn't
+    /// sent one notification per keystroke.
+    ///
+    /// # Arguments
+    ///
+    /// * `auto_flush` - `true` to flush after every edit, `false` to flush manually
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    ///
+    /// // Take over flushing so edits can be debounced by the host.
+    /// editor.set_lsp_auto_flush(false);
+    /// ```
     pub fn set_lsp_auto_flush(&mut self, auto_flush: bool) {
         self.lsp_auto_flush = auto_flush;
     }
@@ -352,7 +703,22 @@ impl CodeEditor {
 
     /// Returns whether LSP support is enabled.
     ///
+    /// # Returns
+    ///
     /// `true` if LSP is enabled, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Enabled by default, though no client is attached until you attach one.
+    /// assert!(editor.lsp_enabled());
+    ///
+    /// editor.set_lsp_enabled(false);
+    /// assert!(!editor.lsp_enabled());
+    /// ```
     pub fn lsp_enabled(&self) -> bool {
         self.lsp_enabled
     }
@@ -361,6 +727,37 @@ impl CodeEditor {
     ///
     /// This method converts the current cursor coordinates into an LSP-compatible position
     /// and delegates the request to the active `LspClient`, if one is attached.
+    ///
+    /// Fire-and-forget: the resolved location arrives through the client
+    /// implementation, and the host decides whether to follow it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::cell::RefCell;
+    /// use std::rc::Rc;
+    ///
+    /// use iced_code_editor::{CodeEditor, LspClient, LspDocument, LspPosition};
+    ///
+    /// /// Records the position each definition request asked about.
+    /// struct DefinitionClient(Rc<RefCell<Vec<LspPosition>>>);
+    ///
+    /// impl LspClient for DefinitionClient {
+    ///     fn request_definition(&mut self, _document: &LspDocument, position: LspPosition) {
+    ///         self.0.borrow_mut().push(position);
+    ///     }
+    /// }
+    ///
+    /// let requests = Rc::new(RefCell::new(Vec::new()));
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.attach_lsp(
+    ///     Box::new(DefinitionClient(Rc::clone(&requests))),
+    ///     LspDocument::new("file:///tmp/main.rs", "rust"),
+    /// );
+    ///
+    /// editor.lsp_request_definition();
+    /// assert_eq!(requests.borrow().len(), 1);
+    /// ```
     pub fn lsp_request_definition(&mut self) {
         let position = self.lsp_position_from_cursor();
         self.with_lsp(|client, document| {
@@ -373,10 +770,26 @@ impl CodeEditor {
     /// This is typically used for mouse interactions (e.g., Ctrl+Click). It first resolves
     /// the screen coordinates to a text position and then sends the request.
     ///
+    /// # Arguments
+    ///
+    /// * `point` - The click position in canvas coordinates
+    ///
     /// # Returns
     ///
     /// `true` if the request was successfully sent (i.e., a valid position was found and an LSP client is active),
     /// `false` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced::Point;
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    ///
+    /// // With no client attached there is nothing to send.
+    /// assert!(!editor.lsp_request_definition_at(Point::new(50.0, 5.0)));
+    /// ```
     pub fn lsp_request_definition_at(&mut self, point: iced::Point) -> bool {
         let Some(position) = self.lsp_position_from_point(point) else {
             return false;

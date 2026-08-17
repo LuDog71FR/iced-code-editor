@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// let c = Cursor::new((0, 5));
 /// assert_eq!(c.position, (0, 5));
 /// assert!(c.anchor.is_none());
@@ -73,7 +73,7 @@ impl Cursor {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// let mut cs = CursorSet::new((0, 0));
 /// assert_eq!(cs.len(), 1);
 /// cs.add_cursor((1, 0));
@@ -252,7 +252,7 @@ impl CursorSet {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// let mut cs = CursorSet::new((0, 0));
     /// cs.add_cursor((2, 0));
     /// cs.add_cursor((1, 0));
@@ -288,7 +288,7 @@ impl CursorSet {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// let mut cs = CursorSet::new((0, 0));
     /// cs.add_cursor((2, 0));
     ///

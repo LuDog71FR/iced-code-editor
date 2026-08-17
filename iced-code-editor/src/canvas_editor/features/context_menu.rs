@@ -9,6 +9,23 @@ use crate::i18n::Translations;
 const MENU_WIDTH: f32 = 224.0;
 
 /// An actionable entry in the editor context menu.
+///
+/// The `id` is what the host receives when the item is selected, so it should
+/// be a stable identifier rather than the display text — renaming or
+/// translating a `label` then never breaks the action.
+///
+/// # Examples
+///
+/// ```
+/// use iced_code_editor::ContextMenuItem;
+///
+/// let item = ContextMenuItem::new("format", "Format Document")
+///     .with_shortcut("Ctrl+Shift+F");
+///
+/// assert_eq!(item.id, "format");
+/// assert_eq!(item.shortcut.as_deref(), Some("Ctrl+Shift+F"));
+/// assert!(item.enabled);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextMenuItem {
     /// Stable action identifier emitted when the item is selected.
@@ -23,6 +40,26 @@ pub struct ContextMenuItem {
 
 impl ContextMenuItem {
     /// Creates an enabled context-menu item without a shortcut hint.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Stable action identifier emitted when the item is selected
+    /// * `label` - The text shown to the user
+    ///
+    /// # Returns
+    ///
+    /// An enabled item with no shortcut hint
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::ContextMenuItem;
+    ///
+    /// let item = ContextMenuItem::new("rename", "Rename Symbol");
+    /// assert_eq!(item.label, "Rename Symbol");
+    /// assert!(item.shortcut.is_none());
+    /// assert!(item.enabled);
+    /// ```
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -33,6 +70,27 @@ impl ContextMenuItem {
     }
 
     /// Sets the keyboard shortcut hint displayed beside this item.
+    ///
+    /// This is only a hint for the user: setting it does not bind the
+    /// shortcut, which the host application is responsible for handling.
+    ///
+    /// # Arguments
+    ///
+    /// * `shortcut` - The shortcut text to display, e.g. `Ctrl+Shift+F`
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::ContextMenuItem;
+    ///
+    /// let item = ContextMenuItem::new("format", "Format Document")
+    ///     .with_shortcut("Ctrl+Shift+F");
+    /// assert_eq!(item.shortcut.as_deref(), Some("Ctrl+Shift+F"));
+    /// ```
     #[must_use]
     pub fn with_shortcut(mut self, shortcut: impl Into<String>) -> Self {
         self.shortcut = Some(shortcut.into());
@@ -40,6 +98,28 @@ impl ContextMenuItem {
     }
 
     /// Sets whether this item can be selected.
+    ///
+    /// A disabled item is still drawn, dimmed — use this for an action that is
+    /// unavailable right now but should stay visible so the menu does not
+    /// change shape between right-clicks.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether the item can be selected
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::ContextMenuItem;
+    ///
+    /// let item = ContextMenuItem::new("rename", "Rename Symbol")
+    ///     .with_enabled(false);
+    /// assert!(!item.enabled);
+    /// ```
     #[must_use]
     pub fn with_enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
@@ -48,6 +128,27 @@ impl ContextMenuItem {
 }
 
 /// A custom editor context-menu entry.
+///
+/// Pass a list of these to [`CodeEditor::set_custom_context_menu_entries`] to
+/// extend the menu, or to replace it entirely by also turning off the built-in
+/// actions with [`CodeEditor::set_default_context_menu_enabled`].
+///
+/// # Examples
+///
+/// ```
+/// use iced_code_editor::ContextMenuEntry;
+///
+/// let entries = vec![
+///     ContextMenuEntry::item("format", "Format Document")
+///         .with_shortcut("Ctrl+Shift+F"),
+///     ContextMenuEntry::separator(),
+///     ContextMenuEntry::item("rename", "Rename Symbol").with_enabled(false),
+/// ];
+/// assert_eq!(entries.len(), 3);
+/// ```
+///
+/// [`CodeEditor::set_custom_context_menu_entries`]: crate::CodeEditor::set_custom_context_menu_entries
+/// [`CodeEditor::set_default_context_menu_enabled`]: crate::CodeEditor::set_default_context_menu_enabled
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextMenuEntry {
     /// An actionable menu item.
@@ -58,16 +159,77 @@ pub enum ContextMenuEntry {
 
 impl ContextMenuEntry {
     /// Creates an enabled action entry without a shortcut hint.
+    ///
+    /// Shorthand for wrapping [`ContextMenuItem::new`].
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Stable action identifier emitted when the entry is selected
+    /// * `label` - The text shown to the user
+    ///
+    /// # Returns
+    ///
+    /// An [`ContextMenuEntry::Item`] wrapping a new enabled item
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{ContextMenuEntry, ContextMenuItem};
+    ///
+    /// let entry = ContextMenuEntry::item("format", "Format Document");
+    /// assert_eq!(
+    ///     entry,
+    ///     ContextMenuEntry::Item(ContextMenuItem::new("format", "Format Document")),
+    /// );
+    /// ```
     pub fn item(id: impl Into<String>, label: impl Into<String>) -> Self {
         Self::Item(ContextMenuItem::new(id, label))
     }
 
     /// Creates a separator entry.
+    ///
+    /// # Returns
+    ///
+    /// A [`ContextMenuEntry::Separator`]
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::ContextMenuEntry;
+    ///
+    /// assert_eq!(ContextMenuEntry::separator(), ContextMenuEntry::Separator);
+    /// ```
     pub const fn separator() -> Self {
         Self::Separator
     }
 
     /// Sets the keyboard shortcut hint when this is an action entry.
+    ///
+    /// A separator has no shortcut to set, so it is returned unchanged rather
+    /// than erroring — this keeps a chain of builder calls over a mixed list
+    /// of entries free of special cases.
+    ///
+    /// # Arguments
+    ///
+    /// * `shortcut` - The shortcut text to display, e.g. `Ctrl+Shift+F`
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::ContextMenuEntry;
+    ///
+    /// let entry = ContextMenuEntry::item("format", "Format Document")
+    ///     .with_shortcut("Ctrl+Shift+F");
+    /// assert!(matches!(entry, ContextMenuEntry::Item(_)));
+    ///
+    /// // A separator is unaffected.
+    /// let separator = ContextMenuEntry::separator().with_shortcut("Ctrl+K");
+    /// assert_eq!(separator, ContextMenuEntry::Separator);
+    /// ```
     #[must_use]
     pub fn with_shortcut(self, shortcut: impl Into<String>) -> Self {
         match self {
@@ -77,6 +239,36 @@ impl ContextMenuEntry {
     }
 
     /// Sets whether this entry can be selected when it is an action.
+    ///
+    /// A separator is returned unchanged, for the same reason as
+    /// [`Self::with_shortcut`].
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether the entry can be selected
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{ContextMenuEntry, ContextMenuItem};
+    ///
+    /// let entry = ContextMenuEntry::item("rename", "Rename Symbol")
+    ///     .with_enabled(false);
+    /// assert_eq!(
+    ///     entry,
+    ///     ContextMenuEntry::Item(
+    ///         ContextMenuItem::new("rename", "Rename Symbol").with_enabled(false)
+    ///     ),
+    /// );
+    ///
+    /// // A separator is unaffected.
+    /// let separator = ContextMenuEntry::separator().with_enabled(false);
+    /// assert_eq!(separator, ContextMenuEntry::Separator);
+    /// ```
     #[must_use]
     pub fn with_enabled(self, enabled: bool) -> Self {
         match self {

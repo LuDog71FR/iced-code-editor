@@ -7,6 +7,23 @@
 use iced::Color;
 
 /// The appearance of a code editor.
+///
+/// Build one with [`from_iced_theme`] to follow the application's Iced theme,
+/// then override individual fields for anything that needs to differ.
+///
+/// # Examples
+///
+/// ```
+/// use iced_code_editor::{CodeEditor, theme};
+///
+/// let mut style = theme::from_iced_theme(&iced::Theme::TokyoNightStorm);
+///
+/// // Tweak one color while keeping the rest of the derived palette.
+/// style.current_line_highlight = iced::Color::from_rgba(1.0, 1.0, 1.0, 0.05);
+///
+/// let mut editor = CodeEditor::new("fn main() {}", "rs");
+/// editor.set_theme(style);
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Style {
     /// Main editor background color
@@ -40,6 +57,24 @@ pub struct Style {
 }
 
 /// The theme catalog of a code editor.
+///
+/// Implemented for [`iced::Theme`] out of the box, following the same catalog
+/// pattern Iced's own widgets use. Implement it for a custom theme type to
+/// make this editor themable alongside the rest of an application.
+///
+/// # Examples
+///
+/// ```
+/// use iced_code_editor::theme::{Catalog, Style};
+///
+/// // `iced::Theme` implements `Catalog`, so a style comes from the theme
+/// // itself rather than being hardcoded.
+/// let class = <iced::Theme as Catalog>::default();
+/// let style: Style = Catalog::style(&iced::Theme::Dracula, &class);
+///
+/// // A dark theme yields a dark editor background.
+/// assert!(style.background.r < 0.5);
+/// ```
 pub trait Catalog {
     /// The item class of the [`Catalog`].
     type Class<'a>;
@@ -55,6 +90,22 @@ pub trait Catalog {
 ///
 /// This is a shorthand for a function that takes a reference to a
 /// [`Theme`](iced::Theme) and returns a [`Style`].
+///
+/// # Examples
+///
+/// ```
+/// use iced_code_editor::theme::{self, Style, StyleFn};
+///
+/// // A styling function that derives from the theme, then dims the gutter.
+/// let styling: StyleFn<'_, iced::Theme> = Box::new(|theme| {
+///     let mut style = theme::from_iced_theme(theme);
+///     style.line_number_color.a *= 0.5;
+///     style
+/// });
+///
+/// let style: Style = styling(&iced::Theme::Dracula);
+/// assert!(style.line_number_color.a < 1.0);
+/// ```
 pub type StyleFn<'a, Theme> = Box<dyn Fn(&Theme) -> Style + 'a>;
 
 impl Catalog for iced::Theme {

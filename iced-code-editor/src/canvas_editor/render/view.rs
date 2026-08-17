@@ -314,6 +314,30 @@ impl CodeEditor {
     ///
     /// The backgrounds (editor and gutter) are handled by container styles
     /// to ensure proper clipping when the pane is resized.
+    ///
+    /// Call this from the host application's `view`, mapping the editor's
+    /// [`Message`] into the host's own message type.
+    ///
+    /// # Returns
+    ///
+    /// An `Element` rendering the editor, its gutter, and any open overlay
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced::Element;
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// /// The host application's own message type.
+    /// #[derive(Debug, Clone)]
+    /// enum AppMessage {
+    ///     Editor(Message),
+    /// }
+    ///
+    /// fn view(editor: &CodeEditor) -> Element<'_, AppMessage> {
+    ///     editor.view().map(AppMessage::Editor)
+    /// }
+    /// ```
     pub fn view(&self) -> Element<'_, Message> {
         // Calculate canvas height and visual lines
         let (visual_lines, canvas_height) = self.calculate_canvas_height();
@@ -448,7 +472,7 @@ impl CodeEditor {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// let rail = scrollable_rail(Color::BLACK, Color::WHITE, 4.0);
 /// ```
 pub(crate) fn scrollable_rail(

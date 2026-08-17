@@ -13,6 +13,22 @@ impl CodeEditor {
     ///
     /// # Returns
     /// A `Task<Message>` for any asynchronous operations, such as scrolling to keep the cursor visible after state updates
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// let mut editor = CodeEditor::new("hello", "rs");
+    ///
+    /// // Forward the messages the editor emits, and send your own to drive
+    /// // commands from a menu or toolbar.
+    /// let _task = editor.update(&Message::Paste(" world".to_string()));
+    /// assert_eq!(editor.content(), " worldhello");
+    ///
+    /// let _task = editor.update(&Message::Undo);
+    /// assert_eq!(editor.content(), "hello");
+    /// ```
     pub fn update(&mut self, message: &Message) -> Task<Message> {
         // Capture the topmost active line before any edit mutates the buffer,
         // so `finish_edit_operation` can truncate the highlight cache precisely.

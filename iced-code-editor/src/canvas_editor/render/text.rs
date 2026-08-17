@@ -162,7 +162,7 @@ fn color_from_style(style: Style) -> Color {
 /// [`Color`] with the owned token text. Each call highlights the line
 /// independently from the syntax's initial state, so it does not handle
 /// multi-line constructs; it is used for tests and benchmarks. Rendering uses
-/// the sequential [`CodeEditor::highlighted_line_cached`] instead.
+/// the sequential `CodeEditor::highlighted_line_cached` instead.
 ///
 /// # Arguments
 ///

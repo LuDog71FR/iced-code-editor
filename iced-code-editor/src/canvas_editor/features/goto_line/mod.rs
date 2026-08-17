@@ -50,12 +50,44 @@ impl GotoLineState {
 impl CodeEditor {
     /// Opens the go-to-line dialog programmatically.
     ///
-    /// The input is pre-filled with the current one-based line number.
+    /// The input is pre-filled with the current one-based line number. Use
+    /// this to wire a "Go to Line…" menu item, alongside the built-in
+    /// `Ctrl/Cmd+G` shortcut.
+    ///
+    /// # Returns
+    ///
+    /// A `Task<Message>` that focuses and selects the dialog's input
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("one\ntwo\nthree", "txt");
+    /// let _task = editor.open_goto_line_dialog();
+    /// ```
     pub fn open_goto_line_dialog(&mut self) -> iced::Task<Message> {
         self.update(&Message::OpenGotoLine)
     }
 
     /// Closes the go-to-line dialog programmatically.
+    ///
+    /// Leaves the cursor where it is. Safe to call when the dialog is already
+    /// closed.
+    ///
+    /// # Returns
+    ///
+    /// A `Task<Message>` returning focus to the editor canvas
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("one\ntwo\nthree", "txt");
+    /// let _task = editor.open_goto_line_dialog();
+    /// let _task = editor.close_goto_line_dialog();
+    /// ```
     pub fn close_goto_line_dialog(&mut self) -> iced::Task<Message> {
         self.update(&Message::CloseGotoLine)
     }

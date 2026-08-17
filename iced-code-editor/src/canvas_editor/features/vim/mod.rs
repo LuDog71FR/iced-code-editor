@@ -7,6 +7,27 @@
 mod update;
 
 /// The active editing mode when Vim behavior is enabled.
+///
+/// Read it through [`CodeEditor::vim_mode`], which returns `None` while Vim is
+/// disabled — so a status bar can distinguish "Vim is off" from "Vim is in
+/// Normal mode".
+///
+/// # Examples
+///
+/// ```
+/// use iced_code_editor::{CodeEditor, VimMode};
+///
+/// let editor = CodeEditor::new("fn main() {}", "rs");
+/// // Vim is off by default.
+/// assert_eq!(editor.vim_mode(), None);
+///
+/// // Enabling it always starts in Normal mode.
+/// let editor = editor.with_vim_enabled(true);
+/// assert_eq!(editor.vim_mode(), Some(VimMode::Normal));
+/// assert_eq!(VimMode::default(), VimMode::Normal);
+/// ```
+///
+/// [`CodeEditor::vim_mode`]: crate::CodeEditor::vim_mode
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum VimMode {
     /// Command-oriented navigation and editing mode.

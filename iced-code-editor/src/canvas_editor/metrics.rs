@@ -115,9 +115,24 @@ pub(crate) fn compare_floats(a: f32, b: f32) -> CmpOrdering {
 impl CodeEditor {
     /// Sets the font used by the editor
     ///
+    /// Character dimensions are re-measured with the new font, but the line
+    /// height is left alone — use [`Self::set_line_height`] to change it.
+    ///
     /// # Arguments
     ///
     /// * `font` - The iced font to set for the editor
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_font(iced::Font::MONOSPACE);
+    ///
+    /// // Character widths are re-measured for the new font.
+    /// assert!(editor.char_width() > 0.0);
+    /// ```
     pub fn set_font(&mut self, font: iced::Font) {
         self.font = font;
         self.recalculate_char_dimensions(false);
@@ -132,6 +147,24 @@ impl CodeEditor {
     ///
     /// * `size` - The font size in pixels
     /// * `auto_adjust_line_height` - Whether to automatically adjust the line height
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    ///
+    /// // Scale the line height along with the font, the usual "zoom" case.
+    /// editor.set_font_size(28.0, true);
+    /// assert!((editor.font_size() - 28.0).abs() < f32::EPSILON);
+    /// // Doubling 14px doubles the 20px default line height.
+    /// assert!((editor.line_height() - 40.0).abs() < f32::EPSILON);
+    ///
+    /// // Or keep a line height the host controls itself.
+    /// editor.set_font_size(14.0, false);
+    /// assert!((editor.line_height() - 40.0).abs() < f32::EPSILON);
+    /// ```
     pub fn set_font_size(&mut self, size: f32, auto_adjust_line_height: bool) {
         self.font_size = size;
         self.recalculate_char_dimensions(auto_adjust_line_height);
@@ -187,29 +220,93 @@ impl CodeEditor {
     /// # Returns
     ///
     /// The font size in pixels
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert!((editor.font_size() - 14.0).abs() < f32::EPSILON);
+    /// ```
     pub fn font_size(&self) -> f32 {
         self.font_size
     }
 
     /// Returns the width of a standard narrow character in pixels.
     ///
+    /// Measured from the current font rather than assumed, so it stays correct
+    /// after [`Self::set_font`] or [`Self::set_font_size`].
+    ///
     /// # Returns
     ///
     /// The character width in pixels
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// let narrow = editor.char_width();
+    /// assert!(narrow > 0.0);
+    ///
+    /// // A larger font measures wider characters.
+    /// editor.set_font_size(28.0, true);
+    /// assert!(editor.char_width() > narrow);
+    /// ```
     pub fn char_width(&self) -> f32 {
         self.char_width
     }
 
     /// Returns the width of a wide character (e.g. CJK) in pixels.
     ///
+    /// Measured from `汉` as the reference glyph. Kept separate from
+    /// [`Self::char_width`] so mixed-script lines are measured correctly
+    /// instead of assuming every character is one cell wide.
+    ///
     /// # Returns
     ///
     /// The full character width in pixels
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// // A wide glyph is never narrower than a narrow one.
+    /// assert!(editor.full_char_width() >= editor.char_width());
+    /// ```
     pub fn full_char_width(&self) -> f32 {
         self.full_char_width
     }
 
     /// Measures the rendered width for a given text snippet using editor metrics.
+    ///
+    /// Each character counts as either [`Self::char_width`] or
+    /// [`Self::full_char_width`] depending on whether it is a wide glyph, so
+    /// the result is correct for mixed-script text.
+    ///
+    /// # Arguments
+    ///
+    /// * `text` - The snippet to measure
+    ///
+    /// # Returns
+    ///
+    /// The width in pixels
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert!((editor.measure_text_width("") - 0.0).abs() < f32::EPSILON);
+    ///
+    /// // Width grows with the text.
+    /// assert!(editor.measure_text_width("hello") > editor.measure_text_width("hi"));
+    /// ```
     pub fn measure_text_width(&self, text: &str) -> f32 {
         measure_text_width(text, self.full_char_width, self.char_width)
     }
@@ -219,6 +316,16 @@ impl CodeEditor {
     /// # Arguments
     ///
     /// * `height` - The line height in pixels
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_line_height(24.0);
+    /// assert!((editor.line_height() - 24.0).abs() < f32::EPSILON);
+    /// ```
     pub fn set_line_height(&mut self, height: f32) {
         self.line_height = height;
         self.content_cache.clear();
@@ -230,21 +337,79 @@ impl CodeEditor {
     /// # Returns
     ///
     /// The line height in pixels
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert!((editor.line_height() - 20.0).abs() < f32::EPSILON);
+    /// ```
     pub fn line_height(&self) -> f32 {
         self.line_height
     }
 
     /// Returns the current viewport height in pixels.
+    ///
+    /// Set by the layout each frame; the default applies only until the
+    /// editor has been drawn once.
+    ///
+    /// # Returns
+    ///
+    /// The viewport height in pixels
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_viewport_height(480.0);
+    /// assert!((editor.viewport_height() - 480.0).abs() < f32::EPSILON);
+    /// ```
     pub fn viewport_height(&self) -> f32 {
         self.viewport_height
     }
 
     /// Returns the current viewport width in pixels.
+    ///
+    /// This is the width line wrapping is computed against when no fixed wrap
+    /// column is configured.
+    ///
+    /// # Returns
+    ///
+    /// The viewport width in pixels
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert!(editor.viewport_width() > 0.0);
+    /// ```
     pub fn viewport_width(&self) -> f32 {
         self.viewport_width
     }
 
     /// Returns the current vertical scroll offset in pixels.
+    ///
+    /// Zero means the first line is at the top of the viewport.
+    ///
+    /// # Returns
+    ///
+    /// The scroll offset in pixels
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// // A fresh editor is scrolled to the top.
+    /// assert!((editor.viewport_scroll() - 0.0).abs() < f32::EPSILON);
+    /// ```
     pub fn viewport_scroll(&self) -> f32 {
         self.viewport_scroll
     }

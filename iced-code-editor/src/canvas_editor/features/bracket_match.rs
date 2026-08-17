@@ -21,7 +21,7 @@ fn is_quote(ch: char) -> bool {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// assert_eq!(bracket_pair('('), Some(')'));
 /// assert_eq!(bracket_pair(')'), Some('('));
 /// assert_eq!(bracket_pair('x'), None);
@@ -163,7 +163,7 @@ fn find_matching_quote(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // buffer contains "foo(bar)"
 /// let pos = find_matching_pair(&buffer, (0, 3)); // cursor before '('
 /// assert_eq!(pos, Some(((0, 3), (0, 7))));
@@ -214,7 +214,7 @@ pub(crate) fn find_matching_pair(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// assert_eq!(bracket_depth_after_line("fn main() {", 0), 1);
 /// assert_eq!(bracket_depth_after_line("}", 1), 0);
 /// ```
@@ -244,7 +244,7 @@ pub(crate) fn bracket_depth_after_line(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // "a(b[c])" -> '(' at depth 0, '[' at depth 1, ']' at depth 1, ')' at depth 0
 /// assert_eq!(
 ///     bracket_depth_indices("a(b[c])", 0),

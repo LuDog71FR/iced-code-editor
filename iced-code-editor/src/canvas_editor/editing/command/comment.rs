@@ -13,7 +13,7 @@ use super::Command;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// assert_eq!(line_comment_token("rs"), Some("//"));
 /// assert_eq!(line_comment_token("python"), Some("#"));
 /// assert_eq!(line_comment_token("html"), None);

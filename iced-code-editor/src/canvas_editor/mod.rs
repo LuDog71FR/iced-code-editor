@@ -71,6 +71,28 @@ pub(crate) struct LspEditSnapshot {
 }
 
 /// Canvas-based high-performance text editor.
+///
+/// The editor is a self-contained Iced widget: build one with [`Self::new`],
+/// render it with [`Self::view`], and feed the [`Message`]s it emits back into
+/// [`Self::update`]. Everything else — syntax highlighting, multi-cursor,
+/// search/replace, folding, Vim mode, LSP synchronization — is configured
+/// through the builder methods and setters on this type.
+///
+/// # Examples
+///
+/// ```
+/// use iced_code_editor::{CodeEditor, Message};
+///
+/// // Configure with the builder methods...
+/// let mut editor = CodeEditor::new("fn main() {}", "rs")
+///     .with_wrap_enabled(false)
+///     .with_line_numbers_enabled(true);
+///
+/// // ...then drive it with messages, as the host's `update` would.
+/// let _ = editor.update(&Message::Paste("// hello\n".to_string()));
+/// assert_eq!(editor.content(), "// hello\nfn main() {}");
+/// assert!(editor.is_modified());
+/// ```
 pub struct CodeEditor {
     /// Unique ID for this editor instance (for focus management)
     pub(crate) editor_id: u64,
@@ -273,6 +295,27 @@ pub struct CodeEditor {
 }
 
 /// Messages emitted by the code editor
+///
+/// A host application forwards these to [`CodeEditor::update`]. They are also
+/// the programmatic control surface: sending a variant directly performs the
+/// same action as the user gesture that would normally produce it, which is
+/// how a host wires its own menu items and toolbar buttons to editor commands.
+///
+/// # Examples
+///
+/// ```
+/// use iced_code_editor::{CodeEditor, Message};
+///
+/// let mut editor = CodeEditor::new("hello", "rs");
+///
+/// // Drive an edit as if the user had pasted.
+/// let _ = editor.update(&Message::Paste(" world".to_string()));
+/// assert_eq!(editor.content(), " worldhello");
+///
+/// // And undo it the same way a menu item would.
+/// let _ = editor.update(&Message::Undo);
+/// assert_eq!(editor.content(), "hello");
+/// ```
 #[derive(Debug, Clone)]
 pub enum Message {
     /// Character typed
@@ -426,6 +469,23 @@ pub enum Message {
 /// Indentation style used when pressing the Tab key.
 ///
 /// Controls whether indentation inserts spaces or a tab character.
+///
+/// Implements [`Display`](std::fmt::Display) with a human-readable label
+/// (`"4 spaces"`, `"Tab"`), so it can be dropped straight into a settings
+/// picker.
+///
+/// # Examples
+///
+/// ```
+/// use iced_code_editor::{CodeEditor, IndentStyle};
+///
+/// let mut editor = CodeEditor::new("fn main() {}", "rs");
+/// assert_eq!(editor.indent_style(), IndentStyle::Spaces(4));
+///
+/// editor.set_indent_style(IndentStyle::Tab);
+/// assert_eq!(editor.indent_style().to_string(), "Tab");
+/// assert_eq!(IndentStyle::Spaces(2).to_string(), "2 spaces");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndentStyle {
     /// Insert `n` space characters.
@@ -436,6 +496,19 @@ pub enum IndentStyle {
 
 impl IndentStyle {
     /// All standard indentation styles available for selection.
+    ///
+    /// Iterate this to build a settings picker, rather than hardcoding the
+    /// list at each call site.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::IndentStyle;
+    ///
+    /// let labels: Vec<String> =
+    ///     IndentStyle::ALL.iter().map(ToString::to_string).collect();
+    /// assert_eq!(labels, ["2 spaces", "4 spaces", "8 spaces", "Tab"]);
+    /// ```
     pub const ALL: [IndentStyle; 4] = [
         IndentStyle::Spaces(2),
         IndentStyle::Spaces(4),
@@ -455,6 +528,20 @@ impl std::fmt::Display for IndentStyle {
 }
 
 /// Arrow key directions
+///
+/// Carried by [`Message::ArrowKey`] alongside a flag for whether Shift was
+/// held, which is what turns a move into a selection.
+///
+/// # Examples
+///
+/// ```
+/// use iced_code_editor::{ArrowDirection, CodeEditor, Message};
+///
+/// let mut editor = CodeEditor::new("hello", "rs");
+///
+/// // Move right without extending a selection.
+/// let _ = editor.update(&Message::ArrowKey(ArrowDirection::Right, false));
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub enum ArrowDirection {
     /// Up arrow key.
@@ -478,6 +565,20 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A new `CodeEditor` instance
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert_eq!(editor.content(), "fn main() {}");
+    /// assert_eq!(editor.syntax(), "rs");
+    ///
+    /// // A new editor starts clean, with nothing to undo.
+    /// assert!(!editor.is_modified());
+    /// assert!(!editor.can_undo());
+    /// ```
     pub fn new(content: &str, syntax: &str) -> Self {
         // Generate a unique ID for this editor instance
         let editor_id = EDITOR_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -573,9 +674,28 @@ impl CodeEditor {
 
     /// Returns the current text content as a string.
     ///
+    /// The buffer's original line endings and trailing newline are preserved,
+    /// so the result round-trips back to disk unchanged when nothing was
+    /// edited.
+    ///
+    /// This allocates the whole document, so prefer calling it when saving
+    /// rather than on every frame.
+    ///
     /// # Returns
     ///
     /// The complete text content of the editor
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert_eq!(editor.content(), "fn main() {}");
+    ///
+    /// let _ = editor.update(&Message::Paste("// note\n".to_string()));
+    /// assert_eq!(editor.content(), "// note\nfn main() {}");
+    /// ```
     pub fn content(&self) -> String {
         self.buffer.to_string()
     }

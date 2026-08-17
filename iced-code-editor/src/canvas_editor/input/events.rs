@@ -20,7 +20,7 @@ use crate::canvas_editor::{
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // On AZERTY, `.` is Shift+`;`: `key` is `;`, `modified_key` is `.`.
 /// assert!(is_key_char(&semicolon_key, &dot_key, "."));
 /// ```

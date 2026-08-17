@@ -93,7 +93,7 @@ impl CodeEditor {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// // cursor 0 selects "foo", cursor 1 selects "bar"
     /// // → clipboard contains "foo\nbar"
     /// ```

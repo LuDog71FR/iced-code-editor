@@ -315,7 +315,41 @@ impl Default for LspOverlayState {
 /// Messages produced by LSP overlay UI interactions.
 ///
 /// Use these in your application's `update` function to handle hover
-/// and completion interactions.
+/// and completion interactions, driving [`LspOverlayState`] with the matching
+/// method ([`LspOverlayState::navigate`], [`LspOverlayState::clear_completions`],
+/// and friends). The keyboard variants let a host route Up/Down/Enter to the
+/// completion menu while it is open, instead of to the editor.
+///
+/// # Examples
+///
+/// ```
+/// use iced::Point;
+/// use iced_code_editor::{LspOverlayMessage, LspOverlayState};
+///
+/// let mut state = LspOverlayState::new();
+/// state.set_completions(
+///     vec!["main".to_string(), "map".to_string()],
+///     Point::ORIGIN,
+/// );
+///
+/// // Route the keyboard variants to the overlay while the menu is open.
+/// let selected = match LspOverlayMessage::CompletionNavigateDown {
+///     LspOverlayMessage::CompletionNavigateDown => {
+///         state.navigate(1);
+///         state.selected_item()
+///     }
+///     LspOverlayMessage::CompletionNavigateUp => {
+///         state.navigate(-1);
+///         state.selected_item()
+///     }
+///     _ => None,
+/// };
+/// assert_eq!(selected, Some("map"));
+///
+/// // Dismissing clears the menu.
+/// state.clear_completions();
+/// assert!(!state.completion_visible);
+/// ```
 #[derive(Debug, Clone)]
 pub enum LspOverlayMessage {
     /// The mouse cursor entered the hover tooltip area.

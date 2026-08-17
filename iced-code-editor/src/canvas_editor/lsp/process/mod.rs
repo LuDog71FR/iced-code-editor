@@ -225,7 +225,32 @@ fn evict_expired_requests(pending: &mut HashMap<u64, PendingRequest>) {
 /// Events that can be sent from the LSP client to the application.
 ///
 /// Receive these by polling the `mpsc::Receiver` you pass to
-/// [`LspProcessClient::new_with_server`].
+/// [`LspProcessClient::new_with_server`]. Requests are fire-and-forget, so
+/// every server reply arrives here rather than as a return value — drain the
+/// receiver on a timer and fold the results into the application state.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::mpsc;
+///
+/// use iced_code_editor::LspEvent;
+///
+/// let (tx, rx) = mpsc::channel::<LspEvent>();
+/// tx.send(LspEvent::Hover { text: "fn main()".to_string() })
+///     .expect("the receiver is still alive");
+///
+/// // Drain everything queued since the last tick.
+/// while let Ok(event) = rx.try_recv() {
+///     match event {
+///         LspEvent::Hover { text } => assert_eq!(text, "fn main()"),
+///         LspEvent::Completion { items } => drop(items),
+///         LspEvent::Definition { uri, .. } => drop(uri),
+///         LspEvent::Progress { done, .. } => drop(done),
+///         LspEvent::Log { message, .. } => drop(message),
+///     }
+/// }
+/// ```
 pub enum LspEvent {
     /// Hover information received from the LSP server.
     Hover {
@@ -620,7 +645,7 @@ fn read_message(reader: &mut impl BufRead) -> Option<Vec<u8>> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// let framed = frame_message(&serde_json::json!({"jsonrpc": "2.0"})).unwrap();
 /// assert!(framed.starts_with(b"Content-Length: "));
 /// ```

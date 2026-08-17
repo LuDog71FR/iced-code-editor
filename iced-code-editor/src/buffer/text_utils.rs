@@ -22,7 +22,7 @@
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// assert_eq!(char_to_byte_index("héllo", 2), 3); // 'é' is two bytes
 /// assert_eq!(char_to_byte_index("abc", 10), 3); // out of bounds -> len
 /// ```
@@ -58,7 +58,7 @@ pub(crate) fn char_to_byte_index(s: &str, char_index: usize) -> usize {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// let (s, e) = char_range_to_byte_range("héllo", 1, 3); // 'é','l'
 /// assert_eq!(&"héllo"[s..e], "él");
 /// ```

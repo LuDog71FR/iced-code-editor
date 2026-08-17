@@ -65,8 +65,34 @@ use std::sync::{Arc, Mutex, MutexGuard};
 /// Thread-safe using Arc<Mutex<>> for interior mutability. Cloning shares the
 /// same history: every clone reads and writes the one set of stacks.
 ///
-/// No method on this type panics on a poisoned mutex; see [`Self::lock_inner`]
-/// for why.
+/// No method on this type panics on a poisoned mutex: a poisoned lock is
+/// recovered rather than propagated, so a panic inside one caller's `Command`
+/// cannot leave the history permanently unusable for everyone else.
+///
+/// Each [`CodeEditor`] owns one of these and records every edit into it, so
+/// most applications observe it through [`CodeEditor::can_undo`],
+/// [`CodeEditor::is_modified`], and the [`Message::Undo`] / [`Message::Redo`]
+/// messages rather than constructing one directly.
+///
+/// # Example
+///
+/// ```
+/// use iced_code_editor::{CodeEditor, Message};
+///
+/// let mut editor = CodeEditor::new("hello", "rs");
+/// assert!(!editor.can_undo());
+///
+/// let _ = editor.update(&Message::Paste(" world".to_string()));
+/// assert!(editor.can_undo());
+/// assert!(editor.is_modified());
+///
+/// let _ = editor.update(&Message::Undo);
+/// assert_eq!(editor.content(), "hello");
+/// assert!(editor.can_redo());
+/// ```
+///
+/// [`Message::Undo`]: crate::Message::Undo
+/// [`Message::Redo`]: crate::Message::Redo
 #[derive(Debug, Clone)]
 pub struct CommandHistory {
     inner: Arc<Mutex<HistoryInner>>,
@@ -161,9 +187,32 @@ impl CommandHistory {
     /// This clears the redo stack and adds the command to the undo stack.
     /// If currently grouping commands, adds to the current group instead.
     ///
+    /// The `Command` trait is internal to this crate, so an application does
+    /// not call this directly — [`CodeEditor`] pushes a command for each edit
+    /// it performs. The example below shows the observable effect.
+    ///
     /// # Arguments
     ///
     /// * `command` - The command to add
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// let mut editor = CodeEditor::new("hello", "rs");
+    ///
+    /// // Each edit the editor performs pushes a command.
+    /// let _ = editor.update(&Message::Paste("!".to_string()));
+    /// assert!(editor.can_undo());
+    ///
+    /// // Pushing after an undo discards the redo stack: the alternative
+    /// // future is gone once a new edit diverges from it.
+    /// let _ = editor.update(&Message::Undo);
+    /// assert!(editor.can_redo());
+    /// let _ = editor.update(&Message::Paste("?".to_string()));
+    /// assert!(!editor.can_redo());
+    /// ```
     pub fn push(&self, command: Box<dyn Command>) {
         let mut inner = self.lock_inner();
 
@@ -195,6 +244,12 @@ impl CommandHistory {
 
     /// Undoes the last command.
     ///
+    /// Any open group is closed first, so an in-progress run of typing undoes
+    /// as one unit rather than being left half-open.
+    ///
+    /// `TextBuffer` is internal to this crate, so an application drives this
+    /// through [`Message::Undo`] rather than calling it directly.
+    ///
     /// # Arguments
     ///
     /// * `buffer` - The text buffer to modify
@@ -203,6 +258,25 @@ impl CommandHistory {
     /// # Returns
     ///
     /// `true` if a command was undone, `false` if nothing to undo
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// let mut editor = CodeEditor::new("hello", "rs");
+    /// let _ = editor.update(&Message::Paste(" world".to_string()));
+    /// assert_eq!(editor.content(), " worldhello");
+    ///
+    /// let _ = editor.update(&Message::Undo);
+    /// assert_eq!(editor.content(), "hello");
+    ///
+    /// // Undoing with an empty stack is a harmless no-op.
+    /// let _ = editor.update(&Message::Undo);
+    /// assert_eq!(editor.content(), "hello");
+    /// ```
+    ///
+    /// [`Message::Undo`]: crate::Message::Undo
     pub fn undo(
         &self,
         buffer: &mut TextBuffer,
@@ -226,6 +300,9 @@ impl CommandHistory {
 
     /// Redoes the last undone command.
     ///
+    /// `TextBuffer` is internal to this crate, so an application drives this
+    /// through [`Message::Redo`] rather than calling it directly.
+    ///
     /// # Arguments
     ///
     /// * `buffer` - The text buffer to modify
@@ -234,6 +311,22 @@ impl CommandHistory {
     /// # Returns
     ///
     /// `true` if a command was redone, `false` if nothing to redo
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// let mut editor = CodeEditor::new("hello", "rs");
+    /// let _ = editor.update(&Message::Paste(" world".to_string()));
+    /// let _ = editor.update(&Message::Undo);
+    /// assert_eq!(editor.content(), "hello");
+    ///
+    /// let _ = editor.update(&Message::Redo);
+    /// assert_eq!(editor.content(), " worldhello");
+    /// ```
+    ///
+    /// [`Message::Redo`]: crate::Message::Redo
     pub fn redo(
         &self,
         buffer: &mut TextBuffer,
@@ -251,6 +344,22 @@ impl CommandHistory {
     }
 
     /// Returns whether there are commands that can be undone.
+    ///
+    /// An open group counts as undoable even before it is closed, so an
+    /// "Undo" menu item stays enabled while the user is mid-word.
+    ///
+    /// # Returns
+    ///
+    /// `true` if undo would do something, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CommandHistory;
+    ///
+    /// let history = CommandHistory::new(100);
+    /// assert!(!history.can_undo());
+    /// ```
     #[must_use]
     pub fn can_undo(&self) -> bool {
         let inner = self.lock_inner();
@@ -258,6 +367,25 @@ impl CommandHistory {
     }
 
     /// Returns whether there are commands that can be redone.
+    ///
+    /// # Returns
+    ///
+    /// `true` if redo would do something, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// let mut editor = CodeEditor::new("hello", "rs");
+    /// assert!(!editor.can_redo());
+    ///
+    /// // Redo only becomes available after an undo.
+    /// let _ = editor.update(&Message::Paste("!".to_string()));
+    /// assert!(!editor.can_redo());
+    /// let _ = editor.update(&Message::Undo);
+    /// assert!(editor.can_redo());
+    /// ```
     #[must_use]
     pub fn can_redo(&self) -> bool {
         let inner = self.lock_inner();
@@ -268,6 +396,24 @@ impl CommandHistory {
     ///
     /// This is used to track whether the document has been modified since
     /// the last save. Call this after successfully saving the file.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// let mut editor = CodeEditor::new("hello", "rs");
+    /// let _ = editor.update(&Message::Paste("!".to_string()));
+    /// assert!(editor.is_modified());
+    ///
+    /// // After the host has written the file to disk.
+    /// editor.mark_saved();
+    /// assert!(!editor.is_modified());
+    ///
+    /// // Undoing back past the save point marks the document dirty again.
+    /// let _ = editor.update(&Message::Undo);
+    /// assert!(editor.is_modified());
+    /// ```
     pub fn mark_saved(&self) {
         let mut inner = self.lock_inner();
         inner.save_point = Some(inner.undo_stack.len());
@@ -275,9 +421,23 @@ impl CommandHistory {
 
     /// Returns whether the document has been modified since the last save.
     ///
+    /// Compares the current undo depth against the depth recorded by
+    /// [`Self::mark_saved`], so undoing back to the saved state reports "not
+    /// modified" again rather than staying permanently dirty.
+    ///
     /// # Returns
     ///
     /// `true` if there are unsaved changes, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CommandHistory;
+    ///
+    /// let history = CommandHistory::new(100);
+    /// // A fresh history has nothing to save.
+    /// assert!(!history.is_modified());
+    /// ```
     #[must_use]
     pub fn is_modified(&self) -> bool {
         let inner = self.lock_inner();
@@ -324,7 +484,28 @@ impl CommandHistory {
     ///
     /// All commands added via `push()` will be grouped together until
     /// `end_group()` is called. This is useful for grouping consecutive
-    /// typing operations.
+    /// typing operations, so one undo removes a whole word rather than one
+    /// character at a time.
+    ///
+    /// Calling this while a group is already open does nothing, so grouping
+    /// does not nest.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CommandHistory;
+    ///
+    /// let history = CommandHistory::new(100);
+    ///
+    /// history.begin_group();
+    /// // An open group counts as undoable, so an "Undo" menu item stays
+    /// // enabled while the user is still typing.
+    /// assert!(history.can_undo());
+    ///
+    /// // Nothing was actually pushed, so closing it adds no entry.
+    /// history.end_group();
+    /// assert_eq!(history.undo_count(), 0);
+    /// ```
     pub fn begin_group(&self) {
         let mut inner = self.lock_inner();
         if inner.current_group.is_none() {
@@ -335,7 +516,27 @@ impl CommandHistory {
     /// Ends the current command grouping.
     ///
     /// The grouped commands are added to the history as a single composite
-    /// command. If no commands were grouped, nothing is added.
+    /// command, so one undo reverses all of them. If no commands were grouped,
+    /// nothing is added — an empty group leaves no trace.
+    ///
+    /// Safe to call when no group is open.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CommandHistory;
+    ///
+    /// let history = CommandHistory::new(100);
+    ///
+    /// history.begin_group();
+    /// history.end_group();
+    /// // An empty group adds nothing to the undo stack.
+    /// assert_eq!(history.undo_count(), 0);
+    /// assert!(!history.can_undo());
+    ///
+    /// // Closing when nothing is open is harmless.
+    /// history.end_group();
+    /// ```
     pub fn end_group(&self) {
         let mut inner = self.lock_inner();
         Self::end_group_internal(&mut inner);
@@ -476,9 +677,24 @@ impl Default for CommandHistory {
 impl CodeEditor {
     /// Returns whether the editor has unsaved changes.
     ///
+    /// Use this to drive a "modified" indicator in a tab title, or to prompt
+    /// before closing.
+    ///
     /// # Returns
     ///
     /// `true` if there are unsaved modifications, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// let mut editor = CodeEditor::new("hello", "rs");
+    /// assert!(!editor.is_modified());
+    ///
+    /// let _ = editor.update(&Message::Paste("!".to_string()));
+    /// assert!(editor.is_modified());
+    /// ```
     pub fn is_modified(&self) -> bool {
         self.history.is_modified()
     }
@@ -486,16 +702,61 @@ impl CodeEditor {
     /// Marks the current state as saved.
     ///
     /// Call this after successfully saving the file to reset the modified state.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// let mut editor = CodeEditor::new("hello", "rs");
+    /// let _ = editor.update(&Message::Paste("!".to_string()));
+    ///
+    /// editor.mark_saved();
+    /// assert!(!editor.is_modified());
+    /// ```
     pub fn mark_saved(&mut self) {
         self.history.mark_saved();
     }
 
     /// Returns whether undo is available.
+    ///
+    /// # Returns
+    ///
+    /// `true` if undo would do something, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// let mut editor = CodeEditor::new("hello", "rs");
+    /// assert!(!editor.can_undo());
+    ///
+    /// let _ = editor.update(&Message::Paste("!".to_string()));
+    /// assert!(editor.can_undo());
+    /// ```
     pub fn can_undo(&self) -> bool {
         self.history.can_undo()
     }
 
     /// Returns whether redo is available.
+    ///
+    /// # Returns
+    ///
+    /// `true` if redo would do something, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// let mut editor = CodeEditor::new("hello", "rs");
+    /// let _ = editor.update(&Message::Paste("!".to_string()));
+    /// assert!(!editor.can_redo());
+    ///
+    /// let _ = editor.update(&Message::Undo);
+    /// assert!(editor.can_redo());
+    /// ```
     pub fn can_redo(&self) -> bool {
         self.history.can_redo()
     }

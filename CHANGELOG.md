@@ -39,7 +39,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Both `#![allow(...)]` lines are gone, so `missing_panics_doc` applies to this module again — with no panic left to document, no `# Panics` section was needed
   - Covered by a regression test that poisons the mutex through a real unwind and asserts the history stays both readable and usable afterwards; it is gated on `#[cfg(panic = "unwind")]` because the release profile sets `panic = "abort"`, where the panic cannot be caught at all
 
+### Added
+
+- feat: **`compute_text_change` is now reachable from outside the crate**
+  - The function was already `pub` and documented as part of the LSP integration surface, but it sits in a private module and — unlike `LspClient`, `LspDocument`, `LspPosition`, `LspRange`, and `LspTextChange` next to it — was never re-exported from `lib.rs`, so no downstream crate could name it. Found while writing its doctest, which could not compile
+  - Added to the existing LSP re-export group; purely additive
+
 ### Changed
+
+- docs: **Every public API item now carries a runnable `# Example`**
+  - The project rule is "every public item, with examples", but nothing enforced the example half: `missing_docs = "deny"` only checks that a doc comment exists. 109 of the 178 items reachable from the crate's public API (61%) had prose but no example, and the gap tracked nothing systematic — `config.rs` documented `set_wrap_enabled` thoroughly and its paired getter `wrap_enabled` not at all; `history.rs` had examples on `new`/`clear`/`max_size`/`undo_count` but not on `push`, `undo`, `redo`, `mark_saved`, or `is_modified`, the five methods a user actually calls
+  - All 109 filled in, worst-first: `config.rs` (25), `lsp/sync.rs` (15), `editing/history.rs` (14), `metrics.rs` (11), `i18n.rs` (10), `features/context_menu.rs` (9), `lsp/mod.rs` (7), `canvas_editor/mod.rs` (7, including the `CodeEditor` and `Message` types themselves), and 11 across seven other files
+  - The examples assert behavior rather than merely compiling, so they are also tests: defaults are pinned (`wrap_enabled()` is true, `indent_style()` is `Spaces(4)`, `reveal_in_file_manager_enabled()` is false), round-trips are checked, and the LSP examples implement a small recording `LspClient` to show what the editor actually sends on `did_open`/`did_change`/`did_save`. Doctests went from 79 to 188
+  - Three methods (`CommandHistory::push`/`undo`/`redo`) take types that are `pub` but unreachable from outside the crate (`Command`, `TextBuffer`), so their examples demonstrate the same behavior through `CodeEditor` and the docs now say so explicitly instead of implying a call the reader cannot make
+
+- docs: **The 18 remaining `ignore`d doctests are no longer advertised as suppressed tests**
+  - Every one of them documents a private or crate-internal item (`char_to_byte_index`, `line_comment_token`, `insert_text_at`, `Cursor`/`CursorSet`, `bracket_pair`, `is_key_char`, `matching_close`, `frame_message`, `scrollable_rail`, `WrappingCalculator`), which a doctest cannot reach because it compiles as an external crate — so `ignore` was never going to become a real test
+  - Switched to `text`, which renders identically but stops claiming to be a test rustdoc declined to run. `cargo test` now reports 188 passing doctests and **0 ignored**, down from 18
+  - `WrappingCalculator::new`'s example additionally showed `use iced_code_editor::canvas_editor::wrapping::WrappingCalculator;` — a path that does not exist, since `canvas_editor` is a private module. Same class of error as the `i18n` `t!` example fixed previously, and again hidden by `ignore`
+
+- docs: **`cargo doc` is now clean under `-D warnings`**
+  - Three broken intra-doc links, one of them pre-existing: `highlight_line_spans` linked to the private `CodeEditor::highlighted_line_cached`, which made `RUSTDOCFLAGS="-D warnings" cargo doc` fail before any of the changes above
+
+- docs: **`AGENTS.md`/`CLAUDE.md` described a different project**
+  - The "Code Style Guidelines" section claimed "async/await with tokio runtime" and told contributors to group imports after "external crates (sqlx, chrono, etc.)". None of `tokio`, `sqlx`, or `chrono` appear in any `Cargo.toml` in the workspace — concurrency here is `iced::Task`, plus `std::thread`/`std::sync::mpsc` in the LSP client. These lines look inherited from a template, and they are the first thing a new contributor or agent reads
+  - Corrected, and extended with the two conventions that were previously only discoverable by reading the root `Cargo.toml` or getting it wrong: the full workspace lint set (and the `[lints] workspace = true` opt-in each member needs), and the mutex-poisoning policy
 
 - refactor: **Collapsed the demo app's eleven editor-toggle checkboxes into one data-driven path** (demo app)
   - Each boolean editor setting (line wrapping, folding, auto-indent, auto-close brackets, search/replace, line numbers, show whitespace, bracket-match highlight, bracket-pair colorization, Vim, LSP) had its own `Message` variant, its own near-identical `update` handler, and its own hand-written checkbox; five of the eleven handlers never logged the change while the other six did, an inconsistency visible in the log pane
