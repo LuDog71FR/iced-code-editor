@@ -95,6 +95,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Capture behavior is asserted alongside the published message, since the two are independent and invisible to each other: a plain click and a hover stay uncaptured so they can bubble up for focus management, while double/triple click, Alt+Click, drag, release, and the context menu all capture
   - `handle_mouse_event` is now fully exercised (only its signature line is left uncovered); `events.rs` reached 91.1% line coverage and the workspace total moved from 71.0% to 72.4%
 
+- test: **The two Replace handlers had no tests at all** (no behavior change)
+  - `features/search/update.rs` sat at 38.3% region coverage, the lowest non-display figure in the library: its four tests covered dialog opening, Find Previous, and Tab focus cycling, while `handle_replace_next_msg` and `handle_replace_all_msg` — the only two handlers in the file that mutate the buffer and push undo commands — had zero coverage
+  - Added 10 unit tests. For Replace All: every match across lines, single-undo restoration of the whole document (all replacements are wrapped in one `CompositeCommand`), a replacement that contains the query (`foo` → `foofoo`), a shrinking replacement (`X` → `""`), and the deliberate `MAX_MATCHES` bypass, exercised with a document holding `MAX_MATCHES + 10` matches so a regression that reused the capped display list would be caught
+  - For Replace Next: that it replaces only the current match, that each call is its own undo entry (unlike Replace All), and that the cursor lands on the *following* match at the right column — which is what pins the otherwise invisible ordering dependency where the handler re-reads `current_match()` only after `finish_edit_operation` has refreshed the match list
+  - Both no-match paths are asserted to push nothing to history, so an empty undo entry cannot creep in
+  - The reverse-order iteration in Replace All is a load-bearing invariant with nothing previously guarding it: replacing left-to-right would leave every match after the first pointing at a stale column once the line length changed. Verified by mutation — removing `.rev()` fails exactly two of the new tests
+
 
 ## [0.4.0] - 2026-08-16
 

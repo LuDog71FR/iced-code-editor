@@ -329,4 +329,176 @@ mod tests {
             super::super::SearchFocusedField::Replace
         );
     }
+
+    // =========================================================================
+    // Replace
+    // =========================================================================
+    //
+    // `handle_replace_next_msg` and `handle_replace_all_msg` are the only two
+    // handlers in this file that mutate the buffer and push undo commands, and
+    // both depend on invariants that are invisible at the call site: Replace
+    // All bypasses the `MAX_MATCHES` display limit and walks its matches in
+    // reverse so earlier replacements can't shift later positions, and Replace
+    // Next re-reads `current_match()` only after `finish_edit_operation` has
+    // refreshed the match list.
+
+    /// Opens the replace dialog with `query`/`replace_with` already filled in,
+    /// which is the state the two Replace handlers actually run against.
+    ///
+    /// The dialog must be open: `refresh_search_matches_if_needed` is gated on
+    /// `search_matches_visible()`, so a replace driven against a closed dialog
+    /// would not re-run the search afterwards.
+    fn replace_editor(
+        content: &str,
+        query: &str,
+        replace_with: &str,
+    ) -> CodeEditor {
+        let mut editor = CodeEditor::new(content, "txt");
+        editor.search_state.open_replace();
+        editor.search_state.set_query(query.to_owned(), &editor.buffer);
+        editor.search_state.set_replace_with(replace_with.to_owned());
+        editor
+    }
+
+    #[test]
+    fn test_replace_all_replaces_every_match_across_lines() {
+        let mut editor =
+            replace_editor("foo one\ntwo foo\nfoo foo", "foo", "bar");
+        assert_eq!(editor.search_state.match_count(), 4);
+
+        let _ = editor.update(&Message::ReplaceAll);
+
+        assert_eq!(editor.buffer.to_string(), "bar one\ntwo bar\nbar bar");
+        // The query is gone, so the refreshed match list is empty.
+        assert_eq!(editor.search_state.match_count(), 0);
+    }
+
+    #[test]
+    fn test_replace_all_is_a_single_undo_step() {
+        let mut editor =
+            replace_editor("foo one\ntwo foo\nfoo foo", "foo", "bar");
+
+        let _ = editor.update(&Message::ReplaceAll);
+        assert_eq!(editor.buffer.to_string(), "bar one\ntwo bar\nbar bar");
+        assert_eq!(editor.history.undo_count(), 1);
+
+        // All four replacements are wrapped in one `CompositeCommand`, so a
+        // single undo restores the whole document rather than one match.
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.to_string(), "foo one\ntwo foo\nfoo foo");
+        assert!(!editor.can_undo());
+    }
+
+    #[test]
+    fn test_replace_all_handles_a_replacement_containing_the_query() {
+        let mut editor = replace_editor("foo foo", "foo", "foofoo");
+
+        let _ = editor.update(&Message::ReplaceAll);
+
+        // Each match is replaced exactly once. Re-scanning the replaced text
+        // would grow the buffer without bound, and walking the matches
+        // forward would corrupt the later positions as the line grows.
+        assert_eq!(editor.buffer.to_string(), "foofoo foofoo");
+    }
+
+    #[test]
+    fn test_replace_all_shrinking_replacement_keeps_later_matches_aligned() {
+        // Replacing right-to-left matters most when the replacement is a
+        // different length than the query: a forward walk would leave every
+        // match after the first pointing at a stale column.
+        let mut editor = replace_editor("aXbXcXd", "X", "");
+
+        let _ = editor.update(&Message::ReplaceAll);
+
+        assert_eq!(editor.buffer.to_string(), "abcd");
+    }
+
+    #[test]
+    fn test_replace_all_ignores_the_display_match_limit() {
+        // `update_matches` caps the stored matches at `MAX_MATCHES` for the
+        // dialog's counter, but Replace All re-runs the search with no limit
+        // so it cannot silently skip the tail of a large document.
+        let line_count = super::super::MAX_MATCHES + 10;
+        let content = vec!["foo"; line_count].join("\n");
+        let mut editor = replace_editor(&content, "foo", "bar");
+        assert_eq!(
+            editor.search_state.match_count(),
+            super::super::MAX_MATCHES
+        );
+
+        let _ = editor.update(&Message::ReplaceAll);
+
+        assert!(
+            !editor.buffer.to_string().contains("foo"),
+            "every match must be replaced, not just the first MAX_MATCHES"
+        );
+    }
+
+    #[test]
+    fn test_replace_all_with_no_match_changes_nothing() {
+        let mut editor = replace_editor("one two", "absent", "x");
+
+        let _ = editor.update(&Message::ReplaceAll);
+
+        assert_eq!(editor.buffer.to_string(), "one two");
+        // Nothing was pushed, so there is no empty entry to undo past.
+        assert!(!editor.can_undo());
+    }
+
+    #[test]
+    fn test_replace_next_replaces_only_the_current_match() {
+        let mut editor = replace_editor("foo bar foo", "foo", "baz");
+        assert_eq!(editor.search_state.current_match_index, Some(0));
+
+        let _ = editor.update(&Message::ReplaceNext);
+
+        assert_eq!(editor.buffer.to_string(), "baz bar foo");
+        // The remaining match is found again by the post-edit refresh.
+        assert_eq!(editor.search_state.match_count(), 1);
+    }
+
+    #[test]
+    fn test_replace_next_moves_the_cursor_onto_the_following_match() {
+        let mut editor = replace_editor("foo bar foo", "foo", "baz");
+
+        let _ = editor.update(&Message::ReplaceNext);
+
+        // After the edit, `finish_edit_operation` refreshes the match list;
+        // the handler then re-reads `current_match()` and parks the cursor on
+        // the surviving "foo" at column 8, ready for the next Replace.
+        // (`expect` is denied workspace-wide, hence `is_some_and`.)
+        let next = editor.search_state.current_match();
+        assert!(
+            next.is_some_and(|found| (found.line, found.col) == (0, 8)),
+            "expected the surviving match at (0, 8), got {next:?}"
+        );
+        assert_eq!(editor.cursors.primary_position(), (0, 8));
+    }
+
+    #[test]
+    fn test_replace_next_is_undoable_one_match_at_a_time() {
+        let mut editor = replace_editor("foo bar foo", "foo", "baz");
+
+        let _ = editor.update(&Message::ReplaceNext);
+        let _ = editor.update(&Message::ReplaceNext);
+        assert_eq!(editor.buffer.to_string(), "baz bar baz");
+        assert_eq!(editor.history.undo_count(), 2);
+
+        // Unlike Replace All, each Replace Next is its own history entry.
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.to_string(), "baz bar foo");
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.to_string(), "foo bar foo");
+    }
+
+    #[test]
+    fn test_replace_next_with_no_match_changes_nothing() {
+        let mut editor = replace_editor("one two", "absent", "x");
+        assert_eq!(editor.search_state.current_match(), None);
+
+        let _ = editor.update(&Message::ReplaceNext);
+
+        assert_eq!(editor.buffer.to_string(), "one two");
+        assert!(!editor.can_undo());
+    }
 }
