@@ -619,3 +619,305 @@ impl LspClient for LspProcessClient {
         self.send_message(&msg);
     }
 }
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    // Several helpers and tests below carry an `#[allow]` for `expect_used`,
+    // `unwrap_used`, or `panic`. In test code a panic *is* the failure
+    // report, so these mirror the existing per-test allows in `protocol.rs`.
+    use super::*;
+    use crate::canvas_editor::lsp::{LspPosition, LspRange, LspTextChange};
+
+    /// Builds an `LspProcessClient` without a real LSP server: `child` still
+    /// needs a genuine `Child`, so a process that exits immediately stands in
+    /// for it, and the writer/reader/stderr threads are no-ops since these
+    /// tests exercise the client's own methods directly rather than the wire
+    /// protocol those background threads drive.
+    #[allow(clippy::expect_used)]
+    fn test_client()
+    -> (LspProcessClient, mpsc::Receiver<Vec<u8>>, mpsc::Receiver<LspEvent>)
+    {
+        let child = Command::new("true").spawn().expect("spawn stub process");
+        let (writer_tx, writer_rx) = mpsc::channel::<Vec<u8>>();
+        let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
+        let client = LspProcessClient {
+            child,
+            writer: writer_tx,
+            documents: Arc::new(Mutex::new(HashMap::new())),
+            events: events_tx,
+            server_key: "test-server".to_string(),
+            request_id: AtomicU64::new(1),
+            pending_requests: Arc::new(Mutex::new(HashMap::new())),
+            _writer_thread: thread::spawn(|| {}),
+            _reader_thread: thread::spawn(|| {}),
+            _stderr_thread: thread::spawn(|| {}),
+        };
+        (client, writer_rx, events_rx)
+    }
+
+    /// Returns the JSON body of a `Content-Length`-framed message taken from
+    /// the writer channel.
+    #[allow(clippy::expect_used)]
+    fn decode_sent(data: &[u8]) -> serde_json::Value {
+        let header_end = data
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .expect("missing header separator");
+        let body = &data[header_end + 4..];
+        serde_json::from_slice(body).expect("invalid JSON body")
+    }
+
+    fn document(uri: &str) -> LspDocument {
+        LspDocument {
+            uri: uri.to_string(),
+            language_id: "rust".to_string(),
+            version: 1,
+        }
+    }
+
+    fn range(sl: u32, sc: u32, el: u32, ec: u32) -> LspRange {
+        LspRange {
+            start: LspPosition { line: sl, character: sc },
+            end: LspPosition { line: el, character: ec },
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // next_id / send_message
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_next_id_increments() {
+        let (client, _writer_rx, _events_rx) = test_client();
+        assert_eq!(client.next_id(), 1);
+        assert_eq!(client.next_id(), 2);
+        assert_eq!(client.next_id(), 3);
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_send_message_frames_and_forwards() {
+        let (client, writer_rx, _events_rx) = test_client();
+        client.send_message(&json!({"jsonrpc": "2.0", "method": "ping"}));
+
+        let bytes = writer_rx.try_recv().expect("message forwarded to writer");
+        assert_eq!(decode_sent(&bytes)["method"], "ping");
+    }
+
+    // -------------------------------------------------------------------------
+    // did_open / did_change / did_save / did_close
+    // -------------------------------------------------------------------------
+
+    #[test]
+    #[allow(clippy::expect_used, clippy::unwrap_used)]
+    fn test_did_open_registers_document_and_notifies_server() {
+        let (mut client, writer_rx, _events_rx) = test_client();
+        let doc = document("file:///a.rs");
+
+        client.did_open(&doc, "fn main() {}");
+
+        assert!(client.documents.lock().unwrap().contains_key("file:///a.rs"));
+        let bytes = writer_rx.try_recv().expect("didOpen sent");
+        let value = decode_sent(&bytes);
+        assert_eq!(value["method"], "textDocument/didOpen");
+        assert_eq!(value["params"]["textDocument"]["text"], "fn main() {}");
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_did_change_converts_and_sends_content_changes() {
+        let (mut client, writer_rx, _events_rx) = test_client();
+        let doc = document("file:///a.rs");
+        client.did_open(&doc, "hello");
+        writer_rx.try_recv().expect("drain didOpen");
+
+        let changes = vec![LspTextChange {
+            range: range(0, 0, 0, 5),
+            text: "hi".to_string(),
+        }];
+        client.did_change(&doc, &changes);
+
+        let bytes = writer_rx.try_recv().expect("didChange sent");
+        let value = decode_sent(&bytes);
+        assert_eq!(value["method"], "textDocument/didChange");
+        assert_eq!(value["params"]["contentChanges"][0]["text"], "hi");
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_result_states)]
+    fn test_did_change_without_open_document_sends_nothing() {
+        let (mut client, writer_rx, _events_rx) = test_client();
+        let doc = document("file:///missing.rs");
+        let changes = vec![LspTextChange {
+            range: range(0, 0, 0, 0),
+            text: "x".to_string(),
+        }];
+
+        client.did_change(&doc, &changes);
+
+        assert!(writer_rx.try_recv().is_err());
+    }
+
+    #[test]
+    #[allow(
+        clippy::expect_used,
+        clippy::unwrap_used,
+        clippy::panic,
+        clippy::assertions_on_result_states
+    )]
+    fn test_did_change_desync_drops_document_and_logs() {
+        let (mut client, writer_rx, events_rx) = test_client();
+        let doc = document("file:///a.rs");
+        client.did_open(&doc, "hello");
+        writer_rx.try_recv().expect("drain didOpen");
+
+        // Line 5 doesn't exist in a single-line document, forcing a desync.
+        let changes = vec![LspTextChange {
+            range: range(5, 0, 5, 0),
+            text: "x".to_string(),
+        }];
+        client.did_change(&doc, &changes);
+
+        assert!(writer_rx.try_recv().is_err(), "no didChange after desync");
+        assert!(!client.documents.lock().unwrap().contains_key("file:///a.rs"));
+
+        match events_rx.try_recv().expect("desync logged") {
+            LspEvent::Log { message, .. } => {
+                assert!(message.contains("desynchronized"));
+            }
+            _ => panic!("expected LspEvent::Log"),
+        }
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_did_save_sends_notification() {
+        let (mut client, writer_rx, _events_rx) = test_client();
+        let doc = document("file:///a.rs");
+
+        client.did_save(&doc, "fn main() {}");
+
+        let bytes = writer_rx.try_recv().expect("didSave sent");
+        let value = decode_sent(&bytes);
+        assert_eq!(value["method"], "textDocument/didSave");
+        assert_eq!(value["params"]["text"], "fn main() {}");
+    }
+
+    #[test]
+    #[allow(clippy::expect_used, clippy::unwrap_used)]
+    fn test_did_close_removes_document_and_notifies_server() {
+        let (mut client, writer_rx, _events_rx) = test_client();
+        let doc = document("file:///a.rs");
+        client.did_open(&doc, "hello");
+        writer_rx.try_recv().expect("drain didOpen");
+
+        client.did_close(&doc);
+
+        assert!(!client.documents.lock().unwrap().contains_key("file:///a.rs"));
+        let bytes = writer_rx.try_recv().expect("didClose sent");
+        assert_eq!(decode_sent(&bytes)["method"], "textDocument/didClose");
+    }
+
+    // -------------------------------------------------------------------------
+    // request_hover / request_completion / request_definition
+    // -------------------------------------------------------------------------
+
+    #[test]
+    #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+    fn test_request_hover_registers_pending_and_sends_request() {
+        let (mut client, writer_rx, _events_rx) = test_client();
+        let doc = document("file:///a.rs");
+        client.did_open(&doc, "hello");
+        writer_rx.try_recv().expect("drain didOpen");
+
+        client.request_hover(&doc, LspPosition { line: 0, character: 2 });
+
+        let bytes = writer_rx.try_recv().expect("hover request sent");
+        let value = decode_sent(&bytes);
+        assert_eq!(value["method"], "textDocument/hover");
+        let id = value["id"].as_u64().expect("id present");
+
+        let pending = client.pending_requests.lock().unwrap();
+        match pending.get(&id).map(|p| &p.kind) {
+            Some(LspRequestKind::Hover) => {}
+            _ => panic!("expected a pending Hover request"),
+        }
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::assertions_on_result_states)]
+    fn test_request_hover_without_open_document_does_nothing() {
+        let (mut client, writer_rx, _events_rx) = test_client();
+        let doc = document("file:///missing.rs");
+
+        client.request_hover(&doc, LspPosition { line: 0, character: 0 });
+
+        assert!(writer_rx.try_recv().is_err());
+        assert!(client.pending_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+    fn test_request_completion_registers_pending_and_sends_request() {
+        let (mut client, writer_rx, _events_rx) = test_client();
+        let doc = document("file:///a.rs");
+        client.did_open(&doc, "hello");
+        writer_rx.try_recv().expect("drain didOpen");
+
+        client.request_completion(&doc, LspPosition { line: 0, character: 2 });
+
+        let bytes = writer_rx.try_recv().expect("completion request sent");
+        let value = decode_sent(&bytes);
+        assert_eq!(value["method"], "textDocument/completion");
+        let id = value["id"].as_u64().expect("id present");
+
+        let pending = client.pending_requests.lock().unwrap();
+        match pending.get(&id).map(|p| &p.kind) {
+            Some(LspRequestKind::Completion) => {}
+            _ => panic!("expected a pending Completion request"),
+        }
+    }
+
+    #[test]
+    #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+    fn test_request_definition_registers_pending_and_sends_request() {
+        let (mut client, writer_rx, _events_rx) = test_client();
+        let doc = document("file:///a.rs");
+        client.did_open(&doc, "hello");
+        writer_rx.try_recv().expect("drain didOpen");
+
+        client.request_definition(&doc, LspPosition { line: 0, character: 2 });
+
+        let bytes = writer_rx.try_recv().expect("definition request sent");
+        let value = decode_sent(&bytes);
+        assert_eq!(value["method"], "textDocument/definition");
+        let id = value["id"].as_u64().expect("id present");
+
+        let pending = client.pending_requests.lock().unwrap();
+        match pending.get(&id).map(|p| &p.kind) {
+            Some(LspRequestKind::Definition) => {}
+            _ => panic!("expected a pending Definition request"),
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Drop
+    // -------------------------------------------------------------------------
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_drop_sends_shutdown_then_exit() {
+        let (client, writer_rx, _events_rx) = test_client();
+        drop(client);
+
+        let shutdown = writer_rx.try_recv().expect("shutdown sent");
+        assert_eq!(decode_sent(&shutdown)["method"], "shutdown");
+
+        let exit = writer_rx.try_recv().expect("exit sent");
+        assert_eq!(decode_sent(&exit)["method"], "exit");
+    }
+}
