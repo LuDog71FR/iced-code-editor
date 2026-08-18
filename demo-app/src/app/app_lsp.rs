@@ -1027,4 +1027,100 @@ mod tests {
 
         assert!(app.lsp_overlay.hover_visible);
     }
+
+    // ---- Escape closes the completion popup ----
+    //
+    // This shortcut is routed through `DemoApp::subscription`, not through a
+    // widget, so the headless simulator in `ui_tests.rs` cannot reach it: the
+    // messages it produces come from the widget tree alone. Driving `update`
+    // with the event the subscription would have forwarded is what covers it.
+
+    /// Builds the `Message` the subscription emits for a key press.
+    fn key_pressed(key: iced::keyboard::Key) -> Message {
+        Message::WindowEvent(iced::Event::Keyboard(
+            iced::keyboard::Event::KeyPressed {
+                key: key.clone(),
+                modified_key: key,
+                physical_key: iced::keyboard::key::Physical::Unidentified(
+                    iced::keyboard::key::NativeCode::Unidentified,
+                ),
+                location: iced::keyboard::Location::Standard,
+                modifiers: iced::keyboard::Modifiers::default(),
+                text: None,
+                repeat: false,
+            },
+        ))
+    }
+
+    /// Puts a completion popup on screen, the way an LSP response would.
+    fn show_completions(app: &mut DemoApp) {
+        app.lsp_overlay.set_completions(vec!["foo".to_string()], Point::ORIGIN);
+        app.lsp_overlay_editor = Some(app.active_tab_id);
+        assert!(app.lsp_overlay.completion_visible);
+    }
+
+    #[test]
+    fn test_escape_closes_the_completion_popup() {
+        let (mut app, _) = DemoApp::new();
+        show_completions(&mut app);
+
+        let _ = app.update(key_pressed(iced::keyboard::Key::Named(
+            iced::keyboard::key::Named::Escape,
+        )));
+
+        assert!(!app.lsp_overlay.completion_visible);
+        // No hover is showing, so the overlay is handed back entirely.
+        assert!(app.lsp_overlay_editor.is_none());
+    }
+
+    #[test]
+    fn test_escape_keeps_the_overlay_editor_while_hover_is_visible() {
+        let (mut app, _) = DemoApp::new();
+        show_completions(&mut app);
+        app.lsp_overlay.show_hover("docs".to_string());
+
+        let _ = app.update(key_pressed(iced::keyboard::Key::Named(
+            iced::keyboard::key::Named::Escape,
+        )));
+
+        assert!(!app.lsp_overlay.completion_visible);
+        // Escape dismisses the completions only; the tooltip still needs the
+        // overlay to stay attached to this editor.
+        assert!(app.lsp_overlay.hover_visible);
+        assert_eq!(app.lsp_overlay_editor, Some(app.active_tab_id));
+    }
+
+    #[test]
+    fn test_other_keys_leave_the_completion_popup_open() {
+        let (mut app, _) = DemoApp::new();
+        show_completions(&mut app);
+
+        for key in [
+            iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter),
+            iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowDown),
+            iced::keyboard::Key::Character("a".into()),
+        ] {
+            let _ = app.update(key_pressed(key.clone()));
+            assert!(
+                app.lsp_overlay.completion_visible,
+                "{key:?} must not dismiss the completions"
+            );
+        }
+    }
+
+    #[test]
+    fn test_escape_is_a_no_op_without_a_completion_popup() {
+        let (mut app, _) = DemoApp::new();
+        app.lsp_overlay.show_hover("docs".to_string());
+        app.lsp_overlay_editor = Some(app.active_tab_id);
+
+        let _ = app.update(key_pressed(iced::keyboard::Key::Named(
+            iced::keyboard::key::Named::Escape,
+        )));
+
+        // The Escape branch is gated on `completion_visible`, so a visible
+        // tooltip must survive it untouched.
+        assert!(app.lsp_overlay.hover_visible);
+        assert_eq!(app.lsp_overlay_editor, Some(app.active_tab_id));
+    }
 }

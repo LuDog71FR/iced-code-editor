@@ -1,0 +1,12 @@
+# Render the headless `iced_test` simulator with the software rasteriser.
+#
+# The interface tests in `demo-app/src/ui_tests.rs` only need layout and text
+# measurement, never a screenshot, so the GPU backend buys nothing — and it
+# costs a great deal: building a wgpu adapter per simulator takes the suite
+# from ~5s to ~35s, and several threads requesting one at once segfaults the
+# test binary.
+#
+# Not forced, so `ICED_TEST_BACKEND=wgpu cargo test` still works for anyone
+# who needs to check the GPU path.
+[env]
+ICED_TEST_BACKEND = "tiny-skia"

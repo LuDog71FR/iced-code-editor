@@ -18,6 +18,9 @@ url = "2"
 wasm-bindgen = "0.2"
 rfd = "0.17"
 
+[dev-dependencies]
+iced_test = "0.14"
+
 [[bin]]
 name = "demo-editor"
 path = "src/main.rs"

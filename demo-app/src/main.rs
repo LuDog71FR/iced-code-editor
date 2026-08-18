@@ -14,6 +14,9 @@ mod file_ops;
 mod types;
 mod ui;
 
+#[cfg(test)]
+mod ui_tests;
+
 /// Main entry point for the demo application.
 fn run_app() -> iced::Result {
     let settings = iced::Settings {
