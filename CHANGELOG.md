@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.1] - 2026-08-20
+
 ### Fixed
 
 - fix: **`Ctrl+.` (toggle fold at cursor) was unreachable on layouts where `.` requires Shift**

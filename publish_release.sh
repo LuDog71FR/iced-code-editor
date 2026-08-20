@@ -103,11 +103,11 @@ echo "=== Running pre-commit checks ==="
 echo ""
 
 echo "Running tests..."
-cargo test --all
+cargo test --verbose --workspace --all-features
 
 echo ""
 echo "Running clippy..."
-cargo clippy --all-targets -- -D warnings
+cargo clippy --verbose --workspace --all-targets --all-features -- -D warnings
 
 echo ""
 echo "Formatting code..."
