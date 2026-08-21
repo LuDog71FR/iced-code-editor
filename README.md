@@ -45,6 +45,7 @@ Screenshot of the demo application:
 - **Move and duplicate lines** with keyboard shortcuts
 - **Toggle comment** on the current line or selection (`Ctrl+/`)
 - **Visible whitespace rendering** — spaces shown as `·`, tabs as `→`
+- **Indentation guides** — vertical lines marking each indentation level
 - **Optional Vim mode** with Normal, Insert, Visual, and Visual Line modes
 
 ## Quick Start
@@ -560,6 +561,26 @@ if editor.show_whitespace() {
 ```
 
 The whitespace color is derived automatically from the active theme via `Style::whitespace_color` and can be overridden in a custom `Style`.
+
+### Indentation guides
+
+Indentation guides are **enabled by default**. A thin vertical line is drawn at every indentation level, making the nesting of a block visible without following its braces. Their spacing follows the configured `IndentStyle`, so switching from 4 spaces to 2 spaces (or to tabs) moves the guides accordingly.
+
+```rust
+// Disable indentation guides
+editor.set_show_indent_guides(false);
+
+// Or use builder pattern during initialization
+let editor = CodeEditor::new("code", "rs")
+    .with_show_indent_guides(false);
+
+// Check current state
+if editor.show_indent_guides() {
+    println!("Indentation guides are visible");
+}
+```
+
+Blank lines take the level of the surrounding block, so a blank line *inside* a block keeps its guides while a blank line *between* two blocks does not. Guides are not drawn on wrapped continuation segments, since those restart at the left edge of the code area. The guide color is derived automatically from the active theme via `Style::indent_guide_color` and can be overridden in a custom `Style`.
 
 ### Indentation
 

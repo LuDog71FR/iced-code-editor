@@ -23,6 +23,7 @@
    - [Auto-Closing Brackets/Quotes](#auto-closing-bracketsquotes)
    - [Matching Bracket/Quote Highlight](#matching-bracketquote-highlight)
    - [Bracket-Pair Colorization](#bracket-pair-colorization)
+   - [Indentation Guides](#indentation-guides)
    - [Cursor Blinking](#cursor-blinking)
    - [Focus Management](#focus-management)
    - [Selection Rendering](#selection-rendering)
@@ -128,6 +129,7 @@ iced-code-editor/
     │   ├── folding/              # Code folding
     │   │   ├── mod.rs             # Foldable-region detection (pure logic)
     │   │   └── ops.rs             # Fold/unfold operations on CodeEditor
+    │   ├── indent_guides.rs      # Indentation-guide level computation (pure logic)
     │   ├── goto_line/            # Go-to-line dialog
     │   │   ├── mod.rs
     │   │   ├── dialog.rs
@@ -759,6 +761,69 @@ const BRACKET_PAIR_COLORS: [Color; 3] = [
 The palette matches VS Code's default rainbow-bracket colors. `set_bracket_pair_colorization_enabled()`
 toggles the whole feature and clears `content_cache`; the demo app exposes it as a
 toolbar checkbox ("Rainbow brackets") next to "Highlight matching bracket".
+
+### Indentation Guides
+
+**Location:** `canvas_editor/features/indent_guides.rs` (level computation, pure logic),
+`canvas_editor/metrics.rs` (`indent_width`), `canvas_editor/render/text.rs` (draw pass),
+`canvas_editor/config.rs` (toggle), `theme.rs` (`Style::indent_guide_color`)
+
+A thin vertical line is drawn at every indentation level, so nesting is visible without
+following braces. The feature splits cleanly in two: *how many guides does this line
+deserve* (pure, unit-tested) and *where do they go on screen* (rendering).
+
+`guide_levels(buffer, line, unit) -> usize` answers the first question. For a non-blank
+line it is simply `indent_width(line) / unit`. `indent_width` lives in `metrics.rs`
+alongside `TAB_WIDTH` and `measure_char_width` — it returns a width in **display
+columns**, not character indices, so a tab counts as `TAB_WIDTH` columns exactly as it
+does when rendering. Code folding uses the same function for its region detection.
+
+Blank lines have no indentation of their own, so `guide_levels` infers theirs from the
+nearest non-blank line above and below and takes the **smaller** of the two:
+
+```text
+fn f() {
+│   a();
+│              <- blank, min(1, 1) = 1 guide: stays inside the block
+│   b();
+}
+```
+
+```text
+fn f() {
+│   a();
+               <- blank, min(1, 0) = 0 guides: the block is already closed below
+}
+```
+
+Both scans are bounded by `MAX_BLANK_RUN_SCAN` (200 lines). Without it, a buffer made
+mostly of blank lines would turn every visible line into a full-buffer scan; past that
+many blank lines the run is treated as a gap between blocks and no guide is drawn.
+
+`draw_indent_guides()` runs in the **content layer**, next to `draw_bracket_pair_colors()`.
+Since indentation is ASCII whitespace, the x position is plain arithmetic on display
+columns rather than a `calculate_segment_geometry()` call (which reasons in character
+indices):
+
+```rust
+let x = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset
+    + (level * unit) as f32 * ctx.char_width;
+```
+
+Two constraints shape the draw pass:
+
+- **Guides are skipped on wrapped continuation segments** (`visual_line.is_first_segment()`).
+  Every visual line starts drawing at the same base X, so a guide placed at its original
+  column would land on top of the wrapped text instead of in its indentation.
+- **No z-order handling is needed.** Iced draws all geometry below all text within a
+  frame, so a guide filled with `fill_rectangle` automatically sits behind the glyphs.
+
+`unit` comes from the editor's `IndentStyle` (`Spaces(n)` → `n`, `Tab` → `TAB_WIDTH`),
+so changing the indent style moves the guides with it. `unit == 0` draws nothing.
+
+`set_show_indent_guides()` toggles the feature and clears `content_cache`; the demo app
+exposes it as `EditorToggle::IndentGuides` ("Show indentation guides") in the editor
+options panel.
 
 ### Cursor Blinking
 

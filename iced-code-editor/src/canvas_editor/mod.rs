@@ -25,7 +25,7 @@ use features::{folding, goto_line, search, vim};
 use metrics::{
     CACHE_WINDOW_MARGIN_MULTIPLIER, CHAR_WIDTH, CURSOR_BLINK_INTERVAL,
     FONT_SIZE, GUTTER_WIDTH, HIGHLIGHT_LINES_PER_FRAME, LINE_HEIGHT, TAB_WIDTH,
-    compare_floats, measure_char_width, measure_text_width,
+    compare_floats, indent_width, measure_char_width, measure_text_width,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -193,6 +193,8 @@ pub struct CodeEditor {
     pub(crate) line_numbers_enabled: bool,
     /// Whether to render whitespace characters visibly (spaces as `·`, tabs as `→`)
     pub(crate) show_whitespace: bool,
+    /// Whether vertical indentation guides are drawn behind the text.
+    pub(crate) show_indent_guides: bool,
     /// Whether the matching-bracket/quote-pair highlight overlay is enabled.
     pub(crate) bracket_match_highlight_enabled: bool,
     /// Whether bracket-pair colorization (rainbow brackets) is enabled.
@@ -628,6 +630,7 @@ impl CodeEditor {
             search_replace_enabled: true,
             line_numbers_enabled: true,
             show_whitespace: true,
+            show_indent_guides: true,
             bracket_match_highlight_enabled: true,
             bracket_pair_colorization_enabled: true,
             lsp_enabled: true,

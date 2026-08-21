@@ -213,6 +213,8 @@ pub enum EditorToggle {
     LineNumbers,
     /// Renders spaces and tabs as visible glyphs.
     ShowWhitespace,
+    /// Draws vertical guides at each indentation level.
+    IndentGuides,
     /// Highlights the bracket matching the one at the cursor.
     BracketMatchHighlight,
     /// Colors nested bracket pairs by nesting depth.
@@ -225,7 +227,7 @@ pub enum EditorToggle {
 
 impl EditorToggle {
     /// Every toggle, in the order the options panel displays them.
-    pub const ALL: [EditorToggle; 11] = [
+    pub const ALL: [EditorToggle; 12] = [
         EditorToggle::Wrap,
         EditorToggle::Folding,
         EditorToggle::AutoIndent,
@@ -233,6 +235,7 @@ impl EditorToggle {
         EditorToggle::SearchReplace,
         EditorToggle::LineNumbers,
         EditorToggle::ShowWhitespace,
+        EditorToggle::IndentGuides,
         EditorToggle::BracketMatchHighlight,
         EditorToggle::BracketPairColorization,
         EditorToggle::Vim,
@@ -249,6 +252,7 @@ impl EditorToggle {
             EditorToggle::SearchReplace => "Allow search/replace",
             EditorToggle::LineNumbers => "Show line numbers",
             EditorToggle::ShowWhitespace => "Show whitespace",
+            EditorToggle::IndentGuides => "Show indentation guides",
             EditorToggle::BracketMatchHighlight => "Highlight matching bracket",
             EditorToggle::BracketPairColorization => "Rainbow brackets",
             EditorToggle::Vim => "Vim mode (Cmd/Ctrl+Alt+V)",
@@ -266,6 +270,7 @@ impl EditorToggle {
             EditorToggle::SearchReplace => editor.search_replace_enabled(),
             EditorToggle::LineNumbers => editor.line_numbers_enabled(),
             EditorToggle::ShowWhitespace => editor.show_whitespace(),
+            EditorToggle::IndentGuides => editor.show_indent_guides(),
             EditorToggle::BracketMatchHighlight => {
                 editor.bracket_match_highlight_enabled()
             }
@@ -298,6 +303,9 @@ impl EditorToggle {
                 editor.set_line_numbers_enabled(enabled)
             }
             EditorToggle::ShowWhitespace => editor.set_show_whitespace(enabled),
+            EditorToggle::IndentGuides => {
+                editor.set_show_indent_guides(enabled)
+            }
             EditorToggle::BracketMatchHighlight => {
                 editor.set_bracket_match_highlight_enabled(enabled)
             }

@@ -142,6 +142,7 @@ impl canvas::Program<Message> for CodeEditor {
                         .take(end_idx.saturating_sub(start_idx))
                     {
                         let y = idx as f32 * self.line_height;
+                        self.draw_indent_guides(f, &ctx, visual_line, y);
                         self.draw_text_with_syntax_highlighting(
                             f,
                             &ctx,

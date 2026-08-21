@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- feat: **Indentation guides**
+  - A thin vertical line is drawn at every indentation level, so the nesting of a block is visible without following its braces. Guide spacing follows the editor's configured `IndentStyle`, meaning 2-space, 4-space, 8-space and tab-indented documents each get guides where their own indent levels actually fall, rather than at a fixed stride
+  - Blank lines take the *smaller* of the levels of the nearest non-blank line above and below them: a blank line inside a block keeps the block's guides, while a blank line between two blocks does not sprout guides that lead nowhere. The lookup is bounded at 200 blank lines in each direction, so a file that is mostly empty cannot turn every visible line into a full-buffer scan
+  - Guides are deliberately not drawn on wrapped continuation segments. Every visual line starts drawing at the same base X, so a guide placed at its original column would land on top of the wrapped text instead of in its indentation
+  - Enabled by default; toggle via `set_show_indent_guides(bool)` / `show_indent_guides()` / `with_show_indent_guides(bool)`, with a checkbox in the demo app's editor options panel
+  - `Style` gains an `indent_guide_color` field, derived automatically from the active Iced theme. It is fainter than `whitespace_color`, because a guide spans the full line height and would otherwise compete with the code itself
+  - The level computation lives in `features/indent_guides.rs` as a pure function over the buffer, covered by 10 unit tests (space and tab indentation, a zero-width indent unit, out-of-bounds lines, blank lines inside/at the end of/between blocks, buffer edges, an indent that is not a multiple of the unit, and the bounded blank-line scan)
+
+### Changed
+
+- refactor: **`indent_width` moved from `features/folding` to `metrics`**
+  - Code folding had the only copy of "how wide is this line's indentation, with tabs expanded", as a private function, even though it is a measurement rather than a folding concept and `metrics.rs` already owns `TAB_WIDTH`, `measure_char_width` and `measure_text_width`
+  - Promoted to `pub(crate)` and moved there so indentation guides could reuse it instead of growing a second copy that would drift on the next change to tab handling. Its two unit tests moved with it; folding now imports it. No behavior change
 
 ## [0.4.1] - 2026-08-20
 

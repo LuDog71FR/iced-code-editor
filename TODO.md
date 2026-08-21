@@ -16,24 +16,23 @@ None
 
 ### Editing
 
-1. **Indentation guides**
-2. **Snippets**
+1. **Snippets**
 
 ### LSP / IntelliSense (completion, hover, go-to-definition already done)
 
-3. **Diagnostics display** (underlines + gutter + panel)
-4. **Find references** + **Rename symbol**
-5. **Document formatting** (format on save)
-6. **Signature help**
-7. **Code actions / quick fixes**
-8. **Outline / document symbols** (+ breadcrumbs)
+2. **Diagnostics display** (underlines + gutter + panel)
+3. **Find references** + **Rename symbol**
+4. **Document formatting** (format on save)
+5. **Signature help**
+6. **Code actions / quick fixes**
+7. **Outline / document symbols** (+ breadcrumbs)
 
 ### Navigation / UI
 
-9. **Command palette** (`Ctrl+Shift+P`)
-10. **Sticky scroll** (pinned scope header)
-11. **Inline color preview** (swatches for `#rrggbb`)
-12. **Minimap** (overview of entire file & clickable navigation)
+8. **Command palette** (`Ctrl+Shift+P`)
+9. **Sticky scroll** (pinned scope header)
+10. **Inline color preview** (swatches for `#rrggbb`)
+11. **Minimap** (overview of entire file & clickable navigation)
 
 ## Performance Improvements
 

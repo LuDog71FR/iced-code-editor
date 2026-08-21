@@ -47,6 +47,38 @@ pub(crate) fn measure_char_width(
     }
 }
 
+/// Computes the visual indentation width of a line, expanding tabs.
+///
+/// Returns `None` for blank lines (empty or whitespace-only), which have no
+/// meaningful indentation and act as "transparent" lines: both code folding and
+/// indentation guides infer their level from the surrounding non-blank lines
+/// instead.
+///
+/// The width is expressed in display columns, not character indices: a tab
+/// counts as [`TAB_WIDTH`] columns, matching what [`measure_char_width`] does
+/// when rendering.
+///
+/// # Arguments
+///
+/// * `line` - The line content (without the trailing newline)
+///
+/// # Returns
+///
+/// The indentation width in display columns, or `None` for a blank line.
+pub(crate) fn indent_width(line: &str) -> Option<usize> {
+    let mut width = 0;
+    for c in line.chars() {
+        match c {
+            '\t' => width += TAB_WIDTH,
+            ' ' => width += 1,
+            _ if c.is_whitespace() => width += 1,
+            _ => return Some(width),
+        }
+    }
+    // Reached end of line without a non-whitespace character: blank line.
+    None
+}
+
 /// Measures rendered text width, accounting for CJK wide characters.
 ///
 /// - Wide characters (e.g. Chinese) use FONT_SIZE.
@@ -465,6 +497,21 @@ impl CodeEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_indent_width_blank_lines() {
+        assert_eq!(indent_width(""), None);
+        assert_eq!(indent_width("   "), None);
+        assert_eq!(indent_width("\t"), None);
+    }
+
+    #[test]
+    fn test_indent_width_expands_tabs() {
+        assert_eq!(indent_width("code"), Some(0));
+        assert_eq!(indent_width("  code"), Some(2));
+        assert_eq!(indent_width("\tcode"), Some(TAB_WIDTH));
+        assert_eq!(indent_width("\t  code"), Some(TAB_WIDTH + 2));
+    }
 
     #[test]
     fn test_compare_floats() {

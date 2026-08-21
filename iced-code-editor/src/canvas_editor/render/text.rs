@@ -2,7 +2,7 @@
 //! bracket-pair colorization for [`CodeEditor`].
 
 use iced::widget::canvas;
-use iced::{Color, Point};
+use iced::{Color, Point, Size};
 use std::borrow::Cow;
 use std::rc::Rc;
 use syntect::easy::HighlightLines;
@@ -14,11 +14,15 @@ use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
 use crate::buffer::text_utils::char_range_to_byte_range;
 
 use super::wrapping::VisualLine;
-use crate::canvas_editor::features::bracket_match;
+use crate::canvas_editor::IndentStyle;
+use crate::canvas_editor::features::{bracket_match, indent_guides};
 use crate::canvas_editor::{
     CodeEditor, HighlightCache, TAB_WIDTH, measure_char_width,
     measure_text_width,
 };
+
+/// Width in pixels of a single indentation guide line.
+const INDENT_GUIDE_WIDTH: f32 = 1.0;
 
 /// Computes geometry (x start and width) for a text segment used in rendering or highlighting.
 ///
@@ -508,6 +512,57 @@ impl CodeEditor {
                     ..canvas::Text::default()
                 });
             }
+        }
+    }
+
+    /// Draws the vertical indentation guides for `visual_line`.
+    ///
+    /// One thin vertical line is drawn per indentation level, at display
+    /// columns `0`, `unit`, `2 * unit`, … where `unit` comes from
+    /// [`CodeEditor::indent_style`]. The number of levels is decided by
+    /// [`indent_guides::guide_levels`], which also gives blank lines the level
+    /// of their surrounding block. No-op when the feature is disabled.
+    ///
+    /// Guides are skipped on wrapped continuation segments: every visual line
+    /// starts drawing at the same base X, so a guide placed at its original
+    /// column would sit on top of the wrapped text rather than in its
+    /// indentation.
+    ///
+    /// # Arguments
+    ///
+    /// * `frame` - The canvas frame to draw on
+    /// * `ctx` - Rendering context containing visual lines and metrics
+    /// * `visual_line` - The visual line to render
+    /// * `y` - Y position for rendering
+    pub(super) fn draw_indent_guides(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext,
+        visual_line: &VisualLine,
+        y: f32,
+    ) {
+        if !self.show_indent_guides || !visual_line.is_first_segment() {
+            return;
+        }
+
+        let unit = match self.indent_style {
+            IndentStyle::Spaces(width) => usize::from(width),
+            IndentStyle::Tab => TAB_WIDTH,
+        };
+        let levels = indent_guides::guide_levels(
+            &self.buffer,
+            visual_line.logical_line,
+            unit,
+        );
+
+        let base_x = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset;
+        for level in 0..levels {
+            let x = base_x + (level * unit) as f32 * ctx.char_width;
+            frame.fill_rectangle(
+                Point::new(x, y),
+                Size::new(INDENT_GUIDE_WIDTH, ctx.line_height),
+                self.style.indent_guide_color,
+            );
         }
     }
 

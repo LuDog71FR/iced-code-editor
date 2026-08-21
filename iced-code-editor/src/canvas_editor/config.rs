@@ -487,6 +487,79 @@ impl CodeEditor {
         self.show_whitespace
     }
 
+    /// Enables or disables indentation guides.
+    ///
+    /// Indentation guides are faint vertical lines drawn at every indentation
+    /// level, making the nesting of a block visible at a glance. Their spacing
+    /// follows [`CodeEditor::indent_style`]. Toggling this setting clears the
+    /// content cache to trigger an immediate redraw.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to draw indentation guides
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_show_indent_guides(false);
+    /// ```
+    pub fn set_show_indent_guides(&mut self, enabled: bool) {
+        if self.show_indent_guides != enabled {
+            self.show_indent_guides = enabled;
+            self.content_cache.clear();
+        }
+    }
+
+    /// Returns whether indentation guides are drawn.
+    ///
+    /// # Returns
+    ///
+    /// `true` if indentation guides are rendered, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Enabled by default.
+    /// assert!(editor.show_indent_guides());
+    ///
+    /// editor.set_show_indent_guides(false);
+    /// assert!(!editor.show_indent_guides());
+    /// ```
+    pub fn show_indent_guides(&self) -> bool {
+        self.show_indent_guides
+    }
+
+    /// Sets the indentation-guide display with builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to draw indentation guides
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_show_indent_guides(false);
+    /// assert!(!editor.show_indent_guides());
+    /// ```
+    #[must_use]
+    pub fn with_show_indent_guides(mut self, enabled: bool) -> Self {
+        self.show_indent_guides = enabled;
+        self
+    }
+
     /// Enables or disables the matching-bracket/quote-pair highlight overlay.
     ///
     /// When enabled, placing the cursor next to a bracket (`(`, `)`, `[`,
@@ -1035,6 +1108,21 @@ mod tests {
 
         editor.set_bracket_pair_colorization_enabled(true);
         assert!(editor.bracket_pair_colorization_enabled());
+    }
+
+    #[test]
+    fn test_show_indent_guides_configuration() {
+        let mut editor = CodeEditor::new("", "rs");
+        assert!(editor.show_indent_guides());
+
+        editor.set_show_indent_guides(false);
+        assert!(!editor.show_indent_guides());
+
+        editor.set_show_indent_guides(true);
+        assert!(editor.show_indent_guides());
+
+        let editor = CodeEditor::new("", "rs").with_show_indent_guides(false);
+        assert!(!editor.show_indent_guides());
     }
 
     #[test]

@@ -15,7 +15,7 @@ use std::collections::HashSet;
 
 use crate::buffer::TextBuffer;
 
-use crate::canvas_editor::TAB_WIDTH;
+use crate::canvas_editor::indent_width;
 
 /// A region of the buffer that can be collapsed into a single header line.
 ///
@@ -39,28 +39,6 @@ impl FoldRegion {
     pub fn new(start_line: usize, end_line: usize) -> Self {
         Self { start_line, end_line }
     }
-}
-
-/// Computes the visual indentation width of a line, expanding tabs.
-///
-/// Returns `None` for blank lines (empty or whitespace-only), which have no
-/// meaningful indentation and act as "transparent" lines during detection.
-///
-/// # Arguments
-///
-/// * `line` - The line content (without the trailing newline)
-fn indent_width(line: &str) -> Option<usize> {
-    let mut width = 0;
-    for c in line.chars() {
-        match c {
-            '\t' => width += TAB_WIDTH,
-            ' ' => width += 1,
-            _ if c.is_whitespace() => width += 1,
-            _ => return Some(width),
-        }
-    }
-    // Reached end of line without a non-whitespace character: blank line.
-    None
 }
 
 /// Detects all indentation-based foldable regions in the buffer.
@@ -191,21 +169,6 @@ pub fn hidden_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_indent_width_blank_lines() {
-        assert_eq!(indent_width(""), None);
-        assert_eq!(indent_width("   "), None);
-        assert_eq!(indent_width("\t"), None);
-    }
-
-    #[test]
-    fn test_indent_width_expands_tabs() {
-        assert_eq!(indent_width("code"), Some(0));
-        assert_eq!(indent_width("  code"), Some(2));
-        assert_eq!(indent_width("\tcode"), Some(TAB_WIDTH));
-        assert_eq!(indent_width("\t  code"), Some(TAB_WIDTH + 2));
-    }
 
     #[test]
     fn test_no_regions_for_flat_text() {

@@ -44,6 +44,8 @@ pub struct Style {
     pub current_line_highlight: Color,
     /// Color for visible whitespace characters (spaces as `·`, tabs as `→`)
     pub whitespace_color: Color,
+    /// Color of the vertical indentation guides drawn behind the text
+    pub indent_guide_color: Color,
     /// Highlight fill color for non-current search matches
     pub search_match_color: Color,
     /// Highlight fill color for the currently active search match
@@ -198,6 +200,11 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         blend_colors(text_color, background, 0.65)
     };
 
+    // Indentation guides: fainter than visible whitespace, since a guide spans
+    // the full line height and would otherwise compete with the code itself.
+    let indent_guide_color =
+        with_alpha(text_color, if is_dark { 0.18 } else { 0.22 });
+
     // Search matches: orange for the current match, yellow for the rest.
     // Fixed values (not palette-derived) to preserve the conventional
     // search-highlight look regardless of the active theme.
@@ -224,6 +231,7 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         scroller_color,
         current_line_highlight,
         whitespace_color,
+        indent_guide_color,
         search_match_color,
         search_match_current_color,
         selection_color,
