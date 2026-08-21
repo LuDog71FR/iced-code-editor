@@ -515,6 +515,347 @@ impl Translations {
             self.context_menu_open_containing_folder()
         }
     }
+    /// Returns the command-palette label for the filter input's placeholder.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_placeholder(), "Type a command...");
+    /// ```
+    #[must_use]
+    pub fn command_palette_placeholder(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.placeholder",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for the empty-result message.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_no_results(), "No matching command");
+    /// ```
+    #[must_use]
+    pub fn command_palette_no_results(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.no_results",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for saving the document.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_save(), "Save");
+    /// ```
+    #[must_use]
+    pub fn command_palette_save(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.save",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for toggling the line comment.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_toggle_comment(), "Toggle Line Comment");
+    /// ```
+    #[must_use]
+    pub fn command_palette_toggle_comment(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.toggle_comment",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for moving the current line up.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_move_line_up(), "Move Line Up");
+    /// ```
+    #[must_use]
+    pub fn command_palette_move_line_up(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.move_line_up",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for moving the current line down.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_move_line_down(), "Move Line Down");
+    /// ```
+    #[must_use]
+    pub fn command_palette_move_line_down(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.move_line_down",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for duplicating the current line above.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_duplicate_line_up(), "Duplicate Line Up");
+    /// ```
+    #[must_use]
+    pub fn command_palette_duplicate_line_up(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.duplicate_line_up",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for duplicating the current line below.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_duplicate_line_down(), "Duplicate Line Down");
+    /// ```
+    #[must_use]
+    pub fn command_palette_duplicate_line_down(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.duplicate_line_down",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for jumping to a line.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_goto_line(), "Go to Line");
+    /// ```
+    #[must_use]
+    pub fn command_palette_goto_line(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.goto_line",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for adding a cursor on the line above.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_add_cursor_above(), "Add Cursor Above");
+    /// ```
+    #[must_use]
+    pub fn command_palette_add_cursor_above(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.add_cursor_above",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for adding a cursor on the line below.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_add_cursor_below(), "Add Cursor Below");
+    /// ```
+    #[must_use]
+    pub fn command_palette_add_cursor_below(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.add_cursor_below",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for selecting the next occurrence.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_select_next_occurrence(), "Select Next Occurrence");
+    /// ```
+    #[must_use]
+    pub fn command_palette_select_next_occurrence(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.select_next_occurrence",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for toggling Vim mode.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_toggle_vim_mode(), "Toggle Vim Mode");
+    /// ```
+    #[must_use]
+    pub fn command_palette_toggle_vim_mode(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.toggle_vim_mode",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for opening the search dialog.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_find(), "Find");
+    /// ```
+    #[must_use]
+    pub fn command_palette_find(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.find",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for opening the search-and-replace dialog.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_replace(), "Replace");
+    /// ```
+    #[must_use]
+    pub fn command_palette_replace(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.replace",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for folding the block at the cursor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_fold_at_cursor(), "Toggle Fold at Cursor");
+    /// ```
+    #[must_use]
+    pub fn command_palette_fold_at_cursor(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.fold_at_cursor",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for folding every block.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_fold_all(), "Fold All");
+    /// ```
+    #[must_use]
+    pub fn command_palette_fold_all(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.fold_all",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
+
+    /// Returns the command-palette label for unfolding every block.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::{Language, Translations};
+    ///
+    /// let en = Translations::new(Language::English);
+    /// assert_eq!(en.command_palette_unfold_all(), "Unfold All");
+    /// ```
+    #[must_use]
+    pub fn command_palette_unfold_all(&self) -> String {
+        rust_i18n::t!(
+            "command_palette.unfold_all",
+            locale = self.language.to_locale()
+        )
+        .into_owned()
+    }
 }
 
 #[cfg(test)]
@@ -843,6 +1184,75 @@ mod tests {
                 translations.context_menu_open_containing_folder(),
                 expected[8]
             );
+        }
+    }
+
+    #[test]
+    fn test_command_palette_translations_cover_all_locales() {
+        // rust-i18n echoes the key path back when a key is missing from both
+        // the locale file and the English fallback, so an untranslated entry
+        // shows up as a label starting with "command_palette.".
+        let languages = [
+            Language::English,
+            Language::French,
+            Language::Spanish,
+            Language::German,
+            Language::Italian,
+            Language::PortugueseBR,
+            Language::PortuguesePT,
+            Language::ChineseSimplified,
+        ];
+
+        for language in languages {
+            let t = Translations::new(language);
+            let labels = [
+                t.command_palette_placeholder(),
+                t.command_palette_no_results(),
+                t.command_palette_save(),
+                t.command_palette_toggle_comment(),
+                t.command_palette_move_line_up(),
+                t.command_palette_move_line_down(),
+                t.command_palette_duplicate_line_up(),
+                t.command_palette_duplicate_line_down(),
+                t.command_palette_goto_line(),
+                t.command_palette_add_cursor_above(),
+                t.command_palette_add_cursor_below(),
+                t.command_palette_select_next_occurrence(),
+                t.command_palette_toggle_vim_mode(),
+                t.command_palette_find(),
+                t.command_palette_replace(),
+                t.command_palette_fold_at_cursor(),
+                t.command_palette_fold_all(),
+                t.command_palette_unfold_all(),
+            ];
+
+            for label in labels {
+                assert!(!label.is_empty(), "empty label for {language:?}");
+                assert!(
+                    !label.starts_with("command_palette."),
+                    "missing translation {label} for {language:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_command_palette_labels_are_localized() {
+        let cases = [
+            (Language::English, "Fold All", "Go to Line"),
+            (Language::French, "Tout replier", "Aller à la ligne"),
+            (Language::Spanish, "Plegar todo", "Ir a la línea"),
+            (Language::German, "Alles falten", "Gehe zu Zeile"),
+            (Language::Italian, "Comprimi tutto", "Vai alla riga"),
+            (Language::PortugueseBR, "Dobrar tudo", "Ir para a linha"),
+            (Language::PortuguesePT, "Dobrar tudo", "Ir para a linha"),
+            (Language::ChineseSimplified, "全部折叠", "转到行"),
+        ];
+
+        for (language, fold_all, goto_line) in cases {
+            let t = Translations::new(language);
+            assert_eq!(t.command_palette_fold_all(), fold_all);
+            assert_eq!(t.command_palette_goto_line(), goto_line);
         }
     }
 }

@@ -375,6 +375,12 @@ const SEARCH_FIELD: &str = "Search...";
 /// Placeholder of the search dialog's replacement field.
 const REPLACE_FIELD: &str = "Replace...";
 
+/// Placeholder of the command palette's filter field, as the user sees it.
+///
+/// Sourced from `Translations::command_palette_placeholder`, for the same
+/// reason as [`SEARCH_FIELD`].
+const PALETTE_FIELD: &str = "Type a command...";
+
 /// Side of the dialog's square icon buttons, in pixels.
 const ICON_BUTTON_SIZE: f32 = 15.0;
 
@@ -1217,4 +1223,142 @@ fn test_replacing_can_be_undone_in_one_step() {
     let _ = ui.press(Key::Character("z".into()), Modifiers::COMMAND);
 
     assert_eq!(ui.content(), "alpha beta alpha");
+}
+
+// ---- Command palette ----
+
+#[test]
+fn test_ctrl_shift_p_opens_the_command_palette() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with("local x = 1");
+    assert!(!ui.shows(PALETTE_FIELD));
+
+    let messages = ui.press(
+        Key::Character("p".into()),
+        Modifiers::COMMAND | Modifiers::SHIFT,
+    );
+
+    assert!(carries(&messages, &EditorMessage::OpenCommandPalette));
+    assert!(ui.shows(PALETTE_FIELD));
+    assert!(ui.shows("Fold All"), "the built-in commands must be listed");
+    assert!(ui.shows("Open File"), "the app's own commands must be listed");
+}
+
+#[test]
+fn test_escape_closes_the_command_palette() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with("local x = 1");
+    let _ = ui.press(
+        Key::Character("p".into()),
+        Modifiers::COMMAND | Modifiers::SHIFT,
+    );
+    assert!(ui.shows(PALETTE_FIELD));
+
+    let messages = ui.tap(Named::Escape);
+
+    assert!(carries(&messages, &EditorMessage::CloseCommandPalette));
+    assert!(!ui.shows(PALETTE_FIELD));
+}
+
+#[test]
+fn test_typing_narrows_the_command_list() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with("local x = 1");
+    let _ = ui.press(
+        Key::Character("p".into()),
+        Modifiers::COMMAND | Modifiers::SHIFT,
+    );
+    assert!(ui.shows("Move Line Up"));
+
+    ui.type_into(PALETTE_FIELD, "fold all");
+
+    assert!(ui.shows("Fold All"));
+    assert!(!ui.shows("Move Line Up"), "non-matching rows must be dropped");
+}
+
+#[test]
+fn test_a_query_matching_nothing_says_so() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with("local x = 1");
+    let _ = ui.press(
+        Key::Character("p".into()),
+        Modifiers::COMMAND | Modifiers::SHIFT,
+    );
+
+    ui.type_into(PALETTE_FIELD, "zzz");
+
+    assert!(ui.shows("No matching command"));
+    assert!(!ui.shows("Fold All"));
+}
+
+#[test]
+fn test_clicking_a_command_runs_it_and_closes_the_palette() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with("local x = 1");
+    let _ = ui.press(
+        Key::Character("p".into()),
+        Modifiers::COMMAND | Modifiers::SHIFT,
+    );
+    ui.type_into(PALETTE_FIELD, "fold all");
+
+    let messages = ui.click("Fold All");
+
+    assert!(carries(&messages, &EditorMessage::CommandPaletteSelected(0)));
+    assert!(!ui.shows(PALETTE_FIELD), "running a command closes the palette");
+}
+
+#[test]
+fn test_the_palette_forwards_the_apps_own_commands() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with("local x = 1");
+    let _ = ui.press(
+        Key::Character("p".into()),
+        Modifiers::COMMAND | Modifiers::SHIFT,
+    );
+    ui.type_into(PALETTE_FIELD, "new tab");
+    assert!(ui.shows("New Tab"));
+
+    let messages = ui.click("New Tab");
+
+    assert!(carries(&messages, &EditorMessage::CommandPaletteSelected(0)));
+    assert!(!ui.shows(PALETTE_FIELD));
+}
+
+#[test]
+fn test_the_palette_stays_shut_while_the_option_is_off() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with("local x = 1");
+    if let Some(tab) = ui.app.get_active_tab() {
+        tab.editor.set_command_palette_enabled(false);
+    }
+
+    let _ = ui.press(
+        Key::Character("p".into()),
+        Modifiers::COMMAND | Modifiers::SHIFT,
+    );
+
+    assert!(!ui.shows(PALETTE_FIELD));
+}
+
+#[test]
+fn test_the_arrow_keys_move_through_the_palette_instead_of_the_buffer() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with("local x = 1\nlocal y = 2");
+    let _ = ui.press(
+        Key::Character("p".into()),
+        Modifiers::COMMAND | Modifiers::SHIFT,
+    );
+
+    let messages = ui.tap(Named::ArrowDown);
+
+    assert!(carries(&messages, &EditorMessage::CommandPaletteNavigate(true)));
+    assert_eq!(ui.cursor(), (0, 0), "the caret must not move in the buffer");
 }

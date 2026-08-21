@@ -13,6 +13,7 @@
 //! - **Focus management** for multiple editors
 //! - **Dark & light themes** support with customizable colors
 //! - **Undo/Redo** with command history
+//! - **Command palette** (`Ctrl+Shift+P`), extensible with the host's own commands
 //! - **Optional Vim mode** with Normal, Insert, Visual, and Visual Line modes
 //!
 //! # Example

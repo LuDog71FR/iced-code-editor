@@ -21,7 +21,7 @@ use caches::{
 };
 use editing::cursor_set;
 pub use editing::history::CommandHistory;
-use features::{folding, goto_line, search, vim};
+use features::{command_palette, folding, goto_line, search, vim};
 use metrics::{
     CACHE_WINDOW_MARGIN_MULTIPLIER, CHAR_WIDTH, CURSOR_BLINK_INTERVAL,
     FONT_SIZE, GUTTER_WIDTH, HIGHLIGHT_LINES_PER_FRAME, LINE_HEIGHT, TAB_WIDTH,
@@ -181,6 +181,14 @@ pub struct CodeEditor {
     reveal_in_file_manager_enabled: bool,
     /// Go-to-line dialog state
     pub(crate) goto_line_state: goto_line::GotoLineState,
+    /// Command palette state
+    pub(crate) command_palette_state: command_palette::CommandPaletteState,
+    /// Custom commands listed before the built-in ones in the palette.
+    custom_command_palette_entries: Vec<ContextMenuItem>,
+    /// Whether the built-in editor commands are listed in the palette.
+    default_command_palette_enabled: bool,
+    /// Whether the command palette can be opened at all.
+    pub(crate) command_palette_enabled: bool,
     /// Whether Vim key handling is enabled for this editor instance.
     vim_enabled: bool,
     /// Per-editor Vim mode, parser prefixes and unnamed register.
@@ -392,6 +400,22 @@ pub enum Message {
     GotoLineChanged(String),
     /// Submit the current go-to-line input.
     SubmitGotoLine,
+    /// Open the command palette (Cmd/Ctrl+Shift+P).
+    OpenCommandPalette,
+    /// Close the command palette without running anything.
+    CloseCommandPalette,
+    /// Change the filter text typed in the command palette.
+    CommandPaletteChanged(String),
+    /// Move the command palette highlight one row down (`true`) or up.
+    CommandPaletteNavigate(bool),
+    /// Highlight the command palette row at this index and run it.
+    CommandPaletteSelected(usize),
+    /// Run the currently highlighted command palette row.
+    SubmitCommandPalette,
+    /// A host-registered command palette entry was run, identified by the
+    /// `id` it was registered with. The editor never acts on this itself:
+    /// handle it in the host application.
+    CommandPaletteAction(String),
     /// Viewport scrolled - track scroll position
     Scrolled(iced::widget::scrollable::Viewport),
     /// Horizontal scrollbar scrolled (only when wrap is disabled)
@@ -626,6 +650,10 @@ impl CodeEditor {
             default_context_menu_enabled: true,
             reveal_in_file_manager_enabled: false,
             goto_line_state: goto_line::GotoLineState::new(),
+            command_palette_state: command_palette::CommandPaletteState::new(),
+            custom_command_palette_entries: Vec::new(),
+            default_command_palette_enabled: true,
+            command_palette_enabled: true,
             vim_enabled: false,
             vim_state: vim::VimState::default(),
             translations: Translations::default(),

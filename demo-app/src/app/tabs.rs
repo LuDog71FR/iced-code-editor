@@ -7,7 +7,7 @@ use super::{DemoApp, Message};
 use crate::types::EditorId;
 use iced::Task;
 use iced_code_editor::Message as EditorMessage;
-use iced_code_editor::{CodeEditor, ContextMenuEntry, theme};
+use iced_code_editor::{CodeEditor, ContextMenuEntry, ContextMenuItem, theme};
 use std::path::PathBuf;
 
 /// A single open editor tab.
@@ -26,7 +26,13 @@ pub struct EditorTab {
 }
 
 impl DemoApp {
-    /// Creates an editor with the demo context-menu entries.
+    /// Creates an editor with the demo context-menu and command-palette
+    /// entries.
+    ///
+    /// Both surfaces emit the same action identifiers, which
+    /// [`Self::handle_app_action`] resolves in one place — so an action
+    /// offered by both behaves identically whichever one the user reaches
+    /// for.
     pub(super) fn new_editor(content: &str) -> CodeEditor {
         CodeEditor::new(content, "lua")
             .with_custom_context_menu_entries(vec![
@@ -40,6 +46,60 @@ impl DemoApp {
                     .with_enabled(false),
             ])
             .with_default_context_menu_enabled(true)
+            .with_custom_command_palette_entries(vec![
+                ContextMenuItem::new("app.open_file", "Open File"),
+                ContextMenuItem::new("app.save_file_as", "Save File As"),
+                ContextMenuItem::new("app.new_tab", "New Tab"),
+                ContextMenuItem::new("app.close_tab", "Close Tab"),
+                ContextMenuItem::new("app.run_code", "Run Code"),
+                ContextMenuItem::new("app.clear_log", "Clear Log"),
+                ContextMenuItem::new("app.toggle_settings", "Settings"),
+                ContextMenuItem::new("app.format_document", "Format Document")
+                    .with_shortcut("Ctrl+Shift+F"),
+            ])
+    }
+
+    /// Resolves an action identifier emitted by the context menu or the
+    /// command palette.
+    ///
+    /// # Arguments
+    ///
+    /// * `editor_id` - The editor the action was triggered from
+    /// * `id` - The identifier the entry was registered with
+    ///
+    /// # Returns
+    ///
+    /// The task performing the action, or `Task::none()` for the actions
+    /// this demo only logs
+    fn handle_app_action(
+        &mut self,
+        editor_id: EditorId,
+        id: &str,
+    ) -> Task<Message> {
+        match id {
+            "app.open_file" => Task::done(Message::OpenFile),
+            "app.save_file_as" => Task::done(Message::SaveFileAs),
+            "app.new_tab" => Task::done(Message::NewTab),
+            "app.close_tab" => Task::done(Message::CloseTab(editor_id)),
+            "app.run_code" => Task::done(Message::RunCode),
+            "app.clear_log" => Task::done(Message::ClearLog),
+            "app.toggle_settings" => Task::done(Message::ToggleSettings),
+            "app.format_document" => {
+                self.log("INFO", "Format document requested");
+                Task::none()
+            }
+            "app.rename_symbol" => {
+                self.log("INFO", "Rename symbol requested");
+                Task::none()
+            }
+            unknown => {
+                self.log(
+                    "WARN",
+                    &format!("Ignoring unknown editor action: {unknown}"),
+                );
+                Task::none()
+            }
+        }
     }
 
     /// Creates a [`Self::new_editor`] configured with the app's current
@@ -150,24 +210,10 @@ impl DemoApp {
         editor_id: EditorId,
         event: &EditorMessage,
     ) -> Task<Message> {
-        if let EditorMessage::CustomContextMenuAction(id) = event {
-            match id.as_str() {
-                "app.format_document" => {
-                    self.log("INFO", "Format document requested");
-                }
-                "app.rename_symbol" => {
-                    self.log("INFO", "Rename symbol requested");
-                }
-                unknown => {
-                    self.log(
-                        "WARN",
-                        &format!(
-                            "Ignoring unknown context-menu action: {unknown}"
-                        ),
-                    );
-                }
-            }
-            return Task::none();
+        if let EditorMessage::CustomContextMenuAction(id)
+        | EditorMessage::CommandPaletteAction(id) = event
+        {
+            return self.handle_app_action(editor_id, id);
         }
 
         if matches!(event, EditorMessage::RevealInFileManager) {

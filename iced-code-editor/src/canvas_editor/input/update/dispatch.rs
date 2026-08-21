@@ -81,6 +81,24 @@ impl CodeEditor {
                 self.handle_goto_line_changed_msg(query)
             }
             Message::SubmitGotoLine => self.handle_submit_goto_line_msg(),
+            Message::OpenCommandPalette => {
+                self.handle_open_command_palette_msg()
+            }
+            Message::CloseCommandPalette => {
+                self.handle_close_command_palette_msg()
+            }
+            Message::CommandPaletteChanged(query) => {
+                self.handle_command_palette_changed_msg(query)
+            }
+            Message::CommandPaletteNavigate(forward) => {
+                self.handle_command_palette_navigate_msg(*forward)
+            }
+            Message::CommandPaletteSelected(index) => {
+                self.handle_command_palette_selected_msg(*index)
+            }
+            Message::SubmitCommandPalette => {
+                self.handle_submit_command_palette_msg()
+            }
             Message::PageUp => self.handle_page_up(),
             Message::PageDown => self.handle_page_down(),
 
@@ -96,6 +114,7 @@ impl CodeEditor {
             }
             Message::WriteRequested
             | Message::CustomContextMenuAction(_)
+            | Message::CommandPaletteAction(_)
             | Message::RevealInFileManager => Task::none(),
 
             // Clipboard operations

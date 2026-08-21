@@ -2,7 +2,9 @@
 //! wrap/whitespace/bracket/folding-enabled flags, auto-indent, auto-close
 //! brackets, indent style, search/replace enablement, and line numbers.
 
-use crate::canvas_editor::features::context_menu::ContextMenuEntry;
+use crate::canvas_editor::features::context_menu::{
+    ContextMenuEntry, ContextMenuItem,
+};
 use crate::canvas_editor::features::vim::VimMode;
 use crate::canvas_editor::{CodeEditor, IndentStyle};
 use crate::theme::Style;
@@ -151,6 +153,230 @@ impl CodeEditor {
     /// ```
     pub fn default_context_menu_enabled(&self) -> bool {
         self.default_context_menu_enabled
+    }
+
+    /// Replaces the custom command-palette entries.
+    ///
+    /// Custom commands are listed before the built-in editor commands; see
+    /// [`Self::set_default_command_palette_enabled`] to hide those. Running
+    /// one emits [`Message::CommandPaletteAction`] carrying the entry's `id`,
+    /// which the host application handles — the editor never acts on it.
+    ///
+    /// Entries created with `with_enabled(false)` are left out of the list
+    /// entirely rather than dimmed: the palette is a search result list, so
+    /// every row it offers should be runnable.
+    ///
+    /// # Arguments
+    ///
+    /// * `entries` - The commands to list, in order
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, ContextMenuItem};
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_custom_command_palette_entries(vec![
+    ///     ContextMenuItem::new("app.open_file", "Open File")
+    ///         .with_shortcut("Ctrl+O"),
+    ///     ContextMenuItem::new("app.new_tab", "New Tab"),
+    /// ]);
+    /// assert_eq!(editor.custom_command_palette_entries().len(), 2);
+    /// ```
+    ///
+    /// [`Message::CommandPaletteAction`]: crate::Message::CommandPaletteAction
+    pub fn set_custom_command_palette_entries(
+        &mut self,
+        entries: Vec<ContextMenuItem>,
+    ) {
+        self.custom_command_palette_entries = entries;
+    }
+
+    /// Replaces the custom command-palette entries using the builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `entries` - The commands to list, in order
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, ContextMenuItem};
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_custom_command_palette_entries(vec![
+    ///         ContextMenuItem::new("app.open_file", "Open File"),
+    ///     ]);
+    /// assert_eq!(editor.custom_command_palette_entries().len(), 1);
+    /// ```
+    #[must_use]
+    pub fn with_custom_command_palette_entries(
+        mut self,
+        entries: Vec<ContextMenuItem>,
+    ) -> Self {
+        self.set_custom_command_palette_entries(entries);
+        self
+    }
+
+    /// Returns the custom command-palette entries in display order.
+    ///
+    /// # Returns
+    ///
+    /// The entries previously set, or an empty slice if none were set
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert!(editor.custom_command_palette_entries().is_empty());
+    /// ```
+    pub fn custom_command_palette_entries(&self) -> &[ContextMenuItem] {
+        &self.custom_command_palette_entries
+    }
+
+    /// Sets whether the built-in editor commands are listed in the palette.
+    ///
+    /// Disabling them leaves only the custom entries, which is how a host
+    /// application takes the palette over rather than extending it.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to list the built-in commands
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_default_command_palette_enabled(false);
+    /// assert!(!editor.default_command_palette_enabled());
+    /// ```
+    pub fn set_default_command_palette_enabled(&mut self, enabled: bool) {
+        self.default_command_palette_enabled = enabled;
+    }
+
+    /// Sets built-in command visibility using the builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to list the built-in commands
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_default_command_palette_enabled(false);
+    /// assert!(!editor.default_command_palette_enabled());
+    /// ```
+    #[must_use]
+    pub fn with_default_command_palette_enabled(
+        mut self,
+        enabled: bool,
+    ) -> Self {
+        self.set_default_command_palette_enabled(enabled);
+        self
+    }
+
+    /// Returns whether the built-in commands are listed in the palette.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the built-in commands are listed, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Listed by default.
+    /// assert!(editor.default_command_palette_enabled());
+    /// ```
+    pub fn default_command_palette_enabled(&self) -> bool {
+        self.default_command_palette_enabled
+    }
+
+    /// Sets whether the command palette can be opened.
+    ///
+    /// Turning it off makes `Ctrl/Cmd+Shift+P` and
+    /// [`CodeEditor::open_command_palette`] no-ops, freeing the shortcut for
+    /// a host application that provides its own palette.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether the palette can be opened
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_command_palette_enabled(false);
+    /// assert!(!editor.command_palette_enabled());
+    /// ```
+    pub fn set_command_palette_enabled(&mut self, enabled: bool) {
+        self.command_palette_enabled = enabled;
+        if !enabled {
+            self.command_palette_state.close();
+        }
+    }
+
+    /// Sets command-palette availability using the builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether the palette can be opened
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs")
+    ///     .with_command_palette_enabled(false);
+    /// assert!(!editor.command_palette_enabled());
+    /// ```
+    #[must_use]
+    pub fn with_command_palette_enabled(mut self, enabled: bool) -> Self {
+        self.set_command_palette_enabled(enabled);
+        self
+    }
+
+    /// Returns whether the command palette can be opened.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the palette can be opened, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// // Available by default.
+    /// assert!(editor.command_palette_enabled());
+    /// ```
+    pub fn command_palette_enabled(&self) -> bool {
+        self.command_palette_enabled
     }
 
     /// Sets whether the built-in reveal-in-file-manager action is shown.

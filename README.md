@@ -36,6 +36,7 @@ Screenshot of the demo application:
 - **Code folding** to collapse/expand indentation-based blocks
 - **High performance** canvas-based rendering
 - **Search and replace** text
+- **Command palette** (`Ctrl+Shift+P`) listing every editor action, extensible with the host application's own commands
 - **Language Server Protocol** (LSP) support
 - **Auto indentation** with custom indent style
 - **Auto-closing brackets/quotes** with surround selection
@@ -280,6 +281,19 @@ All editing operations (typing, backspace, delete, enter, tab, paste) apply simu
 | **Shift + F3**    | Find previous match            |
 | **Escape**        | Close search dialog            |
 
+### Command Palette
+
+| Shortcut                 | Action                                     |
+| ------------------------ | ------------------------------------------ |
+| **Ctrl + Shift + P**     | Open the command palette                   |
+| **Up / Down**            | Move through the filtered commands         |
+| **Enter**                | Run the highlighted command                |
+| **Escape**               | Close the palette                          |
+
+Typing filters the list by subsequence, so `tc` finds "Toggle Line Comment" and `fldall` finds "Fold All". Only commands that are usable right now are listed — undo does not appear with an empty history, and the folding commands stay out while folding is disabled. Each row shows the command's own keyboard shortcut, so the palette doubles as a way to learn them.
+
+See [Extend the command palette](#extend-the-command-palette) to register the host application's own commands, hide the built-in ones, or turn the palette off entirely.
+
 ### Code Folding
 
 These shortcuts are active only when code folding is enabled:
@@ -383,6 +397,65 @@ other desktop platforms. The editor only emits the request; the host is
 responsible for invoking the operating system and reporting failures. The demo
 enables this item for tabs backed by a desktop path and keeps it hidden for
 untitled tabs and WebAssembly.
+
+### Extend the command palette
+
+The palette lists the built-in editor commands out of the box. Register your
+application's own commands to have them listed first:
+
+```rust
+use iced_code_editor::{CodeEditor, ContextMenuItem};
+
+let editor = CodeEditor::new("fn main() {}", "rust")
+    .with_custom_command_palette_entries(vec![
+        ContextMenuItem::new("app.open_file", "Open File")
+            .with_shortcut("Ctrl+O"),
+        ContextMenuItem::new("app.new_tab", "New Tab"),
+    ]);
+```
+
+Entries reuse `ContextMenuItem`, so an action offered in both surfaces is
+described once and keeps a single identifier. An entry built with
+`with_enabled(false)` is left out of the palette entirely rather than dimmed:
+the palette is a search result list, so every row it offers is runnable.
+
+Running a custom entry emits `CommandPaletteAction` carrying its ID. Handle it
+in the outer application, exactly like a custom context-menu action:
+
+```rust
+match event {
+    EditorMessage::CustomContextMenuAction(id)
+    | EditorMessage::CommandPaletteAction(id) => {
+        match id.as_str() {
+            "app.open_file" => open_file(),
+            "app.new_tab" => new_tab(),
+            unknown => eprintln!("Ignoring unknown action: {unknown}"),
+        }
+        Task::none()
+    }
+    other => editor.update(&other).map(Message::EditorEvent),
+}
+```
+
+Built-in commands the editor cannot perform on its own — saving, revealing the
+file in the file manager — are emitted the same way they would be if the user
+had pressed the shortcut, so the host intercepts them where it already does.
+
+Pass `false` to `with_default_command_palette_enabled` to list only your own
+commands, and use `set_command_palette_enabled(false)` to disable the palette
+altogether, freeing `Ctrl+Shift+P` for an application-provided one:
+
+```rust
+let editor = CodeEditor::new("fn main() {}", "rust")
+    .with_default_command_palette_enabled(false)
+    .with_command_palette_enabled(true);
+
+// Or open it from your own menu item:
+let task = editor.open_command_palette();
+```
+
+The built-in labels follow the language configured with `set_language`;
+localize your own entry labels before passing them in.
 
 ### Changing Themes
 

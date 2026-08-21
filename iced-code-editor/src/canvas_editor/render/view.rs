@@ -10,6 +10,7 @@ use iced::{Background, Border, Color, Element, Length, Rectangle, Shadow};
 use iced_aw::ContextMenu;
 
 use super::wrapping::{self, WrappingCalculator};
+use crate::canvas_editor::features::command_palette::dialog as command_palette_dialog;
 use crate::canvas_editor::features::context_menu;
 use crate::canvas_editor::features::goto_line::dialog as goto_line_dialog;
 use crate::canvas_editor::features::search::dialog as search_dialog;
@@ -396,6 +397,28 @@ impl CodeEditor {
             editor_stack = editor_stack.push(positioned_dialog);
         }
 
+        // Add the command palette in the top center, above every other
+        // dialog: opening it closes the others, so it is always innermost.
+        if self.command_palette_state.is_open {
+            let entries = self.command_palette_entries();
+            let palette = command_palette_dialog::view(
+                &self.command_palette_state,
+                &entries,
+                &self.translations,
+            );
+            let positioned_palette = container(
+                Row::new()
+                    .push(Space::new().width(Length::Fill))
+                    .push(palette)
+                    .push(Space::new().width(Length::Fill)),
+            )
+            .padding(20)
+            .width(Length::Fill)
+            .height(Length::Shrink);
+
+            editor_stack = editor_stack.push(positioned_palette);
+        }
+
         // Wrap the editor stack in a container with clip
         let editor_container = container(editor_stack)
             .width(Length::Fill)
@@ -405,29 +428,16 @@ impl CodeEditor {
         // The context menu owns its transient open/close state and positions
         // itself at the right-click location. The canvas still receives the
         // right-click event so it can preserve or reposition the selection.
-        let can_undo = self.history.can_undo();
-        let can_redo = self.history.can_redo();
-        let has_selection =
-            self.cursors.iter().any(|cursor| cursor.has_selection());
-        let has_content =
-            self.buffer.line_count() > 1 || self.buffer.line_len(0) > 0;
+        let action_context = self.action_context();
         let custom_context_menu_entries =
             self.custom_context_menu_entries().to_vec();
         let default_context_menu_enabled = self.default_context_menu_enabled();
-        let reveal_in_file_manager_enabled =
-            self.reveal_in_file_manager_enabled();
         let translations = self.translations;
         let editor_container = ContextMenu::new(editor_container, move || {
             context_menu::view(
                 &custom_context_menu_entries,
                 default_context_menu_enabled,
-                context_menu::MenuState {
-                    can_undo,
-                    can_redo,
-                    has_selection,
-                    has_content,
-                    reveal_in_file_manager_enabled,
-                },
+                action_context,
                 translations,
             )
         });

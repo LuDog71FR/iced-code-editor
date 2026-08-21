@@ -364,10 +364,10 @@ impl CodeEditor {
         None
     }
 
-    /// Handles the search/replace and goto-line dialogs: opening them
-    /// (`Ctrl/Cmd+F`, `Ctrl/Cmd+H`, `Ctrl/Cmd+G`), cycling the search
-    /// dialog's fields while it is open (`Tab`/`Shift+Tab`), and find
-    /// next/previous (`F3`/`Shift+F3`).
+    /// Handles the search/replace, goto-line and command-palette dialogs:
+    /// opening them (`Ctrl/Cmd+F`, `Ctrl/Cmd+H`, `Ctrl/Cmd+G`,
+    /// `Ctrl/Cmd+Shift+P`), cycling the search dialog's fields while it is
+    /// open (`Tab`/`Shift+Tab`), and find next/previous (`F3`/`Shift+F3`).
     fn dialog_shortcut(
         &self,
         key: &keyboard::Key,
@@ -375,6 +375,16 @@ impl CodeEditor {
         modifiers: &keyboard::Modifiers,
     ) -> Option<Action<Message>> {
         let command_pressed = modifiers.command() || modifiers.control();
+
+        if command_pressed
+            && modifiers.shift()
+            && is_key_char(key, modified_key, "p")
+            && self.command_palette_enabled
+        {
+            return Some(
+                Action::publish(Message::OpenCommandPalette).and_capture(),
+            );
+        }
 
         if command_pressed
             && is_key_char(key, modified_key, "f")
@@ -421,7 +431,8 @@ impl CodeEditor {
         None
     }
 
-    /// Handles Escape: closes the active dialog, collapses a multi-cursor
+    /// Handles Escape: closes the innermost open dialog (command palette,
+    /// then go-to-line, then search), collapses a multi-cursor
     /// selection down to the primary cursor (`handle_close_search_msg`
     /// does this when more than one cursor is active, even with no dialog
     /// open), or forwards it to Vim's modal state machine. If none of
@@ -434,7 +445,9 @@ impl CodeEditor {
             return None;
         }
 
-        let message = if self.goto_line_state.is_open {
+        let message = if self.command_palette_state.is_open {
+            Some(Message::CloseCommandPalette)
+        } else if self.goto_line_state.is_open {
             Some(Message::CloseGotoLine)
         } else if self.search_state.is_open {
             Some(Message::CloseSearch)

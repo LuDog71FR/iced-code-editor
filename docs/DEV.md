@@ -19,6 +19,7 @@
    - [Line Wrapping (Visual Lines)](#line-wrapping-visual-lines)
    - [Code Folding](#code-folding)
    - [Search and Replace](#search-and-replace)
+   - [Command Palette](#command-palette)
    - [Auto-Indentation](#auto-indentation)
    - [Auto-Closing Brackets/Quotes](#auto-closing-bracketsquotes)
    - [Matching Bracket/Quote Highlight](#matching-bracketquote-highlight)
@@ -124,7 +125,13 @@ iced-code-editor/
     │   └── view.rs              # Iced UI view construction
     ├── features/                # Optional editor features
     │   ├── mod.rs
+    │   ├── actions.rs            # Action availability snapshot + shortcut hint strings
     │   ├── bracket_match.rs      # Matching bracket/quote detection + depth scanning
+    │   ├── color_preview.rs      # Inline color-literal detection (pure logic)
+    │   ├── command_palette/      # Command palette (Ctrl+Shift+P)
+    │   │   ├── mod.rs             # State, command registry, subsequence filtering
+    │   │   ├── dialog.rs          # Palette UI + arrow/Escape key listener
+    │   │   └── update.rs
     │   ├── context_menu.rs       # Right-click context menu
     │   ├── folding/              # Code folding
     │   │   ├── mod.rs             # Foldable-region detection (pure logic)
@@ -145,7 +152,10 @@ iced-code-editor/
         ├── mod.rs                 # LspClient trait + LSP data types
         ├── sync.rs                # Buffer <-> LSP document synchronization
         └── process/               # LSP subprocess client (feature: lsp-process)
-            ├── mod.rs              # LspProcessClient (stdio JSON-RPC)
+            ├── mod.rs              # LspProcessClient (process lifecycle, LspClient impl)
+            ├── protocol.rs         # JSON-RPC framing, bounded reads, response parsing
+            ├── text_model.rs       # Per-document UTF-16 position mirror
+            ├── pending.rs          # In-flight request tracking
             ├── config.rs           # Per-server configuration
             └── overlay.rs          # Hover / completion overlay UI
 ```
@@ -590,6 +600,77 @@ pub struct SearchState {
 - Matches are highlighted in the `overlay_cache` layer; only the visible match range
   is drawn (`get_visible_match_range()`).
 - All dialog labels and placeholders are localized through the i18n layer.
+
+### Command Palette
+
+**Location:** `canvas_editor/features/command_palette/mod.rs` (state + registry), `canvas_editor/features/command_palette/dialog.rs` (UI), `canvas_editor/features/actions.rs` (shared availability snapshot and shortcut hints)
+
+`Ctrl+Shift+P` opens a filtered list of every action available right now. Its
+reason to exist is discoverability: an action is reachable without knowing its
+shortcut, and each row displays that shortcut, so the palette also teaches them.
+
+```rust
+pub(crate) struct CommandPaletteState {
+    pub(crate) query: String,
+    pub(crate) is_open: bool,
+    pub(crate) selected: usize,       // index into the *filtered* list
+    pub(crate) input_id: Id,
+    pub(crate) scrollable_id: Id,
+}
+
+pub(crate) enum PaletteAction {
+    Builtin(Box<Message>),  // re-entered through CodeEditor::update
+    Custom(String),         // forwarded as Message::CommandPaletteAction(id)
+}
+```
+
+**Registry.** `build_entries()` concatenates the host's entries
+(`custom_command_palette_entries`, a `Vec<ContextMenuItem>`) with the built-in
+commands, in that order. Host entries reuse `ContextMenuItem` rather than a
+parallel type: the two surfaces describe the same thing — a stable `id`, a
+`label`, a `shortcut` hint, an `enabled` flag — so an action offered in both is
+declared once and keeps one identifier through one host handler.
+
+**Availability, not dimming.** `default_entries()` takes an `ActionContext`
+snapshot and only emits the commands that are usable: no `Undo` with an empty
+history, no `Cut`/`Copy` without a selection, no folding commands while
+`folding_enabled` is off. Host entries with `enabled: false` are dropped the
+same way. This deliberately differs from the context menu, which dims them
+instead — a menu with a stable shape supports muscle memory, while a search
+result list should only offer runnable rows, which also keeps arrow navigation
+free of unselectable stops.
+
+**Filtering** is a case-insensitive *subsequence* match (`matches_query`), so
+`tc` finds "Toggle Line Comment" and `fldall` finds "Fold All". Both sides are
+folded through `char::to_lowercase`, so it works beyond ASCII. Every keystroke
+resets `selected` to 0: after a filter change the row at the old index is a
+different command, and keeping it would run something the user never looked at.
+
+**Execution.** `handle_submit_command_palette_msg` closes the palette and
+returns `Task::done(message)` rather than applying the action in place. The
+message therefore travels back out through the host application exactly as it
+would if the user had pressed the shortcut — which is what makes the actions
+the editor cannot perform itself (`WriteRequested`, `RevealInFileManager`, and
+every host-registered command) reach the handler that already intercepts them.
+
+**Keyboard.** The palette's `text_input` holds focus while it is open, so
+Escape would merely unfocus it and the arrow keys would move the caret inside
+the query. A transparent `Canvas` layer (`KeyListener`) stacked over the dialog
+captures `Escape`/`ArrowUp`/`ArrowDown` first and publishes the palette's own
+messages — the same trick `goto_line/dialog.rs` uses for Escape alone. `Enter`
+is the input's `on_submit`. In `escape_shortcut`, the palette is the innermost
+dialog: it closes before go-to-line, which closes before search.
+
+**Scrolling.** Rows have a fixed `ROW_HEIGHT`, which is what lets
+`scroll_command_palette_to_selection` compute an absolute offset for the
+highlighted row without measuring anything; the list shows `MAX_VISIBLE_ROWS`
+before scrolling.
+
+**Shared with the context menu.** `features/actions.rs` holds `ActionContext`
+(the availability snapshot, built by `CodeEditor::action_context()`) and every
+platform-dependent shortcut hint string. Both surfaces read from it, so a
+rebinding updates one place and the two can never disagree on how an action is
+spelled.
 
 ### Auto-Indentation
 

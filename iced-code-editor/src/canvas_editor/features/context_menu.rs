@@ -3,6 +3,10 @@
 use iced::widget::{Space, button, column, container, row, text};
 use iced::{Background, Border, Color, Element, Length, Shadow, Theme, Vector};
 
+use super::actions::{
+    ActionContext, COPY_SHORTCUT, CUT_SHORTCUT, PASTE_SHORTCUT, REDO_SHORTCUT,
+    SELECT_ALL_SHORTCUT, UNDO_SHORTCUT,
+};
 use crate::canvas_editor::Message;
 use crate::i18n::Translations;
 
@@ -284,45 +288,6 @@ impl From<ContextMenuItem> for ContextMenuEntry {
     }
 }
 
-#[cfg(target_os = "macos")]
-const UNDO_SHORTCUT: &str = "⌘Z";
-#[cfg(not(target_os = "macos"))]
-const UNDO_SHORTCUT: &str = "Ctrl+Z";
-
-#[cfg(target_os = "macos")]
-const REDO_SHORTCUT: &str = "⇧⌘Z";
-#[cfg(not(target_os = "macos"))]
-const REDO_SHORTCUT: &str = "Ctrl+Y";
-
-#[cfg(target_os = "macos")]
-const CUT_SHORTCUT: &str = "⌘X";
-#[cfg(not(target_os = "macos"))]
-const CUT_SHORTCUT: &str = "Ctrl+X";
-
-#[cfg(target_os = "macos")]
-const COPY_SHORTCUT: &str = "⌘C";
-#[cfg(not(target_os = "macos"))]
-const COPY_SHORTCUT: &str = "Ctrl+C";
-
-#[cfg(target_os = "macos")]
-const PASTE_SHORTCUT: &str = "⌘V";
-#[cfg(not(target_os = "macos"))]
-const PASTE_SHORTCUT: &str = "Ctrl+V";
-
-#[cfg(target_os = "macos")]
-const SELECT_ALL_SHORTCUT: &str = "⌘A";
-#[cfg(not(target_os = "macos"))]
-const SELECT_ALL_SHORTCUT: &str = "Ctrl+A";
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct MenuState {
-    pub(crate) can_undo: bool,
-    pub(crate) can_redo: bool,
-    pub(crate) has_selection: bool,
-    pub(crate) has_content: bool,
-    pub(crate) reveal_in_file_manager_enabled: bool,
-}
-
 #[derive(Debug, Clone)]
 enum MenuEntry {
     Item { label: String, shortcut: String, message: Option<Message> },
@@ -356,10 +321,10 @@ fn custom_entries(entries: &[ContextMenuEntry]) -> Vec<MenuEntry> {
 }
 
 fn default_entries(
-    state: MenuState,
+    context: ActionContext,
     translations: &Translations,
 ) -> Vec<MenuEntry> {
-    let mut entries = if state.reveal_in_file_manager_enabled {
+    let mut entries = if context.reveal_in_file_manager_enabled {
         vec![
             MenuEntry::Item {
                 label: translations.context_menu_reveal_in_file_manager(),
@@ -375,23 +340,23 @@ fn default_entries(
         MenuEntry::Item {
             label: translations.context_menu_undo(),
             shortcut: UNDO_SHORTCUT.to_string(),
-            message: state.can_undo.then_some(Message::Undo),
+            message: context.can_undo.then_some(Message::Undo),
         },
         MenuEntry::Item {
             label: translations.context_menu_redo(),
             shortcut: REDO_SHORTCUT.to_string(),
-            message: state.can_redo.then_some(Message::Redo),
+            message: context.can_redo.then_some(Message::Redo),
         },
         MenuEntry::Separator,
         MenuEntry::Item {
             label: translations.context_menu_cut(),
             shortcut: CUT_SHORTCUT.to_string(),
-            message: state.has_selection.then_some(Message::Cut),
+            message: context.has_selection.then_some(Message::Cut),
         },
         MenuEntry::Item {
             label: translations.context_menu_copy(),
             shortcut: COPY_SHORTCUT.to_string(),
-            message: state.has_selection.then_some(Message::Copy),
+            message: context.has_selection.then_some(Message::Copy),
         },
         MenuEntry::Item {
             label: translations.context_menu_paste(),
@@ -402,7 +367,7 @@ fn default_entries(
         MenuEntry::Item {
             label: translations.context_menu_select_all(),
             shortcut: SELECT_ALL_SHORTCUT.to_string(),
-            message: state.has_content.then_some(Message::SelectAll),
+            message: context.has_content.then_some(Message::SelectAll),
         },
     ]);
     entries
@@ -411,7 +376,7 @@ fn default_entries(
 fn build_entries(
     custom: &[ContextMenuEntry],
     default_context_menu_enabled: bool,
-    state: MenuState,
+    context: ActionContext,
     translations: &Translations,
 ) -> Vec<MenuEntry> {
     let mut entries = custom_entries(custom);
@@ -419,7 +384,7 @@ fn build_entries(
         if !entries.is_empty() {
             entries.push(MenuEntry::Separator);
         }
-        entries.extend(default_entries(state, translations));
+        entries.extend(default_entries(context, translations));
     }
     entries
 }
@@ -428,13 +393,13 @@ fn build_entries(
 pub(crate) fn view(
     custom: &[ContextMenuEntry],
     default_context_menu_enabled: bool,
-    state: MenuState,
+    context: ActionContext,
     translations: Translations,
 ) -> Element<'static, Message> {
     let items = build_entries(
         custom,
         default_context_menu_enabled,
-        state,
+        context,
         &translations,
     )
     .into_iter()
@@ -540,7 +505,7 @@ mod tests {
                 "Extract function",
             ))],
             false,
-            MenuState::default(),
+            ActionContext::default(),
             &Translations::default(),
         );
 
@@ -559,7 +524,7 @@ mod tests {
         let entries = build_entries(
             &[ContextMenuEntry::item("custom.format", "Format document")],
             true,
-            MenuState::default(),
+            ActionContext::default(),
             &Translations::default(),
         );
 
@@ -571,7 +536,7 @@ mod tests {
     #[test]
     fn test_context_menu_uses_selected_language() {
         let translations = Translations::new(Language::ChineseSimplified);
-        let entries = default_entries(MenuState::default(), &translations);
+        let entries = default_entries(ActionContext::default(), &translations);
 
         assert_eq!(entries[0].label(), Some("撤消"));
         assert_eq!(entries[1].label(), Some("恢复"));
@@ -593,9 +558,9 @@ mod tests {
         let entries = build_entries(
             &[],
             true,
-            MenuState {
+            ActionContext {
                 reveal_in_file_manager_enabled: true,
-                ..MenuState::default()
+                ..ActionContext::default()
             },
             &translations,
         );
@@ -616,9 +581,9 @@ mod tests {
         let entries = build_entries(
             &[],
             false,
-            MenuState {
+            ActionContext {
                 reveal_in_file_manager_enabled: true,
-                ..MenuState::default()
+                ..ActionContext::default()
             },
             &Translations::default(),
         );
