@@ -1362,3 +1362,36 @@ fn test_the_arrow_keys_move_through_the_palette_instead_of_the_buffer() {
     assert!(carries(&messages, &EditorMessage::CommandPaletteNavigate(true)));
     assert_eq!(ui.cursor(), (0, 0), "the caret must not move in the buffer");
 }
+
+#[test]
+fn test_typing_a_query_goes_to_the_palette_instead_of_the_buffer() {
+    // The character-input counterpart of the arrow-key test above, and the
+    // easier half of the pair: the arrow keys need the palette's own canvas
+    // listener to be taken from the focused query field, while plain
+    // characters are captured by that field before the editor canvas is
+    // reached. So this asserts an integration rather than a branch of ours —
+    // no mutation of this crate makes it fail — but it is the property a user
+    // would notice breaking, and it pins the layering that provides it.
+    // `type_into` drives the real widget tree and applies every message it
+    // produces, so a leak would land in the buffer here as it would for a user.
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with("local x = 1");
+    let _ = ui.press(
+        Key::Character("p".into()),
+        Modifiers::COMMAND | Modifiers::SHIFT,
+    );
+
+    ui.type_into(PALETTE_FIELD, "fold all");
+
+    // Both halves of the claim: the keystrokes reached the palette, and they
+    // reached nothing else. The space matters as much as the letters — it is
+    // the one character that would be hardest to spot in a narrowed list.
+    assert!(ui.shows("Fold All"), "the query must reach the palette");
+    assert_eq!(
+        ui.content(),
+        "local x = 1",
+        "the query must not reach the buffer"
+    );
+    assert_eq!(ui.cursor(), (0, 0), "the caret must not move in the buffer");
+}

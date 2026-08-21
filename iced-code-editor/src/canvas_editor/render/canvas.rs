@@ -10,6 +10,7 @@ use syntect::parsing::SyntaxSet;
 
 use super::text::RenderContext;
 use super::wrapping::VisualLine;
+use crate::canvas_editor::features::color_preview;
 use crate::canvas_editor::{CodeEditor, HIGHLIGHT_LINES_PER_FRAME, Message};
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
@@ -135,6 +136,12 @@ impl canvas::Program<Message> for CodeEditor {
                     height: bounds.height,
                 };
                 frame.with_clip(code_clip, |f| {
+                    // Scoped to this pass: the memo is keyed on line index
+                    // alone, so it must not outlive a buffer that cannot
+                    // change underneath it.
+                    let mut color_literals =
+                        color_preview::LineLiterals::default();
+
                     for (idx, visual_line) in visual_lines_for_content
                         .iter()
                         .enumerate()
@@ -153,7 +160,13 @@ impl canvas::Program<Message> for CodeEditor {
                             syntax_theme,
                         );
                         self.draw_bracket_pair_colors(f, &ctx, visual_line, y);
-                        self.draw_color_swatches(f, &ctx, visual_line, y);
+                        self.draw_color_swatches(
+                            f,
+                            &ctx,
+                            visual_line,
+                            y,
+                            &mut color_literals,
+                        );
                         self.draw_fold_collapsed_marker(
                             f,
                             &ctx,

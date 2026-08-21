@@ -579,8 +579,8 @@ impl CodeEditor {
 
     /// Draws the inline color-preview swatches for `visual_line`.
     ///
-    /// Every color literal found by [`color_preview::color_literals`] gets a
-    /// small square, filled with the color it denotes, drawn just after it.
+    /// Every color literal found on the logical line gets a small square,
+    /// filled with the color it denotes, drawn just after it.
     /// The square is framed so that a color close to the editor background
     /// stays visible, and translucent colors are drawn over a background-filled
     /// square so their opacity reads correctly. No-op when the feature is
@@ -591,7 +591,10 @@ impl CodeEditor {
     /// when the square extends under it.
     ///
     /// A literal split by soft wrapping is drawn once, on the segment holding
-    /// its last character, which is where the swatch belongs.
+    /// its last character, which is where the swatch belongs. Every segment of
+    /// a wrapped line therefore has to know the whole line's literals, which
+    /// is what `literals` is for: it scans each logical line once and hands
+    /// the result to all of that line's segments.
     ///
     /// # Arguments
     ///
@@ -599,12 +602,14 @@ impl CodeEditor {
     /// * `ctx` - Rendering context containing visual lines and metrics
     /// * `visual_line` - The visual line to render
     /// * `y` - Y position for rendering
+    /// * `literals` - Per-draw-pass memo of the logical lines already scanned
     pub(super) fn draw_color_swatches(
         &self,
         frame: &mut canvas::Frame,
         ctx: &RenderContext,
         visual_line: &VisualLine,
         y: f32,
+        literals: &mut color_preview::LineLiterals,
     ) {
         if !self.show_color_previews {
             return;
@@ -614,7 +619,7 @@ impl CodeEditor {
         let side = (ctx.line_height * SWATCH_SIZE_RATIO).floor().max(1.0);
         let inner_side = (side - 2.0 * SWATCH_BORDER_WIDTH).max(1.0);
 
-        for literal in color_preview::color_literals(line_content) {
+        for literal in literals.get(&self.buffer, visual_line.logical_line) {
             if literal.end_col <= visual_line.start_col
                 || literal.end_col > visual_line.end_col
             {

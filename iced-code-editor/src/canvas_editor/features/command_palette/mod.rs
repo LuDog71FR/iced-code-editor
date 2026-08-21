@@ -79,6 +79,12 @@ pub(crate) struct CommandPaletteState {
     /// Stable ID of the result list, used to scroll the highlighted row
     /// into view while navigating with the keyboard.
     pub(crate) scrollable_id: Id,
+    /// Index of the row currently scrolled to the top of the list.
+    ///
+    /// Tracked rather than derived from [`Self::selected`] so the list only
+    /// moves when the highlight would otherwise leave the window — see
+    /// [`window_origin`].
+    pub(crate) first_visible_row: usize,
 }
 
 impl Default for CommandPaletteState {
@@ -89,6 +95,7 @@ impl Default for CommandPaletteState {
             selected: 0,
             input_id: Id::unique(),
             scrollable_id: Id::unique(),
+            first_visible_row: 0,
         }
     }
 }
@@ -106,8 +113,17 @@ impl CommandPaletteState {
     /// type this time.
     pub(crate) fn open(&mut self) {
         self.query.clear();
-        self.selected = 0;
+        self.select_first_row();
         self.is_open = true;
+    }
+
+    /// Highlights the first row and scrolls the list back to the top.
+    ///
+    /// The two always move together: a highlight on row 0 under a list still
+    /// scrolled to row 12 shows a window with nothing highlighted in it.
+    pub(crate) fn select_first_row(&mut self) {
+        self.selected = 0;
+        self.first_visible_row = 0;
     }
 
     /// Closes the palette, leaving its query for the next [`Self::open`] to
@@ -117,19 +133,56 @@ impl CommandPaletteState {
     }
 
     /// Moves the highlight by `delta` rows over a list of `len` entries,
-    /// wrapping around at both ends.
+    /// wrapping around at both ends, and scrolls the list only as far as
+    /// keeping the new highlight visible requires.
     ///
     /// Wrapping matches the LSP completion menu, and makes the last command
     /// reachable with a single `Up` from the top.
     pub(crate) fn navigate(&mut self, delta: i32, len: usize) {
         if len == 0 {
-            self.selected = 0;
+            self.select_first_row();
             return;
         }
-        let len = i32::try_from(len).unwrap_or(i32::MAX);
+        let wrap = i32::try_from(len).unwrap_or(i32::MAX);
         let current = i32::try_from(self.selected).unwrap_or(0);
-        let next = (current + delta).rem_euclid(len);
+        let next = (current + delta).rem_euclid(wrap);
         self.selected = usize::try_from(next).unwrap_or(0);
+        self.first_visible_row =
+            window_origin(self.selected, self.first_visible_row, len);
+    }
+}
+
+/// Returns the row the list should be scrolled to so that `selected` is
+/// visible, moving as little as possible.
+///
+/// The window shows [`dialog::MAX_VISIBLE_ROWS`] rows starting at `origin`.
+/// A highlight already inside that window leaves it where it is — scrolling on
+/// every keystroke would make the list slide under the reader for no reason.
+/// A highlight above the window becomes the new top row; one below it becomes
+/// the new bottom row, which is what wrapping from the first row to the last
+/// produces.
+///
+/// # Arguments
+///
+/// * `selected` - Index of the highlighted row
+/// * `origin` - Row currently scrolled to the top of the list
+/// * `len` - Number of rows in the list
+///
+/// # Returns
+///
+/// The row to scroll to the top, never far enough to leave a gap below the
+/// last row
+fn window_origin(selected: usize, origin: usize, len: usize) -> usize {
+    // Scrolling past this would show empty space under the final row.
+    let last_origin = len.saturating_sub(dialog::MAX_VISIBLE_ROWS);
+    let origin = origin.min(last_origin);
+
+    if selected < origin {
+        selected
+    } else if selected >= origin + dialog::MAX_VISIBLE_ROWS {
+        (selected + 1 - dialog::MAX_VISIBLE_ROWS).min(last_origin)
+    } else {
+        origin
     }
 }
 
@@ -388,7 +441,11 @@ impl CodeEditor {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+
+    use super::dialog::MAX_VISIBLE_ROWS;
     use super::*;
+    use crate::canvas_editor::compare_floats;
     use crate::{Language, Translations};
 
     fn labels(entries: &[PaletteEntry]) -> Vec<&str> {
@@ -523,11 +580,120 @@ mod tests {
         let mut state = CommandPaletteState::new();
         state.query = "fold".to_string();
         state.selected = 3;
+        state.first_visible_row = 3;
 
         state.open();
 
         assert!(state.is_open);
         assert!(state.query.is_empty());
         assert_eq!(state.selected, 0);
+        assert_eq!(state.first_visible_row, 0);
+    }
+
+    // ---- Scrolling the result list ----
+    //
+    // `window_origin` is the whole of the scroll arithmetic: the offset handed
+    // to iced is `rows_to_pixels(first_visible_row)`, so a row index that is
+    // right here is a pixel offset that is right there. `LONG` is longer than
+    // one window, which is the only case where scrolling happens at all.
+
+    /// A list comfortably longer than one window.
+    const LONG: usize = MAX_VISIBLE_ROWS * 2 + 5;
+
+    #[test]
+    fn test_window_origin_does_not_move_for_a_row_already_visible() {
+        // Every row of the first window, including its last, must leave the
+        // list where it is — this is what the offset used to get wrong, by
+        // scrolling the highlighted row up to the top on the very first Down.
+        for selected in 0..MAX_VISIBLE_ROWS {
+            assert_eq!(
+                window_origin(selected, 0, LONG),
+                0,
+                "row {selected} is already visible in the first window"
+            );
+        }
+    }
+
+    #[test]
+    fn test_window_origin_scrolls_by_one_row_when_the_highlight_moves_past_the_bottom()
+     {
+        assert_eq!(window_origin(MAX_VISIBLE_ROWS, 0, LONG), 1);
+        assert_eq!(window_origin(MAX_VISIBLE_ROWS + 1, 1, LONG), 2);
+    }
+
+    #[test]
+    fn test_window_origin_puts_a_row_above_the_window_at_the_top() {
+        assert_eq!(window_origin(4, 7, LONG), 4);
+    }
+
+    #[test]
+    fn test_window_origin_never_scrolls_past_the_last_full_window() {
+        let last_origin = LONG - MAX_VISIBLE_ROWS;
+
+        // Wrapping from the first row up to the last must show the final
+        // window, not scroll the last row to the top and leave a gap below it.
+        assert_eq!(window_origin(LONG - 1, 0, LONG), last_origin);
+        // An origin left over from a longer list is clamped back in range.
+        assert_eq!(window_origin(0, LONG, LONG), 0);
+    }
+
+    #[test]
+    fn test_window_origin_stays_at_zero_for_a_list_that_fits() {
+        for len in [0, 1, MAX_VISIBLE_ROWS] {
+            for selected in 0..len {
+                assert_eq!(
+                    window_origin(selected, 0, len),
+                    0,
+                    "a list of {len} rows never scrolls"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_navigating_a_full_list_keeps_the_highlight_inside_the_window() {
+        let mut state = CommandPaletteState::new();
+
+        // One full lap down and back up: the highlight must never leave the
+        // window, at any point, in either direction.
+        for delta in [1, -1] {
+            for _ in 0..=LONG {
+                state.navigate(delta, LONG);
+                let origin = state.first_visible_row;
+                assert!(
+                    (origin..origin + MAX_VISIBLE_ROWS)
+                        .contains(&state.selected),
+                    "row {} is outside the window at {origin}",
+                    state.selected
+                );
+                assert!(
+                    origin <= LONG - MAX_VISIBLE_ROWS,
+                    "the window starts at {origin}, past the end of the list"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_row_offsets_account_for_the_gap_between_rows() {
+        // A row's offset is its pitch, not its height: the two differ by the
+        // one-pixel gap the list puts between rows, and a scroll computed
+        // from the height alone drifts by one pixel per row.
+        let two_rows = dialog::rows_to_pixels(2);
+        let one_row = dialog::rows_to_pixels(1);
+
+        assert_eq!(
+            compare_floats(dialog::rows_to_pixels(0), 0.0),
+            Ordering::Equal
+        );
+        assert_eq!(
+            compare_floats(two_rows - one_row, one_row),
+            Ordering::Equal,
+            "rows must be evenly pitched"
+        );
+        assert!(
+            one_row > 26.0,
+            "the pitch must exceed the 26px row height by the row gap"
+        );
     }
 }

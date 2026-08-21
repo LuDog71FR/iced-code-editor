@@ -17,13 +17,40 @@ use crate::i18n::Translations;
 
 /// Height of a single command row, in pixels.
 ///
-/// Fixed rather than content-driven because the scroll offset that keeps the
-/// highlighted row visible is computed from it (see
+/// Fixed rather than content-driven because the geometry that keeps the
+/// highlighted row visible is computed from it (see [`rows_to_pixels`] and
 /// `CodeEditor::scroll_command_palette_to_selection`).
-pub(crate) const ROW_HEIGHT: f32 = 26.0;
+const ROW_HEIGHT: f32 = 26.0;
+
+/// Vertical gap inserted between two consecutive rows.
+const ROW_SPACING: f32 = 1.0;
+
+/// Distance from the top of one row to the top of the next.
+///
+/// This — not [`ROW_HEIGHT`] — is the unit every scroll computation works in:
+/// the rows are laid out in a `column` with [`ROW_SPACING`] between them, so a
+/// list scrolled by `n * ROW_HEIGHT` would drift by one pixel per row.
+const ROW_PITCH: f32 = ROW_HEIGHT + ROW_SPACING;
 
 /// Number of command rows shown before the list starts scrolling.
-const MAX_VISIBLE_ROWS: usize = 10;
+pub(crate) const MAX_VISIBLE_ROWS: usize = 10;
+
+/// Converts a row count into the pixel distance it spans.
+///
+/// Used both for the list's fixed height and for the scroll offset, so the two
+/// cannot disagree about how tall a row is.
+///
+/// # Arguments
+///
+/// * `rows` - Number of rows to measure
+///
+/// # Returns
+///
+/// The distance from the top of the first row to the top of row `rows`,
+/// saturating on a row count no list could ever reach
+pub(crate) fn rows_to_pixels(rows: usize) -> f32 {
+    ROW_PITCH * f32::from(u16::try_from(rows).unwrap_or(u16::MAX))
+}
 
 /// Width of the palette, in pixels.
 const PALETTE_WIDTH: f32 = 560.0;
@@ -119,11 +146,13 @@ pub(crate) fn view<'a>(
             })
             .collect::<Vec<_>>();
 
+        // The last row of the window is not followed by a gap, so the window
+        // is one spacing shorter than the pitch it is made of. Getting this
+        // exactly right is what lets the scroll offset land on a row boundary.
         let visible_rows = entries.len().min(MAX_VISIBLE_ROWS);
-        let list_height =
-            ROW_HEIGHT * f32::from(u16::try_from(visible_rows).unwrap_or(1));
+        let list_height = rows_to_pixels(visible_rows) - ROW_SPACING;
 
-        scrollable(column(rows).spacing(1))
+        scrollable(column(rows).spacing(ROW_SPACING))
             .id(state.scrollable_id.clone())
             .height(Length::Fixed(list_height))
             .width(Length::Fill)

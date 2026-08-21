@@ -12,6 +12,8 @@
 
 use iced::Color;
 
+use crate::buffer::TextBuffer;
+
 /// Maximum number of characters scanned while looking for the closing
 /// parenthesis of a functional notation such as `rgb(…)`.
 ///
@@ -80,6 +82,51 @@ pub(crate) fn color_literals(line: &str) -> Vec<ColorLiteral> {
     }
 
     literals
+}
+
+/// Reuses one logical line's literals across the visual segments it wraps
+/// into.
+///
+/// [`color_literals`] allocates and scans the whole logical line, but the
+/// renderer walks *visual* lines: without this, a line soft-wrapped into sixty
+/// segments would be scanned sixty times for the same result, since a literal
+/// can sit in any one of them.
+///
+/// The memo is keyed on the line index alone, so it is only valid for as long
+/// as the buffer cannot change — that is, within a single draw pass. Build one
+/// per pass and drop it; never keep one across edits.
+#[derive(Debug, Default)]
+pub(crate) struct LineLiterals {
+    /// Line the memo currently holds, if any.
+    line: Option<usize>,
+    /// Literals found on that line.
+    literals: Vec<ColorLiteral>,
+}
+
+impl LineLiterals {
+    /// Returns the literals on `line`, scanning it only when it differs from
+    /// the line asked for last.
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - The buffer the line belongs to
+    /// * `line` - Index of the logical line to scan
+    ///
+    /// # Returns
+    ///
+    /// The literals found, ordered by increasing column
+    pub(crate) fn get(
+        &mut self,
+        buffer: &TextBuffer,
+        line: usize,
+    ) -> &[ColorLiteral] {
+        if self.line != Some(line) {
+            self.literals = color_literals(buffer.line(line));
+            self.line = Some(line);
+        }
+
+        &self.literals
+    }
 }
 
 /// Returns whether the character at `col` can begin a color literal.
@@ -335,7 +382,7 @@ fn parse_ratio(component: &str, full_scale: f32) -> Option<f32> {
 mod tests {
     use std::cmp::Ordering;
 
-    use super::{ColorLiteral, color_literals};
+    use super::{ColorLiteral, LineLiterals, TextBuffer, color_literals};
     use crate::canvas_editor::compare_floats;
     use iced::Color;
 
@@ -512,6 +559,38 @@ mod tests {
     #[test]
     fn test_out_of_range_components_are_clamped() {
         assert_single("rgb(300, -20, 0)", 0, 16, Color::from_rgb8(255, 0, 0));
+    }
+
+    #[test]
+    fn test_line_literals_returns_each_line_it_is_asked_for() {
+        let buffer = TextBuffer::new("#ff0000\nplain\nrgb(0, 0, 255)");
+        let mut memo = LineLiterals::default();
+
+        assert_eq!(memo.get(&buffer, 0).len(), 1);
+        assert!(memo.get(&buffer, 1).is_empty());
+        assert_eq!(memo.get(&buffer, 2).len(), 1);
+        // Coming back to a line already seen must still answer for that line,
+        // not for the one asked about in between.
+        assert_eq!(memo.get(&buffer, 0).len(), 1);
+    }
+
+    #[test]
+    fn test_line_literals_does_not_rescan_the_line_it_already_holds() {
+        // The memo is keyed on the line index alone, so a second call for the
+        // same index answers from the cache without looking at the buffer.
+        // Handing it a *different* buffer is how that becomes observable — and
+        // it is also the contract: one memo per draw pass, never across edits.
+        let scanned = TextBuffer::new("#ff0000");
+        let changed = TextBuffer::new("no color here");
+        let mut memo = LineLiterals::default();
+
+        assert_eq!(memo.get(&scanned, 0).len(), 1);
+
+        assert_eq!(
+            memo.get(&changed, 0).len(),
+            1,
+            "line 0 was already held, so it must not have been scanned again"
+        );
     }
 
     #[test]

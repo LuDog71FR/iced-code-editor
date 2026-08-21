@@ -5,7 +5,7 @@ use iced::widget::operation::{focus, scroll_to};
 use iced::widget::scrollable::AbsoluteOffset;
 
 use super::PaletteAction;
-use super::dialog::ROW_HEIGHT;
+use super::dialog::rows_to_pixels;
 use crate::canvas_editor::{CodeEditor, Message};
 
 impl CodeEditor {
@@ -47,7 +47,7 @@ impl CodeEditor {
         query: &str,
     ) -> Task<Message> {
         self.command_palette_state.query = query.to_string();
-        self.command_palette_state.selected = 0;
+        self.command_palette_state.select_first_row();
         self.scroll_command_palette_to_selection()
     }
 
@@ -97,16 +97,19 @@ impl CodeEditor {
         Task::done(message)
     }
 
-    /// Scrolls the result list so the highlighted row stays visible.
+    /// Scrolls the result list to the window computed by
+    /// [`super::CommandPaletteState::navigate`].
+    ///
+    /// The offset is taken from `first_visible_row` rather than from
+    /// `selected`: scrolling to the selected row would pin it to the top of
+    /// the list, so the very first `Down` would push row 0 out of sight.
     fn scroll_command_palette_to_selection(&self) -> Task<Message> {
-        let offset = ROW_HEIGHT
-            * f32::from(
-                u16::try_from(self.command_palette_state.selected)
-                    .unwrap_or(u16::MAX),
-            );
         scroll_to(
             self.command_palette_state.scrollable_id.clone(),
-            AbsoluteOffset { x: 0.0, y: offset },
+            AbsoluteOffset {
+                x: 0.0,
+                y: rows_to_pixels(self.command_palette_state.first_visible_row),
+            },
         )
     }
 }

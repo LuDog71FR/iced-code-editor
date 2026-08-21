@@ -860,7 +860,102 @@ impl Translations {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
+
+    /// Every locale file, paired with the name used in failure messages.
+    ///
+    /// English comes first: it is the reference every other file is compared
+    /// against, and the fallback `rust_i18n` resolves a missing key through.
+    const LOCALE_FILES: [(&str, &str); 8] = [
+        ("en", include_str!("../locales/en.yml")),
+        ("fr", include_str!("../locales/fr.yml")),
+        ("es", include_str!("../locales/es.yml")),
+        ("de", include_str!("../locales/de.yml")),
+        ("it", include_str!("../locales/it.yml")),
+        ("pt-BR", include_str!("../locales/pt-BR.yml")),
+        ("pt-PT", include_str!("../locales/pt-PT.yml")),
+        ("zh-CN", include_str!("../locales/zh-CN.yml")),
+    ];
+
+    /// Collects the `section.key` paths a locale file defines.
+    ///
+    /// Deliberately a five-line reader rather than a YAML dependency: the
+    /// files are a flat list of `section:` headers with two-space-indented
+    /// entries under them, and reading them structurally is the whole point —
+    /// going through `rust_i18n` is exactly what cannot see a missing key.
+    fn locale_keys(yaml: &str) -> BTreeSet<String> {
+        let mut keys = BTreeSet::new();
+        let mut section = String::new();
+
+        for line in yaml.lines() {
+            let line = line.trim_end();
+            if line.trim_start().is_empty()
+                || line.trim_start().starts_with('#')
+            {
+                continue;
+            }
+
+            match line.strip_prefix("  ") {
+                // Indented: an entry belonging to the current section.
+                Some(entry) => {
+                    if let Some((name, _)) = entry.split_once(':') {
+                        keys.insert(format!("{section}.{}", name.trim()));
+                    }
+                }
+                // Flush left: a new section header.
+                None => {
+                    if let Some((name, _)) = line.split_once(':') {
+                        section = name.trim().to_string();
+                    }
+                }
+            }
+        }
+
+        keys
+    }
+
+    #[test]
+    fn test_locale_keys_reads_the_section_and_entry_layout() {
+        // Guards the guard: a reader that silently returned nothing would make
+        // every comparison below pass on an empty set.
+        let keys = locale_keys(
+            "# a comment\nsearch:\n  placeholder: \"Search...\"\n\nreplace:\n  all_tooltip: \"Replace all matches\"\n",
+        );
+
+        assert_eq!(
+            keys.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["replace.all_tooltip", "search.placeholder"]
+        );
+    }
+
+    #[test]
+    fn test_every_locale_defines_exactly_the_keys_english_defines() {
+        // The structural check the runtime ones cannot perform: with
+        // `fallback = "en"`, a key present in `en.yml` and missing from
+        // `fr.yml` resolves to the *English* string, so no assertion made
+        // through `Translations` can tell the two apart. Comparing the files
+        // themselves is what catches a translator skipping an entry.
+        let (_, english_source) = LOCALE_FILES[0];
+        let english = locale_keys(english_source);
+        assert!(
+            english.contains("command_palette.fold_all"),
+            "en.yml did not parse as expected"
+        );
+
+        for (name, source) in LOCALE_FILES {
+            let keys = locale_keys(source);
+            let missing: Vec<&String> = english.difference(&keys).collect();
+            let extra: Vec<&String> = keys.difference(&english).collect();
+
+            assert!(missing.is_empty(), "{name}.yml is missing {missing:?}");
+            assert!(
+                extra.is_empty(),
+                "{name}.yml defines {extra:?}, which en.yml does not"
+            );
+        }
+    }
 
     #[test]
     fn test_default_language() {
@@ -1188,10 +1283,17 @@ mod tests {
     }
 
     #[test]
-    fn test_command_palette_translations_cover_all_locales() {
-        // rust-i18n echoes the key path back when a key is missing from both
-        // the locale file and the English fallback, so an untranslated entry
-        // shows up as a label starting with "command_palette.".
+    fn test_every_command_palette_accessor_resolves_to_a_defined_key() {
+        // What this can catch: a typo in an accessor's `t!` key path. rust-i18n
+        // echoes the path back when it resolves to nothing, so the label comes
+        // out starting with "command_palette.".
+        //
+        // What it cannot: a key missing from one locale. `fallback = "en"`
+        // makes that resolve to the English string, which is neither empty nor
+        // a key path. Locale completeness is checked structurally instead, by
+        // `test_every_locale_defines_exactly_the_keys_english_defines`; the
+        // loop over all eight languages here is what proves every accessor is
+        // reachable in each of them, not that each has its own wording.
         let languages = [
             Language::English,
             Language::French,
