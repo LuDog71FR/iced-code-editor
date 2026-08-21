@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- feat: **Inline color previews**
+  - Every color literal in the visible text now gets a small filled square drawn just after it, so a palette reads at a glance instead of being decoded by eye. Recognized notations: CSS hexadecimal (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, short forms expanded by digit doubling), the Rust-style `0xrrggbb`/`0xrrggbbaa` spelling, and functional `rgb()`/`rgba()` with integer, float or percentage components
+  - Hexadecimal digit runs are taken at their maximum length and *then* validated, so `#12345` and `#1234567` are rejected outright rather than truncated to a shorter valid color, and a literal that would continue an identifier (`raw0xff0000`, `#deadbeefcafe`) is ignored
+  - The swatch is drawn as canvas geometry rather than text. Since Iced renders all text above all geometry, a square that extends under the following character (`#fff;`) leaves that character fully readable. Its frame uses `Style::gutter_border` so a color close to the editor background stays visible, and translucent colors are composited over `Style::background` so their opacity reads correctly
+  - A literal split by soft wrapping is drawn once, on the visual segment holding its last character
+  - Enabled by default; toggle via `set_show_color_previews(bool)` / `show_color_previews()` / `with_show_color_previews(bool)`, with a checkbox in the demo app's editor options panel
+  - Detection lives in `features/color_preview.rs` as a pure function over a line of text, covered by 17 unit tests (each notation, short-form expansion, uppercase digits and prefixes, percentages, alpha, several literals per line, character-based columns on non-ASCII lines, clamping of out-of-range components, and every rejection rule)
+
 - feat: **Indentation guides**
   - A thin vertical line is drawn at every indentation level, so the nesting of a block is visible without following its braces. Guide spacing follows the editor's configured `IndentStyle`, meaning 2-space, 4-space, 8-space and tab-indented documents each get guides where their own indent levels actually fall, rather than at a fixed stride
   - Blank lines take the *smaller* of the levels of the nearest non-blank line above and below them: a blank line inside a block keeps the block's guides, while a blank line between two blocks does not sprout guides that lead nowhere. The lookup is bounded at 200 blank lines in each direction, so a file that is mostly empty cannot turn every visible line into a full-buffer scan

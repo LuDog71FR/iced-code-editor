@@ -560,6 +560,80 @@ impl CodeEditor {
         self
     }
 
+    /// Enables or disables inline color previews.
+    ///
+    /// An inline color preview is a small square drawn just after a color
+    /// literal — `#1e1e2e`, `0xFF6B6B`, `rgb(58, 123, 213)` — filled with the
+    /// color the literal denotes, so a palette can be read without decoding
+    /// hexadecimal by eye. Toggling this setting clears the content cache to
+    /// trigger an immediate redraw.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to draw color-preview swatches
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("body { color: #f0c; }", "css");
+    /// editor.set_show_color_previews(false);
+    /// ```
+    pub fn set_show_color_previews(&mut self, enabled: bool) {
+        if self.show_color_previews != enabled {
+            self.show_color_previews = enabled;
+            self.content_cache.clear();
+        }
+    }
+
+    /// Returns whether inline color previews are drawn.
+    ///
+    /// # Returns
+    ///
+    /// `true` if color-preview swatches are rendered, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("body { color: #f0c; }", "css");
+    /// // Enabled by default.
+    /// assert!(editor.show_color_previews());
+    ///
+    /// editor.set_show_color_previews(false);
+    /// assert!(!editor.show_color_previews());
+    /// ```
+    pub fn show_color_previews(&self) -> bool {
+        self.show_color_previews
+    }
+
+    /// Sets the inline color-preview display with builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to draw color-preview swatches
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("body { color: #f0c; }", "css")
+    ///     .with_show_color_previews(false);
+    /// assert!(!editor.show_color_previews());
+    /// ```
+    #[must_use]
+    pub fn with_show_color_previews(mut self, enabled: bool) -> Self {
+        self.show_color_previews = enabled;
+        self
+    }
+
     /// Enables or disables the matching-bracket/quote-pair highlight overlay.
     ///
     /// When enabled, placing the cursor next to a bracket (`(`, `)`, `[`,
@@ -1123,6 +1197,21 @@ mod tests {
 
         let editor = CodeEditor::new("", "rs").with_show_indent_guides(false);
         assert!(!editor.show_indent_guides());
+    }
+
+    #[test]
+    fn test_show_color_previews_configuration() {
+        let mut editor = CodeEditor::new("", "rs");
+        assert!(editor.show_color_previews());
+
+        editor.set_show_color_previews(false);
+        assert!(!editor.show_color_previews());
+
+        editor.set_show_color_previews(true);
+        assert!(editor.show_color_previews());
+
+        let editor = CodeEditor::new("", "rs").with_show_color_previews(false);
+        assert!(!editor.show_color_previews());
     }
 
     #[test]

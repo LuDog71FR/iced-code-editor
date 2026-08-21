@@ -422,7 +422,7 @@ pub fn view_editor_pane<'a>(
         .placeholder("Choose template...")
         .text_size(14);
 
-    // One checkbox per `EditorToggle`, in place of eleven near-identical
+    // One checkbox per `EditorToggle`, in place of thirteen near-identical
     // `checkbox(...).on_toggle(...)` blocks that used to live here.
     let toggle_checkboxes: Vec<Element<'_, Message>> = EditorToggle::ALL
         .into_iter()

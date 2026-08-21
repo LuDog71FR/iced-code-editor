@@ -46,6 +46,7 @@ Screenshot of the demo application:
 - **Toggle comment** on the current line or selection (`Ctrl+/`)
 - **Visible whitespace rendering** — spaces shown as `·`, tabs as `→`
 - **Indentation guides** — vertical lines marking each indentation level
+- **Inline color previews** — a swatch next to every `#rrggbb`, `0xrrggbb` or `rgb(…)` literal
 - **Optional Vim mode** with Normal, Insert, Visual, and Visual Line modes
 
 ## Quick Start
@@ -581,6 +582,34 @@ if editor.show_indent_guides() {
 ```
 
 Blank lines take the level of the surrounding block, so a blank line *inside* a block keeps its guides while a blank line *between* two blocks does not. Guides are not drawn on wrapped continuation segments, since those restart at the left edge of the code area. The guide color is derived automatically from the active theme via `Style::indent_guide_color` and can be overridden in a custom `Style`.
+
+### Inline color previews
+
+Inline color previews are **enabled by default**. Every color literal in the visible text gets a small square, filled with the color it denotes, drawn just after it — so a palette can be read at a glance instead of decoded by eye.
+
+The recognized notations are:
+
+| Notation | Examples |
+| --- | --- |
+| CSS hexadecimal | `#f0c`, `#f008`, `#1e1e2e`, `#ff000080` |
+| Rust-style hexadecimal | `0x3A7BD5`, `0xFF6B6BCC` |
+| Functional | `rgb(58, 123, 213)`, `rgba(255, 0, 0, 0.5)`, `rgb(100%, 0%, 50%)` |
+
+```rust
+// Disable inline color previews
+editor.set_show_color_previews(false);
+
+// Or use builder pattern during initialization
+let editor = CodeEditor::new("body { color: #f0c; }", "css")
+    .with_show_color_previews(false);
+
+// Check current state
+if editor.show_color_previews() {
+    println!("Color previews are visible");
+}
+```
+
+Detection is purely lexical, so a literal inside a comment or a string gets a swatch too — which is what a reader looking for colors expects. Runs of hexadecimal digits of any other length are rejected (`#12345` is not a color), and a literal that continues an identifier (`raw0xff0000`) is ignored. The swatch is drawn as geometry and Iced renders all text above all geometry, so the character following the literal stays readable even when the square extends under it. Its frame uses `Style::gutter_border`, and translucent colors are composited over `Style::background`.
 
 ### Indentation
 

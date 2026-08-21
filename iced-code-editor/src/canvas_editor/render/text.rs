@@ -15,7 +15,9 @@ use crate::buffer::text_utils::char_range_to_byte_range;
 
 use super::wrapping::VisualLine;
 use crate::canvas_editor::IndentStyle;
-use crate::canvas_editor::features::{bracket_match, indent_guides};
+use crate::canvas_editor::features::{
+    bracket_match, color_preview, indent_guides,
+};
 use crate::canvas_editor::{
     CodeEditor, HighlightCache, TAB_WIDTH, measure_char_width,
     measure_text_width,
@@ -23,6 +25,15 @@ use crate::canvas_editor::{
 
 /// Width in pixels of a single indentation guide line.
 const INDENT_GUIDE_WIDTH: f32 = 1.0;
+
+/// Side of a color-preview swatch, as a fraction of the line height.
+const SWATCH_SIZE_RATIO: f32 = 0.6;
+
+/// Horizontal gap in pixels between a color literal and its swatch.
+const SWATCH_GAP: f32 = 3.0;
+
+/// Thickness in pixels of the border framing a color-preview swatch.
+const SWATCH_BORDER_WIDTH: f32 = 1.0;
 
 /// Computes geometry (x start and width) for a text segment used in rendering or highlighting.
 ///
@@ -563,6 +574,83 @@ impl CodeEditor {
                 Size::new(INDENT_GUIDE_WIDTH, ctx.line_height),
                 self.style.indent_guide_color,
             );
+        }
+    }
+
+    /// Draws the inline color-preview swatches for `visual_line`.
+    ///
+    /// Every color literal found by [`color_preview::color_literals`] gets a
+    /// small square, filled with the color it denotes, drawn just after it.
+    /// The square is framed so that a color close to the editor background
+    /// stays visible, and translucent colors are drawn over a background-filled
+    /// square so their opacity reads correctly. No-op when the feature is
+    /// disabled.
+    ///
+    /// The swatch is plain geometry, and iced draws all text above all
+    /// geometry, so the character following the literal stays readable even
+    /// when the square extends under it.
+    ///
+    /// A literal split by soft wrapping is drawn once, on the segment holding
+    /// its last character, which is where the swatch belongs.
+    ///
+    /// # Arguments
+    ///
+    /// * `frame` - The canvas frame to draw on
+    /// * `ctx` - Rendering context containing visual lines and metrics
+    /// * `visual_line` - The visual line to render
+    /// * `y` - Y position for rendering
+    pub(super) fn draw_color_swatches(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext,
+        visual_line: &VisualLine,
+        y: f32,
+    ) {
+        if !self.show_color_previews {
+            return;
+        }
+
+        let line_content = self.buffer.line(visual_line.logical_line);
+        let side = (ctx.line_height * SWATCH_SIZE_RATIO).floor().max(1.0);
+        let inner_side = (side - 2.0 * SWATCH_BORDER_WIDTH).max(1.0);
+
+        for literal in color_preview::color_literals(line_content) {
+            if literal.end_col <= visual_line.start_col
+                || literal.end_col > visual_line.end_col
+            {
+                continue;
+            }
+
+            let (x, _width) = calculate_segment_geometry(
+                line_content,
+                visual_line.start_col,
+                literal.end_col,
+                literal.end_col,
+                ctx.gutter_width + 5.0,
+                ctx.full_char_width,
+                ctx.char_width,
+            );
+            let border_position = Point::new(
+                x - ctx.horizontal_scroll_offset + SWATCH_GAP,
+                y + (ctx.line_height - side) / 2.0,
+            );
+            let inner_position = Point::new(
+                border_position.x + SWATCH_BORDER_WIDTH,
+                border_position.y + SWATCH_BORDER_WIDTH,
+            );
+
+            frame.fill_rectangle(
+                border_position,
+                Size::new(side, side),
+                self.style.gutter_border,
+            );
+            for color in [self.style.background, literal.color] {
+                frame.fill_rectangle(
+                    inner_position,
+                    Size::new(inner_side, inner_side),
+                    color,
+                );
+            }
         }
     }
 

@@ -195,7 +195,7 @@ impl std::fmt::Display for Template {
 /// Collecting them here — rather than one `Message` variant, one `update`
 /// handler, and one hand-written checkbox per setting — is what lets
 /// [`EditorToggle::ALL`] drive both the options panel layout and the
-/// `update` dispatch from a single list, instead of eleven near-identical
+/// `update` dispatch from a single list, instead of thirteen near-identical
 /// copies of the same three pieces of code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EditorToggle {
@@ -215,6 +215,8 @@ pub enum EditorToggle {
     ShowWhitespace,
     /// Draws vertical guides at each indentation level.
     IndentGuides,
+    /// Draws a color swatch next to each color literal.
+    ColorPreviews,
     /// Highlights the bracket matching the one at the cursor.
     BracketMatchHighlight,
     /// Colors nested bracket pairs by nesting depth.
@@ -227,7 +229,7 @@ pub enum EditorToggle {
 
 impl EditorToggle {
     /// Every toggle, in the order the options panel displays them.
-    pub const ALL: [EditorToggle; 12] = [
+    pub const ALL: [EditorToggle; 13] = [
         EditorToggle::Wrap,
         EditorToggle::Folding,
         EditorToggle::AutoIndent,
@@ -236,6 +238,7 @@ impl EditorToggle {
         EditorToggle::LineNumbers,
         EditorToggle::ShowWhitespace,
         EditorToggle::IndentGuides,
+        EditorToggle::ColorPreviews,
         EditorToggle::BracketMatchHighlight,
         EditorToggle::BracketPairColorization,
         EditorToggle::Vim,
@@ -253,6 +256,7 @@ impl EditorToggle {
             EditorToggle::LineNumbers => "Show line numbers",
             EditorToggle::ShowWhitespace => "Show whitespace",
             EditorToggle::IndentGuides => "Show indentation guides",
+            EditorToggle::ColorPreviews => "Show color previews",
             EditorToggle::BracketMatchHighlight => "Highlight matching bracket",
             EditorToggle::BracketPairColorization => "Rainbow brackets",
             EditorToggle::Vim => "Vim mode (Cmd/Ctrl+Alt+V)",
@@ -271,6 +275,7 @@ impl EditorToggle {
             EditorToggle::LineNumbers => editor.line_numbers_enabled(),
             EditorToggle::ShowWhitespace => editor.show_whitespace(),
             EditorToggle::IndentGuides => editor.show_indent_guides(),
+            EditorToggle::ColorPreviews => editor.show_color_previews(),
             EditorToggle::BracketMatchHighlight => {
                 editor.bracket_match_highlight_enabled()
             }
@@ -305,6 +310,9 @@ impl EditorToggle {
             EditorToggle::ShowWhitespace => editor.set_show_whitespace(enabled),
             EditorToggle::IndentGuides => {
                 editor.set_show_indent_guides(enabled)
+            }
+            EditorToggle::ColorPreviews => {
+                editor.set_show_color_previews(enabled)
             }
             EditorToggle::BracketMatchHighlight => {
                 editor.set_bracket_match_highlight_enabled(enabled)

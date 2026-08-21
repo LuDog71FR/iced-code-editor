@@ -195,6 +195,8 @@ pub struct CodeEditor {
     pub(crate) show_whitespace: bool,
     /// Whether vertical indentation guides are drawn behind the text.
     pub(crate) show_indent_guides: bool,
+    /// Whether inline color-preview swatches are drawn next to color literals.
+    pub(crate) show_color_previews: bool,
     /// Whether the matching-bracket/quote-pair highlight overlay is enabled.
     pub(crate) bracket_match_highlight_enabled: bool,
     /// Whether bracket-pair colorization (rainbow brackets) is enabled.
@@ -631,6 +633,7 @@ impl CodeEditor {
             line_numbers_enabled: true,
             show_whitespace: true,
             show_indent_guides: true,
+            show_color_previews: true,
             bracket_match_highlight_enabled: true,
             bracket_pair_colorization_enabled: true,
             lsp_enabled: true,

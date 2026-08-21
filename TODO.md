@@ -31,8 +31,7 @@ None
 
 8. **Command palette** (`Ctrl+Shift+P`)
 9. **Sticky scroll** (pinned scope header)
-10. **Inline color preview** (swatches for `#rrggbb`)
-11. **Minimap** (overview of entire file & clickable navigation)
+10. **Minimap** (overview of entire file & clickable navigation)
 
 ## Performance Improvements
 

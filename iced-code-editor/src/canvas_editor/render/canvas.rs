@@ -153,6 +153,7 @@ impl canvas::Program<Message> for CodeEditor {
                             syntax_theme,
                         );
                         self.draw_bracket_pair_colors(f, &ctx, visual_line, y);
+                        self.draw_color_swatches(f, &ctx, visual_line, y);
                         self.draw_fold_collapsed_marker(
                             f,
                             &ctx,
