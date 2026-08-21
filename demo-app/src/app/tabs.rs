@@ -33,14 +33,24 @@ impl DemoApp {
     /// [`Self::handle_app_action`] resolves in one place — so an action
     /// offered by both behaves identically whichever one the user reaches
     /// for.
+    ///
+    /// The labels stay in English while the editor's own strings follow the
+    /// language picker: `Translations` is the library's catalogue, and the
+    /// demo has no catalogue of its own. A host application that wants a
+    /// uniformly translated palette translates its labels before registering
+    /// them — the entries are plain `String`s precisely so it can.
+    ///
+    /// None of them carries a `with_shortcut` hint, because none of them is
+    /// bound to a key here. A hint is display-only — binding the key is the
+    /// host's job — so advertising one the host has not bound points the user
+    /// at a combination that does something else or nothing at all.
     pub(super) fn new_editor(content: &str) -> CodeEditor {
         CodeEditor::new(content, "lua")
             .with_custom_context_menu_entries(vec![
                 ContextMenuEntry::item(
                     "app.format_document",
                     "Format document",
-                )
-                .with_shortcut("Ctrl+Shift+F"),
+                ),
                 ContextMenuEntry::separator(),
                 ContextMenuEntry::item("app.rename_symbol", "Rename symbol")
                     .with_enabled(false),
@@ -54,8 +64,7 @@ impl DemoApp {
                 ContextMenuItem::new("app.run_code", "Run Code"),
                 ContextMenuItem::new("app.clear_log", "Clear Log"),
                 ContextMenuItem::new("app.toggle_settings", "Settings"),
-                ContextMenuItem::new("app.format_document", "Format Document")
-                    .with_shortcut("Ctrl+Shift+F"),
+                ContextMenuItem::new("app.format_document", "Format Document"),
             ])
     }
 

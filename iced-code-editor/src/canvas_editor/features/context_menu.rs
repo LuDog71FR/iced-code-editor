@@ -358,6 +358,10 @@ fn default_entries(
             shortcut: COPY_SHORTCUT.to_string(),
             message: context.has_selection.then_some(Message::Copy),
         },
+        // Paste is always offered: whether the clipboard holds anything is
+        // only known once it has been read. The empty payload is what asks
+        // `CodeEditor::handle_paste_msg` to perform that read and send a
+        // second `Paste` carrying the result — it is not an empty paste.
         MenuEntry::Item {
             label: translations.context_menu_paste(),
             shortcut: PASTE_SHORTCUT.to_string(),

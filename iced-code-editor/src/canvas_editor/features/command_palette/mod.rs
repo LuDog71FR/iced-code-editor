@@ -285,6 +285,10 @@ fn default_entries(
             TOGGLE_VIM_MODE_SHORTCUT,
             Message::ToggleVimMode,
         ),
+        // An empty payload is not an empty paste: it asks
+        // `CodeEditor::handle_paste_msg` to read the clipboard and send a
+        // second `Paste` carrying what it found. The context menu spells its
+        // Paste entry the same way.
         PaletteEntry::builtin(
             translations.context_menu_paste(),
             PASTE_SHORTCUT,

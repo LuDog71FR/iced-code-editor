@@ -14,6 +14,11 @@ impl CodeEditor {
     /// The search and go-to-line dialogs are closed first: all three are
     /// modal input surfaces stacked over the same canvas, and only one can
     /// hold keyboard focus.
+    ///
+    /// Closing search is also why this is the one palette handler that clears
+    /// `overlay_cache`: search match highlights are canvas geometry, so they
+    /// have to be erased. The palette itself is a widget in the view tree,
+    /// which the cache knows nothing about.
     pub(crate) fn handle_open_command_palette_msg(&mut self) -> Task<Message> {
         if !self.command_palette_enabled {
             return Task::none();
@@ -31,9 +36,15 @@ impl CodeEditor {
     }
 
     /// Closes the palette without running anything.
+    ///
+    /// Deliberately leaves `overlay_cache` alone, as does
+    /// [`Self::handle_submit_command_palette_msg`]: nothing drawn into that
+    /// layer — current-line highlight, search highlights, bracket match,
+    /// selection, cursor, jump link — reads the palette's state, so clearing
+    /// it would only force all of that geometry to be rebuilt on the next
+    /// frame for no visible change.
     pub(crate) fn handle_close_command_palette_msg(&mut self) -> Task<Message> {
         self.command_palette_state.close();
-        self.overlay_cache.clear();
         Task::none()
     }
 
@@ -93,7 +104,6 @@ impl CodeEditor {
         };
 
         self.command_palette_state.close();
-        self.overlay_cache.clear();
         Task::done(message)
     }
 
