@@ -123,6 +123,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constant; the receiving half and everything you do with it are unchanged.
   See the Security entry below for why.
 
+- chore: the 35 `Translations` accessors and the 26 mechanical halves of the
+  boolean editor options are now generated from tables by two `macro_rules!`
+  (`translations!` in `i18n.rs`, `bool_options!` in the new
+  `canvas_editor/bool_options.rs`). The public API, the rustdoc and the
+  doctests are unchanged — same 228 doctests pass — but `i18n.rs` drops from
+  1360 to 839 lines and `config.rs` from 1765 to 1198. Only the boilerplate is
+  generated: every `set_x` stays hand-written, since that is where an option's
+  prose and its cache-invalidation rule live. Two incidental fixes fell out of
+  it: every builder now delegates to its setter instead of some assigning the
+  field directly (a builder that assigns silently skips whatever else the
+  setter does), and each option's default is now *asserted* by its generated
+  example rather than stated in a comment beside it.
+
 - chore: the demo app enables the `two-face` feature, adding the Sublime grammars
   bundled by `bat` (TOML, TypeScript, Dockerfile, a newer Rust definition, ...)
   on top of syntect's defaults. The `two-face` dependency is now declared with

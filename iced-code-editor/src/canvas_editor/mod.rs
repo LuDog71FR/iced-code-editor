@@ -42,6 +42,7 @@ static FOCUSED_EDITOR_ID: AtomicU64 = AtomicU64::new(0);
 #[cfg(feature = "bench")]
 #[doc(hidden)]
 pub mod bench_support;
+mod bool_options;
 mod caches;
 mod config;
 mod editing;
