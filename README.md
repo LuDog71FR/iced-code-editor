@@ -805,10 +805,17 @@ editor.set_lsp_enabled(false);
 
 ```rust
 use std::sync::mpsc;
-use iced_code_editor::{LspProcessClient, LspEvent, LspDocument};
+use iced_code_editor::{
+    LspProcessClient, LspEvent, LspDocument, LSP_EVENT_QUEUE_CAPACITY,
+};
 
-// Create a channel to receive LSP events
-let (tx, rx) = mpsc::channel::<LspEvent>();
+// Create a channel to receive LSP events. It must be *bounded*: it is fed by
+// a language server your application does not control, and an unbounded queue
+// turns a chatty server into unbounded memory. When it fills, the client drops
+// events rather than blocking the thread that drains the server's stdout —
+// every event is a UI update superseded by the next one, so nothing is lost
+// but a refresh.
+let (tx, rx) = mpsc::sync_channel::<LspEvent>(LSP_EVENT_QUEUE_CAPACITY);
 
 // Start the server (e.g., lua-language-server)
 let client = LspProcessClient::new_with_server(

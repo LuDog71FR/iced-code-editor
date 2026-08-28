@@ -43,6 +43,42 @@ use std::time::Instant;
 // LSP Events - Events sent back to the main application
 // =============================================================================
 
+/// Recommended capacity for the [`LspEvent`] channel.
+///
+/// The channel has to be bounded: it is fed by a language server this
+/// application does not control, and `rust-analyzer` on a large workspace
+/// emits a great deal. An unbounded queue turns that into unbounded memory
+/// whenever the host drains more slowly than the server produces.
+///
+/// Sized well above what a host draining on a timer can fall behind by, so the
+/// bound never bites in normal use -- draining
+/// `MAX_LSP_EVENTS_PER_TICK`-sized batches at 60 Hz clears far more than this
+/// per second. Its job is to put a ceiling on a pathological server, not to
+/// shape ordinary traffic.
+pub const LSP_EVENT_QUEUE_CAPACITY: usize = 4_096;
+
+/// Hands an event to the application, dropping it if the queue is full.
+///
+/// Dropping rather than blocking, because the sender is the reader thread: it
+/// is what drains the server's stdout, so blocking it would stall that pipe
+/// and back-pressure the server for as long as the host took to catch up.
+///
+/// Dropping is safe for every [`LspEvent`] variant. None of them carries state
+/// the client must not lose: `Hover`, `Completion` and `Definition` are each
+/// one UI update that the user's next gesture re-requests, `Progress` is
+/// superseded by the next notification for the same token, and `Log` is
+/// advisory. In particular a dropped response strands nothing --
+/// `handle_client_response` removes the entry from `pending_requests` *before*
+/// emitting, so the request is already accounted for.
+///
+/// # Arguments
+///
+/// * `events` - Channel to the application
+/// * `event` - The event to hand over
+pub(super) fn emit(events: &mpsc::SyncSender<LspEvent>, event: LspEvent) {
+    let _ = events.try_send(event);
+}
+
 /// Events that can be sent from the LSP client to the application.
 ///
 /// Receive these by polling the `mpsc::Receiver` you pass to
@@ -55,9 +91,10 @@ use std::time::Instant;
 /// ```
 /// use std::sync::mpsc;
 ///
-/// use iced_code_editor::LspEvent;
+/// use iced_code_editor::{LspEvent, LSP_EVENT_QUEUE_CAPACITY};
 ///
-/// let (tx, rx) = mpsc::channel::<LspEvent>();
+/// // Bounded: the queue is fed by a language server, so it needs a ceiling.
+/// let (tx, rx) = mpsc::sync_channel::<LspEvent>(LSP_EVENT_QUEUE_CAPACITY);
 /// tx.send(LspEvent::Hover { text: "fn main()".to_string() })
 ///     .expect("the receiver is still alive");
 ///
@@ -127,9 +164,9 @@ pub enum LspEvent {
 ///
 /// ```no_run
 /// use std::sync::mpsc;
-/// use iced_code_editor::{LspProcessClient, LspEvent};
+/// use iced_code_editor::{LspProcessClient, LspEvent, LSP_EVENT_QUEUE_CAPACITY};
 ///
-/// let (tx, rx) = mpsc::channel::<LspEvent>();
+/// let (tx, rx) = mpsc::sync_channel::<LspEvent>(LSP_EVENT_QUEUE_CAPACITY);
 /// let client = LspProcessClient::new_with_server(
 ///     "file:///home/user/project",
 ///     tx,
@@ -148,7 +185,7 @@ pub struct LspProcessClient {
     /// Channel used to report a document mirror going out of sync (see
     /// [`Self::apply_change_and_convert`]); the reader/stderr threads carry
     /// their own clone of the same sender for server-pushed events.
-    events: mpsc::Sender<LspEvent>,
+    events: mpsc::SyncSender<LspEvent>,
     /// Key identifying the connected server, used to label events emitted
     /// directly by the client rather than by the reader/stderr threads.
     server_key: String,
@@ -183,9 +220,11 @@ impl LspProcessClient {
     ///
     /// ```no_run
     /// use std::sync::mpsc;
-    /// use iced_code_editor::{LspProcessClient, LspEvent};
+    /// use iced_code_editor::{
+    ///     LSP_EVENT_QUEUE_CAPACITY, LspEvent, LspProcessClient,
+    /// };
     ///
-    /// let (tx, _rx) = mpsc::channel::<LspEvent>();
+    /// let (tx, _rx) = mpsc::sync_channel::<LspEvent>(LSP_EVENT_QUEUE_CAPACITY);
     /// let client = LspProcessClient::new_with_server(
     ///     "file:///tmp/project",
     ///     tx,
@@ -195,7 +234,7 @@ impl LspProcessClient {
     /// ```
     pub fn new_with_server(
         root_uri: &str,
-        events: mpsc::Sender<LspEvent>,
+        events: mpsc::SyncSender<LspEvent>,
         server_key: &str,
     ) -> Result<Self, String> {
         let config = lsp_server_config(server_key)
@@ -219,7 +258,7 @@ impl LspProcessClient {
     /// handles cannot be acquired.
     fn new_with_command(
         root_uri: &str,
-        events: mpsc::Sender<LspEvent>,
+        events: mpsc::SyncSender<LspEvent>,
         command: &LspCommand,
         server_key: &str,
     ) -> Result<Self, String> {
@@ -307,10 +346,13 @@ impl LspProcessClient {
                 if line.is_empty() {
                     continue;
                 }
-                let _ = events_log.send(LspEvent::Log {
-                    server_key: server_key_log.clone(),
-                    message: line.to_string(),
-                });
+                emit(
+                    &events_log,
+                    LspEvent::Log {
+                        server_key: server_key_log.clone(),
+                        message: line.to_string(),
+                    },
+                );
             }
         });
 
@@ -398,14 +440,17 @@ impl LspProcessClient {
             Some(out) => out,
             None => {
                 docs.remove(uri);
-                let _ = self.events.send(LspEvent::Log {
-                    server_key: self.server_key.clone(),
-                    message: format!(
-                        "Local document mirror for {uri} desynchronized \
-                         (a change referenced a line outside the tracked \
-                         document); dropping it until the next open."
-                    ),
-                });
+                emit(
+                    &self.events,
+                    LspEvent::Log {
+                        server_key: self.server_key.clone(),
+                        message: format!(
+                            "Local document mirror for {uri} desynchronized \
+                             (a change referenced a line outside the tracked \
+                             document); dropping it until the next open."
+                        ),
+                    },
+                );
                 Vec::new()
             }
         }
@@ -643,7 +688,7 @@ mod tests {
     {
         let child = Command::new("true").spawn().expect("spawn stub process");
         let (writer_tx, writer_rx) = mpsc::channel::<Vec<u8>>();
-        let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
         let client = LspProcessClient {
             child,
             writer: writer_tx,
@@ -689,6 +734,56 @@ mod tests {
     // -------------------------------------------------------------------------
     // next_id / send_message
     // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_emit_drops_events_once_the_queue_is_full() {
+        // The point of the bound: past capacity the queue stops growing. Note
+        // that a blocking `send` here would not fail this test, it would hang
+        // it -- there is no receiver draining, which is exactly the situation
+        // `emit` must never wait on, since the sender is the reader thread
+        // feeding on the server's stdout.
+        let (tx, rx) = mpsc::sync_channel::<LspEvent>(2);
+
+        for index in 0..5 {
+            emit(&tx, LspEvent::Hover { text: index.to_string() });
+        }
+
+        let queued: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|event| match event {
+                LspEvent::Hover { text } => text,
+                _ => String::new(),
+            })
+            .collect();
+
+        assert_eq!(
+            queued,
+            ["0", "1"],
+            "the queue keeps what fits and drops the rest"
+        );
+    }
+
+    #[test]
+    fn test_emit_accepts_events_again_once_the_queue_drains() {
+        // Dropping is not a latch: a host that catches up starts receiving
+        // again, so a burst costs the events in it and nothing after.
+        let (tx, rx) = mpsc::sync_channel::<LspEvent>(1);
+        emit(&tx, LspEvent::Hover { text: "dropped-into".to_string() });
+        emit(&tx, LspEvent::Hover { text: "dropped".to_string() });
+
+        let _ = rx.try_recv();
+        emit(&tx, LspEvent::Hover { text: "accepted".to_string() });
+
+        let accepted = rx.try_recv().ok().and_then(|event| match event {
+            LspEvent::Hover { text } => Some(text),
+            _ => None,
+        });
+
+        assert_eq!(
+            accepted.as_deref(),
+            Some("accepted"),
+            "the drained queue must accept a new event"
+        );
+    }
 
     #[test]
     fn test_next_id_increments() {

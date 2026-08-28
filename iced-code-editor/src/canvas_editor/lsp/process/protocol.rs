@@ -249,7 +249,7 @@ pub(super) fn handle_client_response(
     id: u64,
     value: &serde_json::Value,
     pending: &Arc<Mutex<HashMap<u64, PendingRequest>>>,
-    events: &mpsc::Sender<LspEvent>,
+    events: &mpsc::SyncSender<LspEvent>,
 ) {
     let kind = {
         let mut map = pending.lock().unwrap_or_else(|e| e.into_inner());
@@ -262,17 +262,17 @@ pub(super) fn handle_client_response(
     match kind {
         LspRequestKind::Hover => {
             let text = parse_hover_text(result).unwrap_or_default();
-            let _ = events.send(LspEvent::Hover { text });
+            super::emit(events, LspEvent::Hover { text });
         }
         LspRequestKind::Completion => {
             let items = parse_completion_items(result);
             if !items.is_empty() {
-                let _ = events.send(LspEvent::Completion { items });
+                super::emit(events, LspEvent::Completion { items });
             }
         }
         LspRequestKind::Definition => {
             if let Some((uri, range)) = parse_definition_location(result) {
-                let _ = events.send(LspEvent::Definition { uri, range });
+                super::emit(events, LspEvent::Definition { uri, range });
             }
         }
     }
@@ -285,7 +285,7 @@ pub(super) fn handle_client_response(
 pub(super) fn handle_server_notification(
     method: &str,
     params: &serde_json::Value,
-    events: &mpsc::Sender<LspEvent>,
+    events: &mpsc::SyncSender<LspEvent>,
     server_key: &str,
 ) {
     if method != METHOD_PROGRESS {
@@ -313,14 +313,17 @@ pub(super) fn handle_server_notification(
         val.get("percentage").and_then(|p| p.as_u64()).map(|p| p as u32);
     let done = kind == PROGRESS_KIND_END;
 
-    let _ = events.send(LspEvent::Progress {
-        token,
-        server_key: server_key.to_string(),
-        title,
-        message,
-        percentage,
-        done,
-    });
+    super::emit(
+        events,
+        LspEvent::Progress {
+            token,
+            server_key: server_key.to_string(),
+            title,
+            message,
+            percentage,
+            done,
+        },
+    );
 }
 
 // =============================================================================
@@ -779,7 +782,7 @@ mod tests {
     #[test]
     #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
     fn test_handle_client_response_hover() {
-        let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
         let pending = Arc::new(Mutex::new(HashMap::new()));
         pending
             .lock()
@@ -802,7 +805,7 @@ mod tests {
     #[test]
     #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
     fn test_handle_client_response_completion() {
-        let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
         let pending = Arc::new(Mutex::new(HashMap::new()));
         pending
             .lock()
@@ -826,7 +829,7 @@ mod tests {
     #[test]
     #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
     fn test_handle_client_response_definition() {
-        let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
         let pending = Arc::new(Mutex::new(HashMap::new()));
         pending
             .lock()
@@ -854,8 +857,35 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_a_dropped_response_still_clears_its_pending_request() {
+        // The claim that makes dropping a full queue safe (see `super::emit`):
+        // the pending entry goes before the event is emitted, so an event the
+        // queue refuses cannot leave a request in flight forever. A rendezvous
+        // channel with no receiver waiting is permanently full, which is the
+        // cheapest way to stand in for a saturated queue.
+        let (events_tx, _events_rx) = mpsc::sync_channel::<LspEvent>(0);
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        pending
+            .lock()
+            .unwrap()
+            .insert(7u64, pending_request(LspRequestKind::Hover));
+
+        let value = serde_json::json!({
+            "id": 7,
+            "result": { "contents": "fn main()" }
+        });
+        handle_client_response(7, &value, &pending, &events_tx);
+
+        assert!(
+            pending.lock().unwrap().is_empty(),
+            "a response the queue dropped must still retire its request"
+        );
+    }
+
+    #[test]
     fn test_handle_client_response_unknown_id_ignored() {
-        let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
         let pending = Arc::new(Mutex::new(HashMap::new()));
 
         let value = serde_json::json!({ "id": 99, "result": null });
@@ -873,7 +903,7 @@ mod tests {
     #[test]
     #[allow(clippy::expect_used, clippy::panic)]
     fn test_handle_server_notification_progress_done() {
-        let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
         let params = serde_json::json!({
             "token": "my-token",
             "value": {
@@ -903,7 +933,7 @@ mod tests {
     #[test]
     #[allow(clippy::expect_used, clippy::panic)]
     fn test_handle_server_notification_progress_not_done() {
-        let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
         let params = serde_json::json!({
             "token": "tok",
             "value": { "kind": "report", "title": "Building" }
@@ -924,7 +954,7 @@ mod tests {
 
     #[test]
     fn test_handle_server_notification_unknown_method_ignored() {
-        let (events_tx, events_rx) = mpsc::channel::<LspEvent>();
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
         let params = serde_json::json!({});
         handle_server_notification(
             "$/somethingElse",

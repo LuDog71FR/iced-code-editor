@@ -24,12 +24,12 @@ use iced::widget::text_editor;
 use iced::widget::text_editor::{Action, Edit, Motion};
 use iced::{Event, Subscription, Task, Theme, event, window};
 #[cfg(not(target_arch = "wasm32"))]
-use iced_code_editor::LspEvent;
-#[cfg(not(target_arch = "wasm32"))]
 use iced_code_editor::LspOverlayState;
 #[cfg(not(target_arch = "wasm32"))]
 use iced_code_editor::LspPosition;
 use iced_code_editor::Message as EditorMessage;
+#[cfg(not(target_arch = "wasm32"))]
+use iced_code_editor::{LSP_EVENT_QUEUE_CAPACITY, LspEvent};
 use iced_code_editor::{Language, theme};
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
@@ -164,7 +164,7 @@ pub struct DemoApp {
     #[cfg(not(target_arch = "wasm32"))]
     lsp_events: Option<mpsc::Receiver<LspEvent>>,
     #[cfg(not(target_arch = "wasm32"))]
-    lsp_event_sender: Option<mpsc::Sender<LspEvent>>,
+    lsp_event_sender: Option<mpsc::SyncSender<LspEvent>>,
     /// Aggregated LSP overlay display state (hover + completion).
     #[cfg(not(target_arch = "wasm32"))]
     pub lsp_overlay: LspOverlayState,
@@ -235,7 +235,11 @@ greet("World")
 
         #[cfg(not(target_arch = "wasm32"))]
         let (lsp_event_sender, lsp_events) = {
-            let (event_tx, event_rx) = mpsc::channel();
+            // Bounded: the library drops events rather than blocking its
+            // reader thread when this fills, so the queue cannot grow with
+            // whatever a language server decides to emit.
+            let (event_tx, event_rx) =
+                mpsc::sync_channel(LSP_EVENT_QUEUE_CAPACITY);
             (Some(event_tx), Some(event_rx))
         };
 

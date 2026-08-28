@@ -102,6 +102,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING**: `LspProcessClient::new_with_server` now takes an
+  `mpsc::SyncSender<LspEvent>` instead of an `mpsc::Sender<LspEvent>`, so the
+  event queue is bounded. Replace `mpsc::channel::<LspEvent>()` with
+  `mpsc::sync_channel::<LspEvent>(LSP_EVENT_QUEUE_CAPACITY)`, the new exported
+  constant; the receiving half and everything you do with it are unchanged.
+  See the Security entry below for why.
+
 - chore: the demo app enables the `two-face` feature, adding the Sublime grammars
   bundled by `bat` (TOML, TypeScript, Dockerfile, a newer Rust definition, ...)
   on top of syntect's defaults. The `two-face` dependency is now declared with
@@ -111,6 +118,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   targets WASM.
 
 ### Security
+
+- fix: the `LspEvent` queue is now bounded (see the BREAKING note above). It was
+  an unbounded `mpsc::channel` fed by a language server the application does not
+  control — `rust-analyzer` on a large workspace emits a great deal — so a host
+  draining more slowly than the server produced grew the queue without limit.
+  The per-tick drain budget added previously bounded frame time, not memory.
+
+  When the queue is full the client **drops** the event rather than blocking.
+  Blocking would stall the reader thread, which is what drains the server's
+  stdout, and back-pressure the server for as long as the host took to catch up.
+  Dropping is safe for every variant: none carries state the client must not
+  lose, and a dropped response strands nothing, because the entry is removed
+  from the pending-request map before the event is emitted.
 
 - fix: updated four transitive dependencies flagged by `cargo audit`
   (`crossbeam-epoch` 0.9.18 → 0.9.20, RUSTSEC-2026-0204, the only one rated a
