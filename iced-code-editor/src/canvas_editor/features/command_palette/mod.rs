@@ -17,13 +17,11 @@ use iced::widget::Id;
 
 use super::actions::{
     ADD_CURSOR_ABOVE_SHORTCUT, ADD_CURSOR_BELOW_SHORTCUT, ActionContext,
-    COPY_SHORTCUT, CUT_SHORTCUT, DUPLICATE_LINE_DOWN_SHORTCUT,
-    DUPLICATE_LINE_UP_SHORTCUT, FIND_SHORTCUT, FOLD_ALL_SHORTCUT,
-    FOLD_AT_CURSOR_SHORTCUT, GOTO_LINE_SHORTCUT, MOVE_LINE_DOWN_SHORTCUT,
-    MOVE_LINE_UP_SHORTCUT, PASTE_SHORTCUT, REDO_SHORTCUT, REPLACE_SHORTCUT,
-    SAVE_SHORTCUT, SELECT_ALL_SHORTCUT, SELECT_NEXT_OCCURRENCE_SHORTCUT,
-    TOGGLE_COMMENT_SHORTCUT, TOGGLE_VIM_MODE_SHORTCUT, UNDO_SHORTCUT,
-    UNFOLD_ALL_SHORTCUT,
+    DUPLICATE_LINE_DOWN_SHORTCUT, DUPLICATE_LINE_UP_SHORTCUT, FIND_SHORTCUT,
+    FOLD_ALL_SHORTCUT, FOLD_AT_CURSOR_SHORTCUT, GOTO_LINE_SHORTCUT,
+    MOVE_LINE_DOWN_SHORTCUT, MOVE_LINE_UP_SHORTCUT, REPLACE_SHORTCUT,
+    SAVE_SHORTCUT, SELECT_NEXT_OCCURRENCE_SHORTCUT, SharedAction,
+    TOGGLE_COMMENT_SHORTCUT, TOGGLE_VIM_MODE_SHORTCUT, UNFOLD_ALL_SHORTCUT,
 };
 use super::context_menu::ContextMenuItem;
 use crate::canvas_editor::{CodeEditor, Message};
@@ -57,9 +55,22 @@ impl PaletteEntry {
         shortcut: &'static str,
         message: Message,
     ) -> Self {
+        Self::builtin_owned(label, shortcut.to_string(), message)
+    }
+
+    /// Builds a row whose shortcut hint is not a `'static` string.
+    ///
+    /// The shared actions carry theirs through [`SharedAction::shortcut`],
+    /// which is `&'static str` but reaches here as an owned `String` after
+    /// going through the same mapping the context menu uses.
+    fn builtin_owned(
+        label: String,
+        shortcut: String,
+        message: Message,
+    ) -> Self {
         Self {
             label,
-            shortcut: shortcut.to_string(),
+            shortcut,
             action: PaletteAction::Builtin(Box::new(message)),
         }
     }
@@ -223,6 +234,21 @@ fn custom_entries(entries: &[ContextMenuItem]) -> Vec<PaletteEntry> {
         .collect()
 }
 
+/// Turns a shared action into a palette row.
+///
+/// The binding it renders — label, shortcut hint, message — comes from
+/// [`SharedAction`], the same source the context menu reads.
+fn shared_row(
+    action: SharedAction,
+    translations: &Translations,
+) -> PaletteEntry {
+    PaletteEntry::builtin_owned(
+        action.label(translations),
+        action.shortcut().to_string(),
+        action.message(),
+    )
+}
+
 /// Builds the palette rows for the built-in editor commands that are
 /// available in `context`.
 fn default_entries(
@@ -285,50 +311,30 @@ fn default_entries(
             TOGGLE_VIM_MODE_SHORTCUT,
             Message::ToggleVimMode,
         ),
-        // An empty payload is not an empty paste: it asks
-        // `CodeEditor::handle_paste_msg` to read the clipboard and send a
-        // second `Paste` carrying what it found. The context menu spells its
-        // Paste entry the same way.
-        PaletteEntry::builtin(
-            translations.context_menu_paste(),
-            PASTE_SHORTCUT,
-            Message::Paste(String::new()),
-        ),
     ];
 
-    if context.can_undo {
-        entries.push(PaletteEntry::builtin(
-            translations.context_menu_undo(),
-            UNDO_SHORTCUT,
-            Message::Undo,
-        ));
-    }
-    if context.can_redo {
-        entries.push(PaletteEntry::builtin(
-            translations.context_menu_redo(),
-            REDO_SHORTCUT,
-            Message::Redo,
-        ));
-    }
-    if context.has_selection {
-        entries.push(PaletteEntry::builtin(
-            translations.context_menu_cut(),
-            CUT_SHORTCUT,
-            Message::Cut,
-        ));
-        entries.push(PaletteEntry::builtin(
-            translations.context_menu_copy(),
-            COPY_SHORTCUT,
-            Message::Copy,
-        ));
-    }
-    if context.has_content {
-        entries.push(PaletteEntry::builtin(
-            translations.context_menu_select_all(),
-            SELECT_ALL_SHORTCUT,
-            Message::SelectAll,
-        ));
-    }
+    // Paste keeps its place among the always-available commands: it is the
+    // only shared action with no availability condition.
+    entries.push(shared_row(SharedAction::Paste, translations));
+
+    // The rest of what the context menu also offers. Labels, shortcuts and
+    // messages come from `SharedAction`, so the two surfaces cannot disagree
+    // on a binding; what belongs to the palette is *dropping* an unavailable
+    // action instead of dimming it, since a search result list should only
+    // offer rows that can be run.
+    entries.extend(
+        [
+            SharedAction::Undo,
+            SharedAction::Redo,
+            SharedAction::Cut,
+            SharedAction::Copy,
+            SharedAction::SelectAll,
+        ]
+        .into_iter()
+        .filter(|action| action.is_available(context))
+        .map(|action| shared_row(action, translations)),
+    );
+
     if context.search_replace_enabled {
         entries.push(PaletteEntry::builtin(
             translations.command_palette_find(),
@@ -358,12 +364,11 @@ fn default_entries(
             Message::UnfoldAll,
         ));
     }
-    if context.reveal_in_file_manager_enabled {
-        entries.push(PaletteEntry::builtin(
-            translations.context_menu_reveal_in_file_manager(),
-            "",
-            Message::RevealInFileManager,
-        ));
+
+    // Reveal comes last: it acts on the file rather than on the text.
+    if SharedAction::RevealInFileManager.is_available(context) {
+        entries
+            .push(shared_row(SharedAction::RevealInFileManager, translations));
     }
 
     entries

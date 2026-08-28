@@ -7,7 +7,8 @@
 //! availability snapshot and the shortcut strings live here instead of being
 //! spelled out twice.
 
-use crate::canvas_editor::CodeEditor;
+use crate::canvas_editor::{CodeEditor, Message};
+use crate::i18n::Translations;
 
 /// Availability of the built-in editor actions at the moment an action
 /// surface is opened.
@@ -173,6 +174,123 @@ pub(crate) const SELECT_NEXT_OCCURRENCE_SHORTCUT: &str = "Ctrl+D";
 pub(crate) const TOGGLE_VIM_MODE_SHORTCUT: &str = "⌥⌘V";
 #[cfg(not(target_os = "macos"))]
 pub(crate) const TOGGLE_VIM_MODE_SHORTCUT: &str = "Ctrl+Alt+V";
+
+// =============================================================================
+// Shared actions
+// =============================================================================
+
+/// A built-in editing action that both surfaces offer.
+///
+/// The context menu and the command palette each present these seven in their
+/// own order and with their own idea of what to do when one is unavailable —
+/// the menu dims the row, the palette leaves it out. What they must *not*
+/// disagree on is the binding itself: which label goes with which shortcut
+/// hint, which [`Message`] it sends, and what makes it available. That binding
+/// lives here, once, so the two surfaces cannot drift apart on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SharedAction {
+    /// Undo the last operation.
+    Undo,
+    /// Redo the last undone operation.
+    Redo,
+    /// Cut the selection to the clipboard.
+    Cut,
+    /// Copy the selection to the clipboard.
+    Copy,
+    /// Paste the clipboard at the cursor.
+    Paste,
+    /// Select the whole buffer.
+    SelectAll,
+    /// Show the current file in the platform's file manager.
+    RevealInFileManager,
+}
+
+impl SharedAction {
+    /// Every shared action, in no particular display order.
+    ///
+    /// Test-only: each surface spells out its own order, so nothing in the
+    /// rendering path iterates the whole set. It exists so the cross-surface
+    /// test below is exhaustive by construction — a new variant that is not
+    /// added here fails to compile against the array's length.
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Undo,
+        Self::Redo,
+        Self::Cut,
+        Self::Copy,
+        Self::Paste,
+        Self::SelectAll,
+        Self::RevealInFileManager,
+    ];
+
+    /// Returns the translated label shown for this action.
+    ///
+    /// # Arguments
+    ///
+    /// * `translations` - The active translation catalogue
+    pub(crate) fn label(self, translations: &Translations) -> String {
+        match self {
+            Self::Undo => translations.context_menu_undo(),
+            Self::Redo => translations.context_menu_redo(),
+            Self::Cut => translations.context_menu_cut(),
+            Self::Copy => translations.context_menu_copy(),
+            Self::Paste => translations.context_menu_paste(),
+            Self::SelectAll => translations.context_menu_select_all(),
+            Self::RevealInFileManager => {
+                translations.context_menu_reveal_in_file_manager()
+            }
+        }
+    }
+
+    /// Returns the keyboard-shortcut hint, empty when the action has none.
+    pub(crate) fn shortcut(self) -> &'static str {
+        match self {
+            Self::Undo => UNDO_SHORTCUT,
+            Self::Redo => REDO_SHORTCUT,
+            Self::Cut => CUT_SHORTCUT,
+            Self::Copy => COPY_SHORTCUT,
+            Self::Paste => PASTE_SHORTCUT,
+            Self::SelectAll => SELECT_ALL_SHORTCUT,
+            // Reached from the menu and the palette only; no key is bound.
+            Self::RevealInFileManager => "",
+        }
+    }
+
+    /// Returns the message this action sends when it is run.
+    pub(crate) fn message(self) -> Message {
+        match self {
+            Self::Undo => Message::Undo,
+            Self::Redo => Message::Redo,
+            Self::Cut => Message::Cut,
+            Self::Copy => Message::Copy,
+            // An empty payload is not an empty paste: it asks
+            // `CodeEditor::handle_paste_msg` to read the clipboard and send a
+            // second `Paste` carrying what it found.
+            Self::Paste => Message::Paste(String::new()),
+            Self::SelectAll => Message::SelectAll,
+            Self::RevealInFileManager => Message::RevealInFileManager,
+        }
+    }
+
+    /// Returns whether the action can be run in `context`.
+    ///
+    /// Paste is always available: whether the clipboard holds anything is only
+    /// known once it has been read.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - The availability snapshot taken when the surface opened
+    pub(crate) fn is_available(self, context: ActionContext) -> bool {
+        match self {
+            Self::Undo => context.can_undo,
+            Self::Redo => context.can_redo,
+            Self::Cut | Self::Copy => context.has_selection,
+            Self::Paste => true,
+            Self::SelectAll => context.has_content,
+            Self::RevealInFileManager => context.reveal_in_file_manager_enabled,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

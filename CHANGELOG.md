@@ -123,6 +123,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constant; the receiving half and everything you do with it are unchanged.
   See the Security entry below for why.
 
+- chore: the seven editing actions the context menu and the command palette
+  both offer — Undo, Redo, Cut, Copy, Paste, Select All, Reveal in File
+  Manager — now read their label, shortcut hint, message and availability from
+  a single `SharedAction` in `features/actions.rs`. Each surface previously
+  spelled the binding out for itself, so a relabelled action or a rebound key
+  had to be edited in both and nothing noticed when only one was. Each keeps
+  its own order and its own policy for an unavailable action: the menu dims the
+  row so its shape stays constant for muscle memory, the palette drops it since
+  a search result list should only offer rows that can be run.
+
 - chore: the 35 `Translations` accessors and the 26 mechanical halves of the
   boolean editor options are now generated from tables by two `macro_rules!`
   (`translations!` in `i18n.rs`, `bool_options!` in the new
