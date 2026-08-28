@@ -17,7 +17,8 @@ use crate::buffer::TextBuffer;
 use crate::i18n::Translations;
 use crate::theme::Style;
 use caches::{
-    BracketDepthCache, HighlightCache, MaxContentWidthCache, VisualLinesCache,
+    BracketDepthCache, HighlightCache, MaxContentWidthCache, ResolvedSyntax,
+    VisualLinesCache,
 };
 use editing::cursor_set;
 pub use editing::history::CommandHistory;
@@ -279,6 +280,13 @@ pub struct CodeEditor {
     /// rendering (where we only have `&self`), but we still want to memoize the
     /// expensive computation without forcing external mutability.
     visual_lines_cache: RefCell<Option<VisualLinesCache>>,
+    /// Memoized syntax/theme resolution (see [`ResolvedSyntax`]).
+    ///
+    /// Behind a `RefCell` for the same reason as the caches below: resolution
+    /// happens during rendering, where only `&self` is available. Self-keyed on
+    /// the syntax identifier and the background lightness, so it needs no
+    /// explicit invalidation from `set_syntax`/`set_theme`.
+    pub(crate) resolved_syntax: RefCell<Option<ResolvedSyntax>>,
     /// Sequential per-line syntax-highlight cache (see [`HighlightCache`]).
     ///
     /// Stored behind a `RefCell` because highlighting is performed during
@@ -698,6 +706,7 @@ impl CodeEditor {
             cache_window_end_line: 0,
             buffer_revision: 0,
             visual_lines_cache: RefCell::new(None),
+            resolved_syntax: RefCell::new(None),
             highlight_cache: RefCell::new(None),
             highlight_lines_remaining: Cell::new(usize::MAX),
             bracket_depth_cache: RefCell::new(BracketDepthCache::new()),

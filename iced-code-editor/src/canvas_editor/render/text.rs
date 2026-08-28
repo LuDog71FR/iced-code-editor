@@ -20,7 +20,7 @@ use crate::canvas_editor::features::{
     bracket_match, color_preview, indent_guides,
 };
 use crate::canvas_editor::{
-    CodeEditor, HighlightCache, TAB_WIDTH, measure_char_width,
+    CodeEditor, HighlightCache, ResolvedSyntax, TAB_WIDTH, measure_char_width,
     measure_text_width,
 };
 
@@ -217,14 +217,25 @@ pub fn highlight_line_spans(
         .collect()
 }
 
-/// Fixed color cycle for bracket-pair colorization, indexed by nesting depth
-/// modulo its length so a matching pair always shares a color. Matches the
-/// well-known VS Code default rainbow-bracket palette (gold, orchid, light
-/// sky blue) for a look users are likely already familiar with.
-const BRACKET_PAIR_COLORS: [Color; 3] = [
+/// Color cycle for bracket-pair colorization on a **dark** editor background,
+/// indexed by nesting depth modulo its length so a matching pair always shares
+/// a color. Matches the well-known VS Code Dark+ rainbow-bracket palette (gold,
+/// orchid, light sky blue) for a look users are likely already familiar with.
+const BRACKET_PAIR_COLORS_DARK: [Color; 3] = [
     Color { r: 1.0, g: 0.843, b: 0.0, a: 1.0 }, // gold
     Color { r: 0.855, g: 0.439, b: 0.839, a: 1.0 }, // orchid
     Color { r: 0.529, g: 0.808, b: 0.980, a: 1.0 }, // light sky blue
+];
+
+/// The same cycle for a **light** editor background, following VS Code Light+.
+///
+/// The dark palette is built from bright, low-contrast-on-white hues; reusing
+/// it on a light background leaves brackets barely visible, so the light theme
+/// gets its own saturated, dark-toned triple.
+const BRACKET_PAIR_COLORS_LIGHT: [Color; 3] = [
+    Color { r: 0.016, g: 0.192, b: 0.980, a: 1.0 }, // blue
+    Color { r: 0.192, g: 0.576, b: 0.192, a: 1.0 }, // green
+    Color { r: 0.482, g: 0.220, b: 0.078, a: 1.0 }, // brown
 ];
 
 /// Context for canvas rendering operations.
@@ -253,10 +264,29 @@ pub(super) struct RenderContext<'a> {
 }
 
 impl CodeEditor {
+    /// Returns the rainbow-bracket palette matching this editor's theme.
+    ///
+    /// Like the syntect token palette (see [`CodeEditor::resolve_syntax`]),
+    /// the cycle is picked from the lightness of the style's background, so
+    /// brackets stay legible under both light and dark themes.
+    ///
+    /// # Returns
+    ///
+    /// The three-color cycle to index by nesting depth.
+    fn bracket_pair_colors(&self) -> &'static [Color; 3] {
+        if crate::theme::is_dark_background(self.style.background) {
+            &BRACKET_PAIR_COLORS_DARK
+        } else {
+            &BRACKET_PAIR_COLORS_LIGHT
+        }
+    }
+
     /// Resolves the syntect syntax and theme used to color this editor's text.
     ///
-    /// Both the syntax set and the theme set are process-wide singletons, so
-    /// this is cheap enough to call on every render. Common language aliases and
+    /// Both the syntax set and the theme set are process-wide singletons, and
+    /// the per-editor result is memoized in [`ResolvedSyntax`], so this is
+    /// cheap enough to call on every render -- the underlying
+    /// `find_syntax_by_extension` scan is not. Common language aliases and
     /// extensions (`python`/`py`, `markdown`/`md`, …) are normalized here, and
     /// an unknown syntax falls back to plain text rather than losing the text.
     ///
@@ -286,15 +316,26 @@ impl CodeEditor {
                 SyntaxSet::load_defaults_newlines()
             }
         });
-        let theme_set = THEME_SET.get_or_init(ThemeSet::load_defaults);
+
         // Pair the token palette with the editor's own theme: a dark-tuned
         // palette on a light background leaves comments and strings unreadable.
-        let theme_name =
-            if crate::theme::is_dark_background(self.style.background) {
-                "base16-ocean.dark"
-            } else {
-                "base16-ocean.light"
-            };
+        let dark_background =
+            crate::theme::is_dark_background(self.style.background);
+
+        let mut memo = self.resolved_syntax.borrow_mut();
+        if let Some((syntax, theme)) = memo
+            .as_ref()
+            .and_then(|resolved| resolved.get(&self.syntax, dark_background))
+        {
+            return (syntax_set, syntax, theme);
+        }
+
+        let theme_set = THEME_SET.get_or_init(ThemeSet::load_defaults);
+        let theme_name = if dark_background {
+            "base16-ocean.dark"
+        } else {
+            "base16-ocean.light"
+        };
         let theme = theme_set
             .themes
             .get(theme_name)
@@ -312,6 +353,13 @@ impl CodeEditor {
             _ => syntax_set.find_syntax_by_extension(self.syntax.as_str()),
         }
         .or(Some(syntax_set.find_syntax_plain_text()));
+
+        *memo = Some(ResolvedSyntax::new(
+            &self.syntax,
+            dark_background,
+            syntax,
+            theme,
+        ));
 
         (syntax_set, syntax, theme)
     }
@@ -738,9 +786,9 @@ impl CodeEditor {
     /// Each `( ) [ ] { }` character on the line is redrawn on top of the
     /// already-rendered syntax-highlighted text, colored by its nesting
     /// depth (see [`bracket_match::bracket_depth_indices`]) so a
-    /// matching pair always shares the same color, cycling through
-    /// [`BRACKET_PAIR_COLORS`] as depth increases. No-op when the feature is
-    /// disabled.
+    /// matching pair always shares the same color, cycling through the
+    /// theme-matched palette returned by [`CodeEditor::bracket_pair_colors`]
+    /// as depth increases. No-op when the feature is disabled.
     ///
     /// # Arguments
     ///
@@ -759,6 +807,7 @@ impl CodeEditor {
             return;
         }
 
+        let palette = self.bracket_pair_colors();
         let logical_line = visual_line.logical_line;
         let start_depth = self
             .bracket_depth_cache
@@ -789,7 +838,7 @@ impl CodeEditor {
             frame.fill_text(canvas::Text {
                 content: ch.to_string(),
                 position: Point::new(x - ctx.horizontal_scroll_offset, y + 2.0),
-                color: BRACKET_PAIR_COLORS[depth % BRACKET_PAIR_COLORS.len()],
+                color: palette[depth % palette.len()],
                 size: ctx.font_size.into(),
                 font: ctx.font,
                 ..canvas::Text::default()
@@ -808,6 +857,41 @@ mod tests {
 
     use super::*;
     use crate::canvas_editor::{CHAR_WIDTH, FONT_SIZE, compare_floats};
+
+    #[test]
+    fn test_bracket_pair_colors_follow_the_editor_theme() {
+        let mut editor = CodeEditor::new("(a)", "rs");
+
+        editor.set_theme(crate::theme::from_iced_theme(&iced::Theme::Dark));
+        let dark = editor.bracket_pair_colors();
+
+        editor.set_theme(crate::theme::from_iced_theme(&iced::Theme::Light));
+        let light = editor.bracket_pair_colors();
+
+        assert_ne!(
+            dark[0], light[0],
+            "a light theme must not reuse the dark rainbow palette"
+        );
+    }
+
+    #[test]
+    fn test_bracket_pair_colors_contrast_with_their_background() {
+        // Every dark-theme bracket color must read as light (drawn on a dark
+        // background) and every light-theme one as dark, or the brackets
+        // vanish into the page.
+        for color in BRACKET_PAIR_COLORS_DARK {
+            assert!(
+                !crate::theme::is_dark_background(color),
+                "{color:?} is too dark for a dark background"
+            );
+        }
+        for color in BRACKET_PAIR_COLORS_LIGHT {
+            assert!(
+                crate::theme::is_dark_background(color),
+                "{color:?} is too light for a light background"
+            );
+        }
+    }
 
     #[test]
     fn test_calculate_segment_geometry_ascii() {

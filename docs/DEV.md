@@ -437,7 +437,19 @@ enables it. It must be declared with `default-features = false, features =
 The token palette is not fixed: `CodeEditor::resolve_syntax` picks
 `base16-ocean.light` or `base16-ocean.dark` from the lightness of the editor
 `Style`'s background (`theme::is_dark_background`). Because the per-line cache
-stores *resolved colors* rather than scopes, `set_theme` invalidates it.
+stores *resolved colors* rather than scopes, `set_theme` invalidates it. The
+rainbow-bracket cycle (`CodeEditor::bracket_pair_colors`) branches on the same
+predicate.
+
+Resolution itself is memoized per editor in `ResolvedSyntax` (`caches.rs`).
+`find_syntax_by_extension` is a linear scan over every bundled grammar's
+extension list, and the canvas re-resolves on every frame. The memo is
+*self-keyed* on the syntax identifier and the background lightness rather than
+invalidated by hand, so `set_syntax`/`set_theme` cannot leave it stale.
+
+`CodeEditor::syntax` returns the identifier the host set; `syntax_name` returns
+the grammar it resolved to, including the `"Plain Text"` fallback. Status bars
+want the latter.
 
 Highlighting is **not** recomputed naïvely per frame. Instead, each logical line is
 tokenized once and memoized as a dense per-line prefix that also stores the syntect

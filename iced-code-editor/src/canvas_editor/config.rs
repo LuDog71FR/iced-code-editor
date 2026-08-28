@@ -1270,6 +1270,36 @@ impl CodeEditor {
         &self.syntax
     }
 
+    /// Returns the display name of the grammar actually used to highlight
+    /// this editor's content.
+    ///
+    /// [`CodeEditor::syntax`] returns the raw identifier the host set; this
+    /// returns what the highlighter resolved it to, so it also reports the
+    /// plain-text fallback when no grammar matches. It is the value to show in
+    /// a status bar: it tells the user which language the editor is really
+    /// coloring with, not which one was requested.
+    ///
+    /// # Returns
+    ///
+    /// The grammar's name (e.g. `"Rust"`, `"Lua"`, `"Plain Text"`).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert_eq!(editor.syntax_name(), "Rust");
+    ///
+    /// // An identifier no bundled grammar matches degrades to plain text.
+    /// let unknown = CodeEditor::new("...", "no-such-language");
+    /// assert_eq!(unknown.syntax_name(), "Plain Text");
+    /// ```
+    pub fn syntax_name(&self) -> &'static str {
+        let (_, syntax, _) = self.resolve_syntax();
+        syntax.map_or("Plain Text", |syntax| syntax.name.as_str())
+    }
+
     /// Sets the syntax highlighting language identifier for this editor.
     ///
     /// Use this when the content a single editor shows changes language --
@@ -1646,6 +1676,28 @@ mod tests {
     fn test_syntax_getter() {
         let editor = CodeEditor::new("", "lua");
         assert_eq!(editor.syntax(), "lua");
+    }
+
+    #[test]
+    fn test_syntax_name_resolves_grammar_and_fallback() {
+        assert_eq!(CodeEditor::new("", "rs").syntax_name(), "Rust");
+        assert_eq!(CodeEditor::new("", "lua").syntax_name(), "Lua");
+        // Aliases normalized by `resolve_syntax` resolve to the same grammar.
+        assert_eq!(CodeEditor::new("", "rust").syntax_name(), "Rust");
+        // Unknown identifiers degrade rather than losing the content.
+        assert_eq!(
+            CodeEditor::new("", "no-such-language").syntax_name(),
+            "Plain Text"
+        );
+    }
+
+    #[test]
+    fn test_syntax_name_follows_set_syntax() {
+        let mut editor = CodeEditor::new("", "lua");
+        assert_eq!(editor.syntax_name(), "Lua");
+
+        editor.set_syntax("py");
+        assert_eq!(editor.syntax_name(), "Python");
     }
 
     #[test]

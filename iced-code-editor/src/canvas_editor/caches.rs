@@ -5,13 +5,71 @@
 use iced::Color;
 use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
-use syntect::highlighting::HighlightState;
-use syntect::parsing::ParseState;
+use syntect::highlighting::{HighlightState, Theme};
+use syntect::parsing::{ParseState, SyntaxReference};
 
 use crate::buffer::TextBuffer;
 use crate::canvas_editor::features::bracket_match;
 use crate::canvas_editor::render::wrapping;
 use crate::canvas_editor::{CodeEditor, measure_text_width};
+
+/// Memoized outcome of resolving an editor's syntax identifier and theme to a
+/// syntect grammar and token palette.
+///
+/// Resolution is not free: `SyntaxSet::find_syntax_by_extension` scans every
+/// bundled grammar's extension list linearly, and the `two-face` feature grows
+/// that set several-fold. The canvas re-resolves on every frame, so the result
+/// is memoized here, keyed on the two inputs that can change it.
+pub(crate) struct ResolvedSyntax {
+    /// Syntax identifier this entry was resolved for.
+    syntax: String,
+    /// Whether it was resolved against a dark editor background, which selects
+    /// the dark token palette.
+    dark_background: bool,
+    /// The resolved grammar, `None` when syntect ships none at all.
+    reference: Option<&'static SyntaxReference>,
+    /// The resolved token palette, `None` when the theme set is empty.
+    theme: Option<&'static Theme>,
+}
+
+impl ResolvedSyntax {
+    /// Stores a resolution so later calls with the same inputs can reuse it.
+    ///
+    /// # Arguments
+    ///
+    /// * `syntax` - Syntax identifier that was resolved.
+    /// * `dark_background` - Whether the editor background is dark.
+    /// * `reference` - The grammar the identifier resolved to.
+    /// * `theme` - The token palette the background selected.
+    pub(crate) fn new(
+        syntax: &str,
+        dark_background: bool,
+        reference: Option<&'static SyntaxReference>,
+        theme: Option<&'static Theme>,
+    ) -> Self {
+        Self { syntax: syntax.to_string(), dark_background, reference, theme }
+    }
+
+    /// Returns the memoized resolution when it still matches both inputs.
+    ///
+    /// # Arguments
+    ///
+    /// * `syntax` - Syntax identifier being resolved now.
+    /// * `dark_background` - Whether the editor background is dark now.
+    ///
+    /// # Returns
+    ///
+    /// The grammar and palette, or `None` when either input has changed.
+    pub(crate) fn get(
+        &self,
+        syntax: &str,
+        dark_background: bool,
+    ) -> Option<(Option<&'static SyntaxReference>, Option<&'static Theme>)>
+    {
+        (self.syntax == syntax && self.dark_background == dark_background)
+            .then_some((self.reference, self.theme))
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct VisualLinesKey {
@@ -507,6 +565,58 @@ impl CodeEditor {
 mod tests {
     use super::*;
     use crate::canvas_editor::Message;
+
+    #[test]
+    fn test_resolved_syntax_hits_only_on_both_keys() {
+        let editor = CodeEditor::new("fn main() {}", "rs");
+        let (_, reference, theme) = editor.resolve_syntax();
+        let resolved = ResolvedSyntax::new("rs", true, reference, theme);
+
+        assert!(
+            resolved.get("rs", true).is_some(),
+            "the same identifier and background must hit"
+        );
+        assert!(
+            resolved.get("lua", true).is_none(),
+            "a different syntax identifier must miss"
+        );
+        assert!(
+            resolved.get("rs", false).is_none(),
+            "a background lightness flip must miss: it selects another palette"
+        );
+    }
+
+    #[test]
+    fn test_resolve_syntax_populates_and_rekeys_the_memo() {
+        let mut editor = CodeEditor::new("fn main() {}", "rs");
+        assert!(
+            editor.resolved_syntax.borrow().is_none(),
+            "a fresh editor has resolved nothing yet"
+        );
+
+        let _ = editor.resolve_syntax();
+        assert!(
+            editor
+                .resolved_syntax
+                .borrow()
+                .as_ref()
+                .is_some_and(|resolved| resolved.get("rs", true).is_some()),
+            "the first resolution must be memoized under its own key"
+        );
+
+        // The memo is self-keyed, so a language change must miss rather than
+        // serve the previous grammar.
+        editor.set_syntax("lua");
+        assert!(
+            editor
+                .resolved_syntax
+                .borrow()
+                .as_ref()
+                .is_some_and(|resolved| resolved.get("lua", true).is_none()),
+            "the stale entry must not answer for the new identifier"
+        );
+        assert_eq!(editor.syntax_name(), "Lua");
+    }
 
     #[test]
     fn test_bracket_depth_cache_extends_and_truncates() {

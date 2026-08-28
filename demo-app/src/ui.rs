@@ -445,6 +445,14 @@ pub fn view_editor_pane<'a>(
     )
     .text_size(14);
 
+    // Active grammar, as resolved by the highlighter rather than as requested:
+    // it also reports the plain-text fallback for an unknown extension.
+    let language_indicator =
+        text(editor.syntax_name()).size(14).style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            text::Style { color: Some(palette.background.strong.color) }
+        });
+
     // LSP Status
     #[cfg(not(target_arch = "wasm32"))]
     let lsp_status: Element<'_, Message> = if !lsp_enabled {
@@ -595,6 +603,8 @@ pub fn view_editor_pane<'a>(
                 indent_style_picker,
                 Space::new().width(10),
                 options_button,
+                Space::new().width(10),
+                language_indicator,
                 Space::new().width(10),
                 lsp_status
             ]

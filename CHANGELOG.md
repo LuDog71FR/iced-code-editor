@@ -20,11 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `Message::StickyScrollJump(usize)`, emitted when a pinned header is clicked.
   `Message` is not `#[non_exhaustive]`, so an exhaustive `match` over it in a host
   application needs a new arm.
+
 - feat: `CodeEditor::set_syntax` changes the highlighting language of an existing
   editor. Previously the language could only be chosen at construction, so a host
   that reuses one editor for several files had no way to follow the file's
   extension. Setting the same identifier again is a no-op; changing it drops the
   cached per-line highlighting so the visible lines are re-tokenized.
+
+- feat: `CodeEditor::syntax_name` returns the display name of the grammar the
+  highlighter actually resolved to (`"Rust"`, `"Lua"`, `"Plain Text"`), rather
+  than the identifier the host asked for — the value to put in a status bar.
+
+- feat: the demo app's editor toolbar shows the active grammar next to the LSP
+  status.
 
 ### Fixed
 
@@ -34,6 +42,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   background selects `base16-ocean.light`, a dark one keeps `base16-ocean.dark`,
   and `set_theme` invalidates the highlight cache (it stores resolved colors, not
   scopes).
+
+- perf: `CodeEditor::resolve_syntax` memoizes its result per editor. It ran on
+  every frame and its `find_syntax_by_extension` call scans every bundled
+  grammar's extension list linearly — 213 grammars with `two-face` enabled.
+  Measured in release: ~413 ns → ~9 ns per call. That was never a bottleneck at
+  one call per frame; it matters for the newly public `syntax_name`, which a
+  host may call far more often. The memo is keyed on the syntax identifier and
+  the background lightness, so it re-resolves exactly when one of them changes.
+
+- fix: rainbow-bracket colorization now has a light-theme palette (VS Code
+Light+ blue/green/brown). The gold/orchid/sky-blue cycle is calibrated for a
+  dark background and left brackets nearly invisible on a light one; the cycle
+  is picked from the editor background like the token palette.
+
 - fix: the demo app highlighted every opened file with the Lua grammar. Editors
   were created with a hardcoded `"lua"` — the right default for the demo's Lua
   templates, but never updated on open, so a Rust file's `///` doc comments were

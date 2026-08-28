@@ -1556,3 +1556,23 @@ fn test_disabling_sticky_scroll_gives_the_top_row_back() {
         "with sticky scroll off the click must reach the canvas again"
     );
 }
+
+// ---- Language indicator ----
+
+#[test]
+fn test_toolbar_shows_the_active_grammar() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+
+    // An untitled tab holds the demo's Lua templates.
+    assert!(ui.shows("Lua"));
+    assert!(!ui.shows("Rust"));
+
+    let _ = ui.app.update(Message::FileOpened(Ok((
+        std::path::PathBuf::from("/tmp/iced-code-editor/indicator.rs"),
+        "fn main() {}".to_string(),
+    ))));
+
+    assert!(ui.shows("Rust"), "opening a .rs file must re-label the indicator");
+    assert!(!ui.shows("Lua"));
+}
