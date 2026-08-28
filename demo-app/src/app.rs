@@ -21,6 +21,7 @@ use iced::widget::Id;
 #[cfg(not(target_arch = "wasm32"))]
 use iced::widget::operation::focus;
 use iced::widget::text_editor;
+use iced::widget::text_editor::{Action, Edit, Motion};
 use iced::{Event, Subscription, Task, Theme, event, window};
 #[cfg(not(target_arch = "wasm32"))]
 use iced_code_editor::LspEvent;
@@ -32,6 +33,7 @@ use iced_code_editor::Message as EditorMessage;
 use iced_code_editor::{Language, theme};
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
@@ -94,8 +96,11 @@ pub struct DemoApp {
     /// Read-only mirror of [`log_messages`](Self::log_messages) backing the
     /// output pane's `text_editor`, so log lines can be selected and copied.
     ///
-    /// Kept in sync by [`DemoApp::refresh_log_content`]; never edited by the
-    /// user — [`Message::LogAction`] drops editing actions.
+    /// Appended to by [`DemoApp::log`] and rebuilt only by
+    /// [`DemoApp::refresh_log_content`], which the initial build and **Clear**
+    /// use; never edited by the user — [`Message::LogAction`] drops editing
+    /// actions. `log_content.text()` always equals
+    /// `log_messages.join("\n")`.
     pub log_content: text_editor::Content,
     /// Test text input value
     pub text_input_value: String,
@@ -146,8 +151,11 @@ greet("World")
 "#;
 
         let log_messages = vec!["[INFO] Application started".to_string()];
-        let log_content =
+        // Cursor at the end, so an untouched pane follows the newest output
+        // (see `DemoApp::log`).
+        let mut log_content =
             text_editor::Content::with_text(&log_messages.join("\n"));
+        log_content.perform(Action::Move(Motion::DocumentEnd));
 
         let current_font = if cfg!(target_arch = "wasm32") {
             FontOption::JETBRAINS_MONO
@@ -238,20 +246,59 @@ greet("World")
     }
 
     /// Adds a log message.
+    ///
+    /// The line is appended to [`log_content`](Self::log_content) in place.
+    /// Rebuilding the whole `Content` instead — as this used to — re-parsed the
+    /// entire log for every message, which is quadratic over a session, and
+    /// threw away the reader's selection, which is the one thing the output
+    /// pane's `text_editor` exists to provide.
+    ///
+    /// The pane follows the newest output only while nobody is reading it: a
+    /// cursor still sitting at the end means it has not been moved, so it is
+    /// left there and the view scrolls to the new line. A reader who has
+    /// clicked or selected somewhere keeps their place and their selection.
     fn log(&mut self, level: &str, message: &str) {
-        self.log_messages.push(format!("[{}] {}", level, message));
-        self.refresh_log_content();
+        let line = format!("[{level}] {message}");
+
+        // Ask the editor itself where the end is rather than deriving it from
+        // line lengths: `column` is a byte index, and the two notions must not
+        // be allowed to disagree.
+        let before = self.log_content.cursor();
+        self.log_content.perform(Action::Move(Motion::DocumentEnd));
+        let was_following = before.selection.is_none()
+            && before.position == self.log_content.cursor().position;
+
+        // The newline separates this line from the previous one, so the very
+        // first line must not carry it -- otherwise the log opens on a blank
+        // row and `log_content` stops matching `log_messages.join("\n")`.
+        let addition = if self.log_messages.is_empty() {
+            line.clone()
+        } else {
+            format!("\n{line}")
+        };
+        self.log_content.perform(Action::Edit(Edit::Paste(Arc::new(addition))));
+
+        if !was_following {
+            self.log_content.move_to(before);
+        }
+
+        self.log_messages.push(line);
     }
 
     /// Rebuilds [`log_content`](Self::log_content) from
     /// [`log_messages`](Self::log_messages).
     ///
-    /// Called after every change to the log so the output pane shows the
-    /// current messages. Rebuilding drops any selection in progress, which
-    /// is the price of keeping `log_messages` the single source of truth.
+    /// Only for the two places where appending cannot express the change: the
+    /// initial build, and **Clear**, which replaces the whole log. Every other
+    /// change goes through [`DemoApp::log`], which appends. Rebuilding drops
+    /// any selection in progress, which is why it is not the general path.
+    ///
+    /// The cursor is left at the end so a pane nobody has touched follows the
+    /// newest output — see [`DemoApp::log`].
     fn refresh_log_content(&mut self) {
         self.log_content =
             text_editor::Content::with_text(&self.log_messages.join("\n"));
+        self.log_content.perform(Action::Move(Motion::DocumentEnd));
     }
 
     /// Handles periodic tick events for cursor blinking in all editors.
@@ -372,6 +419,10 @@ greet("World")
             }
             Message::ClearLog => {
                 self.log_messages.clear();
+                // `log` appends, so the emptied list has to reach `log_content`
+                // some other way: this is one of the two places a rebuild is
+                // the only thing that can express the change.
+                self.refresh_log_content();
                 self.log("INFO", "Log cleared");
                 Task::none()
             }
@@ -653,6 +704,82 @@ mod tests {
 
     /// The first line every fresh [`DemoApp`] logs.
     const STARTUP_LOG: &str = "[INFO] Application started";
+
+    #[test]
+    fn test_appending_many_lines_keeps_the_two_views_identical() {
+        // `log` appends to `log_content` instead of rebuilding it, so the two
+        // can now drift where they could not before. This is the invariant
+        // that says they do not -- checked with no `trim_end`, since a stray
+        // leading or trailing newline is exactly the way an append goes wrong.
+        let (mut app, _) = DemoApp::new();
+
+        for index in 0..50 {
+            app.log("OUTPUT", &format!("line {index}"));
+        }
+
+        assert_eq!(app.log_content.text(), app.log_messages.join("\n"));
+        assert_eq!(app.log_messages.len(), 51);
+    }
+
+    #[test]
+    fn test_the_first_line_after_a_clear_carries_no_leading_blank() {
+        // The one case where the separating newline must not be written: the
+        // log is empty, so there is nothing to separate the line from.
+        let (mut app, _) = DemoApp::new();
+        app.log("OUTPUT", "hello");
+
+        let _ = app.update(Message::ClearLog);
+
+        assert_eq!(app.log_content.text(), "[INFO] Log cleared");
+    }
+
+    #[test]
+    fn test_the_pane_follows_the_tail_while_nobody_has_moved_the_cursor() {
+        // Nothing has touched the pane, so the cursor rides the end and the
+        // view scrolls to each new line.
+        let (mut app, _) = DemoApp::new();
+
+        app.log("OUTPUT", "hello");
+
+        let last_line = app.log_content.line_count() - 1;
+        assert_eq!(app.log_content.cursor().position.line, last_line);
+    }
+
+    #[test]
+    fn test_a_reader_keeps_their_place_when_a_line_arrives() {
+        // The defect this replaced: rebuilding the whole `Content` sent the
+        // pane back to the top on every message, so a reader was pulled away
+        // from what they were reading by the next thing the LSP server said.
+        let (mut app, _) = DemoApp::new();
+        app.log("OUTPUT", "one");
+        app.log("OUTPUT", "two");
+        let _ = app.update(Message::LogAction(Action::Move(
+            iced::widget::text_editor::Motion::DocumentStart,
+        )));
+
+        app.log("OUTPUT", "three");
+
+        assert_eq!(
+            app.log_content.cursor().position.line,
+            0,
+            "the reader's cursor must not be dragged to the new line"
+        );
+    }
+
+    #[test]
+    fn test_a_selection_survives_a_line_arriving() {
+        // Selecting and copying is the whole reason the output pane is a
+        // `text_editor` rather than a column of `text` widgets; a selection
+        // that dies on the next log message is the feature not working.
+        let (mut app, _) = DemoApp::new();
+        let _ = app.update(Message::LogAction(Action::SelectAll));
+        let selected = app.log_content.selection();
+        assert_eq!(selected.as_deref(), Some(STARTUP_LOG));
+
+        app.log("OUTPUT", "an interrupting message");
+
+        assert_eq!(app.log_content.selection(), selected);
+    }
 
     #[test]
     fn test_log_content_mirrors_log_messages() {

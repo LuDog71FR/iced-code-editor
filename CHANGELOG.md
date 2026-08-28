@@ -36,6 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: the demo app's output pane no longer loses your selection, or your
+  place, whenever a line is logged. Each message rebuilt the whole
+  `text_editor::Content` from the joined log — a full re-parse per line,
+  quadratic over a session — which reset the cursor and dropped any selection
+  in progress. Since selecting and copying is the reason the pane became a
+  `text_editor` in the first place, it did not work while anything was logging,
+  and the LSP client logs up to 256 messages a tick. Lines are now appended in
+  place. The pane follows the newest output only while nobody has moved the
+  cursor; a reader who has clicked or selected keeps both.
+
 - fix: sticky scroll no longer stops working when code folding is disabled. It
   takes its enclosing blocks from the fold regions, and was reading them through
   the folding toggle as well, so `set_folding_enabled(false)` silently emptied
