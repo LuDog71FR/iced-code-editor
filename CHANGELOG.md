@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: the demo app's output log is now capped at 2000 lines, dropping the
+  oldest when it overflows. It was bounded by nothing while the LSP client
+  feeds it directly — up to 256 messages a tick, from a language server the
+  application does not control — so a long session against a chatty server grew
+  it until the process died. Lines go in batches of 200, because dropping the
+  front of a `text_editor::Content` costs a rebuild and doing that per message
+  would reintroduce the quadratic cost the fix below removes. A reader's cursor
+  and selection are moved up with the text rather than reset.
+
 - fix: the demo app's output pane no longer loses your selection, or your
   place, whenever a line is logged. Each message rebuilt the whole
   `text_editor::Content` from the joined log — a full re-parse per line,

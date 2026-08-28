@@ -53,6 +53,57 @@ mod app_lsp;
 #[cfg(not(target_arch = "wasm32"))]
 use app_lsp::LspHoverPending;
 
+/// Greatest number of lines the output log keeps.
+///
+/// Well past what the pane can show, so the bound is invisible in normal use;
+/// its job is to stop a chatty language server growing the log until the
+/// process dies (see [`DemoApp::trim_log`]).
+const MAX_LOG_LINES: usize = 2_000;
+
+/// Number of lines dropped each time the log is trimmed.
+///
+/// Trimming costs a rebuild of the whole `text_editor::Content`, so lines go in
+/// batches: one rebuild per this many messages instead of one per message.
+const LOG_TRIM_BATCH: usize = 200;
+
+/// Moves a saved cursor up by `lines`, as if that many lines had been removed
+/// from the top of the buffer.
+///
+/// Used after the log is trimmed, so a reader ends up back on the text they
+/// were looking at rather than wherever its old line number now points. A
+/// position whose line was itself trimmed away collapses to the very start:
+/// the closest surviving place, and the only column guaranteed to exist on the
+/// line it lands on.
+///
+/// # Arguments
+///
+/// * `cursor` - The cursor as it stood before the lines were removed
+/// * `lines` - Number of lines removed from the top
+///
+/// # Returns
+/// The equivalent cursor in the trimmed buffer, selection included.
+fn shift_cursor_up(
+    cursor: text_editor::Cursor,
+    lines: usize,
+) -> text_editor::Cursor {
+    fn shift(
+        position: text_editor::Position,
+        lines: usize,
+    ) -> text_editor::Position {
+        position
+            .line
+            .checked_sub(lines)
+            .map_or(text_editor::Position { line: 0, column: 0 }, |line| {
+                text_editor::Position { line, column: position.column }
+            })
+    }
+
+    text_editor::Cursor {
+        position: shift(cursor.position, lines),
+        selection: cursor.selection.map(|position| shift(position, lines)),
+    }
+}
+
 /// Delay in milliseconds before hiding the hover tooltip when the cursor leaves the window.
 #[cfg(not(target_arch = "wasm32"))]
 const LSP_HOVER_CURSOR_LEFT_MS: u64 = 400;
@@ -265,8 +316,7 @@ greet("World")
         // be allowed to disagree.
         let before = self.log_content.cursor();
         self.log_content.perform(Action::Move(Motion::DocumentEnd));
-        let was_following = before.selection.is_none()
-            && before.position == self.log_content.cursor().position;
+        let was_following = self.log_cursor_was_following(before);
 
         // The newline separates this line from the previous one, so the very
         // first line must not carry it -- otherwise the log opens on a blank
@@ -283,6 +333,58 @@ greet("World")
         }
 
         self.log_messages.push(line);
+        self.trim_log();
+    }
+
+    /// Returns whether the pane is still following the newest output.
+    ///
+    /// True while the cursor sits at the very end of the log with nothing
+    /// selected, which means nobody has moved it. The end is obtained from the
+    /// editor rather than derived from line lengths:
+    /// [`Position::column`](text_editor::Position::column) is a byte index, and
+    /// the two notions must not be allowed to disagree.
+    ///
+    /// # Arguments
+    ///
+    /// * `before` - The cursor as it stood before the caller moved it to the
+    ///   end of the document
+    fn log_cursor_was_following(&self, before: text_editor::Cursor) -> bool {
+        before.selection.is_none()
+            && before.position == self.log_content.cursor().position
+    }
+
+    /// Drops the oldest lines once the log grows past [`MAX_LOG_LINES`].
+    ///
+    /// Without this the log is bounded by nothing, and the LSP client feeds it
+    /// directly — up to `MAX_LSP_EVENTS_PER_TICK` messages a tick, from a
+    /// server this application does not control.
+    ///
+    /// Trimming removes [`LOG_TRIM_BATCH`] lines at a time rather than one per
+    /// message. Dropping the front of a `text_editor::Content` means rebuilding
+    /// it, and rebuilding once per message is exactly the quadratic cost
+    /// [`DemoApp::log`] exists to avoid; one rebuild per `LOG_TRIM_BATCH`
+    /// messages, over a log that can no longer grow, is linear again.
+    fn trim_log(&mut self) {
+        if self.log_messages.len() <= MAX_LOG_LINES {
+            return;
+        }
+
+        let removed = self.log_messages.len()
+            - MAX_LOG_LINES.saturating_sub(LOG_TRIM_BATCH);
+        self.log_messages.drain(..removed);
+
+        // A reader is `removed` lines further down the log than they were, so
+        // put them back where they were looking rather than at the end. One
+        // who was following the tail stays on it.
+        let before = self.log_content.cursor();
+        self.log_content.perform(Action::Move(Motion::DocumentEnd));
+        let was_following = self.log_cursor_was_following(before);
+
+        self.refresh_log_content();
+
+        if !was_following {
+            self.log_content.move_to(shift_cursor_up(before, removed));
+        }
     }
 
     /// Rebuilds [`log_content`](Self::log_content) from
@@ -704,6 +806,89 @@ mod tests {
 
     /// The first line every fresh [`DemoApp`] logs.
     const STARTUP_LOG: &str = "[INFO] Application started";
+
+    /// A cursor on `line`, with no selection.
+    fn caret_on(line: usize) -> text_editor::Cursor {
+        text_editor::Cursor {
+            position: text_editor::Position { line, column: 4 },
+            selection: None,
+        }
+    }
+
+    #[test]
+    fn test_shift_cursor_up_moves_a_surviving_line_by_the_amount_removed() {
+        let shifted = shift_cursor_up(caret_on(500), 201);
+
+        assert_eq!(shifted.position.line, 299);
+        assert_eq!(shifted.position.column, 4, "the column is unaffected");
+    }
+
+    #[test]
+    fn test_shift_cursor_up_collapses_a_line_that_was_trimmed_away() {
+        // Line 100 no longer exists after 201 lines were dropped. Column 4 is
+        // not guaranteed to exist on the line it lands on either, so the whole
+        // position collapses rather than keeping a column out of thin air.
+        let shifted = shift_cursor_up(caret_on(100), 201);
+
+        assert_eq!(shifted.position.line, 0);
+        assert_eq!(shifted.position.column, 0);
+    }
+
+    #[test]
+    fn test_shift_cursor_up_moves_the_selection_with_the_cursor() {
+        // Both ends move, or the selection would silently grow or shrink.
+        let cursor = text_editor::Cursor {
+            position: text_editor::Position { line: 500, column: 4 },
+            selection: Some(text_editor::Position { line: 400, column: 9 }),
+        };
+
+        let shifted = shift_cursor_up(cursor, 201);
+
+        assert_eq!(shifted.position.line, 299);
+        assert_eq!(shifted.selection.map(|position| position.line), Some(199));
+    }
+
+    #[test]
+    fn test_the_log_stops_growing_once_it_reaches_its_bound() {
+        // The bound exists because the LSP client feeds this log from a server
+        // this application does not control. Logging past it must drop the
+        // oldest lines, not the newest, and must leave the two views in step.
+        let (mut app, _) = DemoApp::new();
+
+        for index in 0..MAX_LOG_LINES + LOG_TRIM_BATCH {
+            app.log("OUTPUT", &format!("line {index}"));
+        }
+
+        assert!(
+            app.log_messages.len() <= MAX_LOG_LINES,
+            "the log grew to {}",
+            app.log_messages.len()
+        );
+        assert_eq!(app.log_content.text(), app.log_messages.join("\n"));
+        assert_eq!(
+            app.log_messages.last().map(String::as_str),
+            Some("[OUTPUT] line 2199"),
+            "the newest line must survive"
+        );
+        assert!(
+            !app.log_messages.iter().any(|line| line.contains("line 0")),
+            "the oldest lines must be the ones dropped"
+        );
+    }
+
+    #[test]
+    fn test_trimming_leaves_a_follower_following() {
+        // A trim rebuilds the content, so the cheap mistake is to let it reset
+        // the reader. Nobody has moved this cursor, so it stays on the tail.
+        let (mut app, _) = DemoApp::new();
+
+        for index in 0..MAX_LOG_LINES + LOG_TRIM_BATCH {
+            app.log("OUTPUT", &format!("line {index}"));
+        }
+
+        let last_line = app.log_content.line_count() - 1;
+        assert_eq!(app.log_content.cursor().position.line, last_line);
+    }
 
     #[test]
     fn test_appending_many_lines_keeps_the_two_views_identical() {
