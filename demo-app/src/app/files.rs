@@ -215,6 +215,9 @@ impl DemoApp {
                         Some("Editor tab missing on save".to_string());
                     return Task::none();
                 };
+                // A "Save As" can change the extension, so the highlighting
+                // has to follow the new name.
+                editor.set_syntax(&DemoApp::syntax_for_path(Some(&path)));
                 *current_file = Some(path);
                 editor.mark_saved();
                 editor.set_reveal_in_file_manager_enabled(!cfg!(

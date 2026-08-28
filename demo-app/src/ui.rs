@@ -1,10 +1,12 @@
 mod lsp;
 
 use crate::app::{DemoApp, EditorTab, Message};
+use crate::log_highlighter::{LogHighlighter, LogPalette};
 use crate::types::{EditorToggle, FontOption, LanguageOption, Template};
+use iced::advanced::text::highlighter;
 use iced::widget::{
     Space, button, center, checkbox, column, container, mouse_area, pick_list,
-    row, scrollable, slider, stack, text, text_input,
+    row, scrollable, slider, stack, text, text_editor, text_input,
 };
 use iced::{Color, Element, Length, Theme};
 use iced_code_editor::IndentStyle;
@@ -610,79 +612,83 @@ pub fn view_editor_pane<'a>(
     .into()
 }
 
+/// Renders a small toolbar button for the output pane.
+fn output_toolbar_button(
+    label: &str,
+    message: Message,
+) -> Element<'_, Message> {
+    button(text(label).size(12))
+        .on_press(message)
+        .padding(4)
+        .style(|theme: &iced::Theme, status| {
+            let palette = theme.extended_palette();
+            let pair = match status {
+                iced::widget::button::Status::Hovered => palette.primary.weak,
+                _ => palette.background.weak,
+            };
+
+            iced::widget::button::Style {
+                background: Some(iced::Background::Color(pair.color)),
+                text_color: pair.text,
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
 /// Renders the output pane content.
+///
+/// The log itself is a read-only [`text_editor`]: it accepts selection,
+/// scrolling and `Ctrl+C`, while [`DemoApp::update`](crate::app::DemoApp)
+/// drops every editing action. Per-level coloring, which a plain
+/// `text_editor` does not do, comes from [`LogHighlighter`].
 pub fn view_output_pane(
     app: &DemoApp,
     text_color: Color,
 ) -> Element<'_, Message> {
-    // Clear button with hover effect
-    let clear_button = button(text("Clear").size(12))
-        .on_press(Message::ClearLog)
-        .padding(4)
-        .style(|theme: &iced::Theme, status| {
-            let palette = theme.extended_palette();
-            match status {
-                iced::widget::button::Status::Hovered => {
-                    iced::widget::button::Style {
-                        background: Some(iced::Background::Color(
-                            palette.primary.weak.color,
-                        )),
-                        text_color: palette.primary.weak.text,
-                        border: iced::Border {
-                            radius: 4.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }
-                }
-                _ => iced::widget::button::Style {
-                    background: Some(iced::Background::Color(
-                        palette.background.weak.color,
-                    )),
-                    text_color: palette.background.weak.text,
-                    border: iced::Border {
-                        radius: 4.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-            }
-        });
-
-    // Toolbar row with Clear button aligned to the right
-    let toolbar = row![Space::new().width(Length::Fill), clear_button]
-        .padding(5)
-        .align_y(iced::Center);
+    // Toolbar buttons aligned to the right
+    let toolbar = row![
+        Space::new().width(Length::Fill),
+        output_toolbar_button("Copy", Message::CopyLog),
+        output_toolbar_button("Clear", Message::ClearLog),
+    ]
+    .spacing(5)
+    .padding(5)
+    .align_y(iced::Center);
 
     let lsp_panel = lsp::view_lsp_panel();
 
-    // Log messages content
-    let log_content: Vec<Element<'_, Message>> = app
-        .log_messages
-        .iter()
-        .map(|msg| {
-            let color = if msg.contains("[ERROR]") {
-                Color::from_rgb(1.0, 0.4, 0.4)
-            } else if msg.contains("[OUTPUT]") {
-                Color::from_rgb(0.4, 1.0, 0.4)
-            } else {
-                text_color
-            };
+    let palette = LogPalette {
+        error: Color::from_rgb(1.0, 0.4, 0.4),
+        output: Color::from_rgb(0.4, 1.0, 0.4),
+        default: text_color,
+    };
 
-            text(msg)
-                .size(13)
-                .style(move |_| text::Style { color: Some(color) })
-                .into()
+    let log_view = text_editor(&app.log_content)
+        .on_action(Message::LogAction)
+        .size(13)
+        .padding(10)
+        .height(Length::Fill)
+        .highlight_with::<LogHighlighter>(palette, |color, _theme| {
+            highlighter::Format { color: Some(*color), font: None }
         })
-        .collect();
+        .style(move |theme: &Theme, _status| {
+            let theme_palette = theme.extended_palette();
 
-    let log_scrollable = scrollable(
-        column(log_content).spacing(2).padding(10).width(Length::Fill),
-    )
-    .height(Length::Fill)
-    .width(Length::Fill);
+            text_editor::Style {
+                background: iced::Background::Color(Color::TRANSPARENT),
+                border: iced::Border::default(),
+                placeholder: theme_palette.background.strong.color,
+                value: text_color,
+                selection: theme_palette.primary.weak.color,
+            }
+        });
 
-    column![toolbar, lsp_panel, log_scrollable]
+    column![toolbar, lsp_panel, log_view]
         .width(Length::Fill)
         .height(Length::Fill)
         .into()

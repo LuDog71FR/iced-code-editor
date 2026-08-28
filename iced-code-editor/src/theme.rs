@@ -240,6 +240,28 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
     }
 }
 
+/// Returns whether `color` is dark enough to need a dark-tuned palette on top
+/// of it.
+///
+/// [`Style`] keeps only the resolved colors, not the `is_dark` flag of the
+/// Iced palette it was derived from, so consumers that must branch on
+/// light/dark -- notably the syntect theme picked by the syntax highlighter --
+/// recover it from the background here. The threshold is applied to the
+/// relative luminance (ITU-R BT.709 coefficients), so a mid-tone yellow reads
+/// as light and a mid-tone blue as dark, the way the eye sees them.
+///
+/// # Arguments
+///
+/// * `color` - The background color to classify
+///
+/// # Returns
+///
+/// `true` when the color is dark, `false` when it is light.
+pub(crate) fn is_dark_background(color: Color) -> bool {
+    let luminance = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+    luminance < 0.5
+}
+
 /// Darkens a color by a given factor (0.0 to 1.0).
 fn darken(color: Color, factor: f32) -> Color {
     Color {
@@ -288,6 +310,25 @@ fn with_alpha(color: Color, alpha: f32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_dark_background_classifies_dark_and_light() {
+        // TokyoNightStorm's background.
+        assert!(is_dark_background(Color::from_rgb(0.141, 0.157, 0.231)));
+        assert!(is_dark_background(Color::BLACK));
+
+        // base16-ocean.light's background.
+        assert!(!is_dark_background(Color::from_rgb(0.937, 0.945, 0.961)));
+        assert!(!is_dark_background(Color::WHITE));
+    }
+
+    #[test]
+    fn test_is_dark_background_weights_channels_by_luminance() {
+        // Same numeric intensity in every channel, but green dominates the
+        // luminance formula: pure green reads light, pure blue reads dark.
+        assert!(!is_dark_background(Color::from_rgb(0.0, 1.0, 0.0)));
+        assert!(is_dark_background(Color::from_rgb(0.0, 0.0, 1.0)));
+    }
 
     #[test]
     fn test_from_iced_theme_dark() {

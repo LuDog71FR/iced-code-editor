@@ -11,6 +11,7 @@
 
 mod app;
 mod file_ops;
+mod log_highlighter;
 mod types;
 mod ui;
 

@@ -572,6 +572,11 @@ impl CodeEditor {
     /// ```
     pub fn set_theme(&mut self, style: Style) {
         self.style = style;
+        // The highlight cache stores resolved colors, not scopes, and the
+        // syntect palette is picked from the style's background lightness
+        // (see `CodeEditor::resolve_syntax`). A theme change can therefore
+        // flip light/dark and invalidate every cached span.
+        self.invalidate_highlight_from(0);
         self.content_cache.clear();
         self.overlay_cache.clear();
     }
@@ -1265,6 +1270,48 @@ impl CodeEditor {
         &self.syntax
     }
 
+    /// Sets the syntax highlighting language identifier for this editor.
+    ///
+    /// Use this when the content a single editor shows changes language --
+    /// typically after opening or saving a file under a different extension.
+    /// The identifier is the same key [`CodeEditor::new`] takes: a file
+    /// extension (`"rs"`, `"py"`, `"toml"`) or one of the aliases
+    /// `resolve_syntax` normalizes (`"rust"`, `"python"`, `"markdown"`, ...).
+    /// An unknown identifier falls back to plain text rather than losing the
+    /// content.
+    ///
+    /// Changing the identifier drops the cached per-line highlighting, so the
+    /// visible lines are re-tokenized on the next render. Setting the current
+    /// identifier again does nothing.
+    ///
+    /// # Arguments
+    ///
+    /// * `syntax` - Syntax highlighting language identifier (e.g. `"rs"`)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("-- comment", "lua");
+    /// assert_eq!(editor.syntax(), "lua");
+    ///
+    /// editor.set_syntax("rs");
+    /// assert_eq!(editor.syntax(), "rs");
+    /// ```
+    pub fn set_syntax(&mut self, syntax: &str) {
+        if self.syntax == syntax {
+            return;
+        }
+
+        self.syntax.clear();
+        self.syntax.push_str(syntax);
+        // `highlighted_line_cached` rebuilds `HighlightCache` on its own when
+        // the active syntax no longer matches, so only the canvas needs an
+        // explicit redraw here.
+        self.content_cache.clear();
+    }
+
     /// Sets the line wrapping with builder pattern.
     ///
     /// # Arguments
@@ -1599,6 +1646,63 @@ mod tests {
     fn test_syntax_getter() {
         let editor = CodeEditor::new("", "lua");
         assert_eq!(editor.syntax(), "lua");
+    }
+
+    #[test]
+    fn test_set_syntax_updates_identifier() {
+        let mut editor = CodeEditor::new("-- comment", "lua");
+
+        editor.set_syntax("rs");
+        assert_eq!(editor.syntax(), "rs");
+
+        // Setting the same identifier again is a no-op, not an error.
+        editor.set_syntax("rs");
+        assert_eq!(editor.syntax(), "rs");
+    }
+
+    /// Color of the first highlighted span of the editor's first line, or
+    /// `None` when syntect ships no definition for the active syntax.
+    fn first_span_color(editor: &CodeEditor) -> Option<iced::Color> {
+        let (syntax_set, syntax, theme) = editor.resolve_syntax();
+        editor
+            .highlighted_line_cached(0, syntax?, theme?, syntax_set)
+            .first()
+            .map(|(color, _)| *color)
+    }
+
+    #[test]
+    fn test_set_syntax_rehighlights_with_the_new_language() {
+        // A Rust doc comment: a comment under `rs`, plain code under `lua`.
+        let mut editor = CodeEditor::new("/// doc", "lua");
+
+        let as_lua = first_span_color(&editor);
+        assert!(as_lua.is_some(), "syntect ships a Lua definition");
+
+        editor.set_syntax("rs");
+        let as_rust = first_span_color(&editor);
+        assert!(as_rust.is_some(), "syntect ships a Rust definition");
+
+        assert_ne!(
+            as_lua, as_rust,
+            "`/// doc` must not keep its Lua colors after switching to Rust"
+        );
+    }
+
+    #[test]
+    fn test_set_theme_rehighlights_for_the_new_palette() {
+        let mut editor = CodeEditor::new("// comment", "rs");
+
+        editor.set_theme(crate::theme::from_iced_theme(&iced::Theme::Dark));
+        let dark = first_span_color(&editor);
+        assert!(dark.is_some(), "syntect ships a Rust definition");
+
+        editor.set_theme(crate::theme::from_iced_theme(&iced::Theme::Light));
+        let light = first_span_color(&editor);
+
+        assert_ne!(
+            dark, light,
+            "the cached dark colors must be dropped when the theme turns light"
+        );
     }
 
     #[test]

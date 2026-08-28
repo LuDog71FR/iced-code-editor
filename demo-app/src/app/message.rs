@@ -54,6 +54,11 @@ pub enum Message {
     TemplateSelected(EditorId, Template),
     /// Clear log
     ClearLog,
+    /// Interaction with the read-only output log: selection, scrolling and
+    /// cursor moves. Editing actions are ignored by `update`.
+    LogAction(iced::widget::text_editor::Action),
+    /// Copy the whole output log to the clipboard
+    CopyLog,
     /// Run code (simulated)
     RunCode,
     /// Toggle a boolean editor setting (wrap, folding, auto-indent, ...) —

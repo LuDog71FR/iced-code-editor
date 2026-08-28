@@ -8,7 +8,7 @@ use crate::types::EditorId;
 use iced::Task;
 use iced_code_editor::Message as EditorMessage;
 use iced_code_editor::{CodeEditor, ContextMenuEntry, ContextMenuItem, theme};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A single open editor tab.
 pub struct EditorTab {
@@ -26,6 +26,34 @@ pub struct EditorTab {
 }
 
 impl DemoApp {
+    /// Syntax identifier used by tabs that are not backed by a file.
+    ///
+    /// The demo's built-in templates ([`crate::types::Template`]) are all Lua,
+    /// so an untitled tab starts out as Lua.
+    pub(super) const UNTITLED_SYNTAX: &'static str = "lua";
+
+    /// Resolves the syntax highlighting identifier for a tab backed by `path`.
+    ///
+    /// The identifier is the file's extension, lowercased so `FOO.RS` and
+    /// `foo.rs` resolve alike. A path with no extension, and an untitled tab,
+    /// both fall back to [`Self::UNTITLED_SYNTAX`]; an extension the
+    /// highlighter does not know degrades to plain text on its own.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The file backing the tab, or `None` for an untitled tab
+    ///
+    /// # Returns
+    ///
+    /// The syntax identifier to hand to `CodeEditor::set_syntax`.
+    pub(super) fn syntax_for_path(path: Option<&Path>) -> String {
+        path.and_then(Path::extension)
+            .and_then(|extension| extension.to_str())
+            .filter(|extension| !extension.is_empty())
+            .map(str::to_lowercase)
+            .unwrap_or_else(|| Self::UNTITLED_SYNTAX.to_string())
+    }
+
     /// Creates an editor with the demo context-menu and command-palette
     /// entries.
     ///
@@ -45,7 +73,7 @@ impl DemoApp {
     /// host's job — so advertising one the host has not bound points the user
     /// at a combination that does something else or nothing at all.
     pub(super) fn new_editor(content: &str) -> CodeEditor {
-        CodeEditor::new(content, "lua")
+        CodeEditor::new(content, Self::UNTITLED_SYNTAX)
             .with_custom_context_menu_entries(vec![
                 ContextMenuEntry::item(
                     "app.format_document",
@@ -135,8 +163,8 @@ impl DemoApp {
     /// creating and activating a new tab via [`Self::configured_editor`].
     ///
     /// Applies the reveal-in-file-manager policy — enabled only on native
-    /// targets and only when `path` is `Some` — to whichever tab is
-    /// returned.
+    /// targets and only when `path` is `Some` — and the syntax highlighting
+    /// language derived from `path` to whichever tab is returned.
     ///
     /// Callers remain responsible for any further tab-specific work:
     /// syncing existing-editor content (`reset`), cursor placement, LSP
@@ -173,8 +201,12 @@ impl DemoApp {
         };
 
         let reveal_enabled = !cfg!(target_arch = "wasm32") && path.is_some();
+        let syntax = Self::syntax_for_path(path.map(PathBuf::as_path));
         if let Some(tab) = self.get_tab(target_tab_id) {
             tab.editor.set_reveal_in_file_manager_enabled(reveal_enabled);
+            // A reused tab may still be highlighting the previous file's
+            // language, so this has to run for reused and fresh tabs alike.
+            tab.editor.set_syntax(&syntax);
         }
 
         target_tab_id
@@ -425,6 +457,48 @@ mod tests {
         let target = app.open_content_in_tab(None, "");
         assert_ne!(target, active_id);
         assert_eq!(app.tabs.len(), tab_count_before + 1);
+    }
+
+    #[test]
+    fn test_syntax_for_path_uses_lowercased_extension() {
+        assert_eq!(
+            DemoApp::syntax_for_path(Some(Path::new("/tmp/a.rs"))),
+            "rs"
+        );
+        assert_eq!(
+            DemoApp::syntax_for_path(Some(Path::new("/tmp/A.RS"))),
+            "rs"
+        );
+    }
+
+    #[test]
+    fn test_syntax_for_path_falls_back_for_untitled_and_extensionless() {
+        assert_eq!(
+            DemoApp::syntax_for_path(Some(Path::new("/tmp/Makefile"))),
+            DemoApp::UNTITLED_SYNTAX
+        );
+        assert_eq!(DemoApp::syntax_for_path(None), DemoApp::UNTITLED_SYNTAX);
+    }
+
+    #[test]
+    fn test_open_content_in_tab_sets_syntax_from_path() {
+        let (mut app, _) = DemoApp::new();
+
+        let rust_tab = app.open_content_in_tab(
+            Some(&PathBuf::from("/tmp/x.rs")),
+            "fn main() {}",
+        );
+        assert!(
+            app.get_tab(rust_tab)
+                .is_some_and(|tab| tab.editor.syntax() == "rs")
+        );
+
+        // Reopening without a path returns to the untitled default rather than
+        // keeping the previous file's language.
+        let untitled_tab = app.open_content_in_tab(None, "");
+        assert!(app.get_tab(untitled_tab).is_some_and(|tab| {
+            tab.editor.syntax() == DemoApp::UNTITLED_SYNTAX
+        }));
     }
 
     #[test]

@@ -21,7 +21,10 @@ bench = []
 [dependencies]
 iced.workspace = true
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
-two-face = { version = "0.5", optional = true }
+# `default-features = false` + `syntect-fancy` is required: two-face defaults to
+# `syntect-onig`, which would pull the C `onig` backend into a workspace that
+# builds syntect with the pure-Rust `default-fancy` backend (and targets WASM).
+two-face = { version = "0.5", optional = true, default-features = false, features = ["syntect-fancy"] }
 web-time = "1"
 iced_font_awesome = "0.4"
 iced_aw = "0.13"

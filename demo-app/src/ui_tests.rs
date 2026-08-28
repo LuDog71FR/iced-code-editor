@@ -515,6 +515,28 @@ fn test_run_button_logs_the_simulated_execution() {
 }
 
 #[test]
+fn test_copy_button_asks_for_the_log_to_be_copied() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+
+    let messages = ui.click("Copy");
+
+    assert!(matches!(messages.as_slice(), [Message::CopyLog]));
+}
+
+#[test]
+fn test_clear_button_empties_the_output_pane() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.app.log_messages.push("[OUTPUT] noise".to_string());
+
+    let messages = ui.click("Clear");
+
+    assert!(matches!(messages.as_slice(), [Message::ClearLog]));
+    assert_eq!(ui.app.log_messages, vec!["[INFO] Log cleared".to_string()]);
+}
+
+#[test]
 fn test_new_tab_button_opens_another_tab() {
     let (mut app, _) = DemoApp::new();
     let mut ui = Ui::new(&mut app);

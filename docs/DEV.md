@@ -427,8 +427,17 @@ pub struct CommandHistory {
 
 ### Syntax Highlighting
 
-**Integration:** Uses the `syntect` crate. The optional `two-face` dependency adds
-extra Sublime syntax/theme definitions beyond syntect's defaults.
+**Integration:** Uses the `syntect` crate. The optional `two-face` feature adds
+extra Sublime syntax/theme definitions beyond syntect's defaults; `demo-app`
+enables it. It must be declared with `default-features = false, features =
+["syntect-fancy"]` — two-face defaults to `syntect-onig`, which would drag the C
+`onig` backend into a workspace that builds syntect with the pure-Rust
+`default-fancy` backend and targets WASM.
+
+The token palette is not fixed: `CodeEditor::resolve_syntax` picks
+`base16-ocean.light` or `base16-ocean.dark` from the lightness of the editor
+`Style`'s background (`theme::is_dark_background`). Because the per-line cache
+stores *resolved colors* rather than scopes, `set_theme` invalidates it.
 
 Highlighting is **not** recomputed naïvely per frame. Instead, each logical line is
 tokenized once and memoized as a dense per-line prefix that also stores the syntect

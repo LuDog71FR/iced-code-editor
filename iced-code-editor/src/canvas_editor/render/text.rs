@@ -260,6 +260,10 @@ impl CodeEditor {
     /// extensions (`python`/`py`, `markdown`/`md`, …) are normalized here, and
     /// an unknown syntax falls back to plain text rather than losing the text.
     ///
+    /// The token palette follows the editor's own theme: a light editor
+    /// background selects `base16-ocean.light`, a dark one
+    /// `base16-ocean.dark`.
+    ///
     /// # Returns
     ///
     /// The shared syntax set, the syntax to tokenize with, and the theme
@@ -283,9 +287,17 @@ impl CodeEditor {
             }
         });
         let theme_set = THEME_SET.get_or_init(ThemeSet::load_defaults);
+        // Pair the token palette with the editor's own theme: a dark-tuned
+        // palette on a light background leaves comments and strings unreadable.
+        let theme_name =
+            if crate::theme::is_dark_background(self.style.background) {
+                "base16-ocean.dark"
+            } else {
+                "base16-ocean.light"
+            };
         let theme = theme_set
             .themes
-            .get("base16-ocean.dark")
+            .get(theme_name)
             .or_else(|| theme_set.themes.values().next());
 
         // Normalize common language aliases/extensions used by consumers.

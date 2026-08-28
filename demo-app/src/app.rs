@@ -20,6 +20,7 @@ use iced::mouse;
 use iced::widget::Id;
 #[cfg(not(target_arch = "wasm32"))]
 use iced::widget::operation::focus;
+use iced::widget::text_editor;
 use iced::{Event, Subscription, Task, Theme, event, window};
 #[cfg(not(target_arch = "wasm32"))]
 use iced_code_editor::LspEvent;
@@ -90,6 +91,12 @@ pub struct DemoApp {
     pub current_line_height: f32,
     /// Log messages for output pane
     pub log_messages: Vec<String>,
+    /// Read-only mirror of [`log_messages`](Self::log_messages) backing the
+    /// output pane's `text_editor`, so log lines can be selected and copied.
+    ///
+    /// Kept in sync by [`DemoApp::refresh_log_content`]; never edited by the
+    /// user — [`Message::LogAction`] drops editing actions.
+    pub log_content: text_editor::Content,
     /// Test text input value
     pub text_input_value: String,
     /// Whether to show the settings modal
@@ -139,6 +146,8 @@ greet("World")
 "#;
 
         let log_messages = vec!["[INFO] Application started".to_string()];
+        let log_content =
+            text_editor::Content::with_text(&log_messages.join("\n"));
 
         let current_font = if cfg!(target_arch = "wasm32") {
             FontOption::JETBRAINS_MONO
@@ -182,6 +191,7 @@ greet("World")
             current_font_size: 14.0,
             current_line_height: 20.0,
             log_messages,
+            log_content,
             text_input_value: String::new(),
             show_settings: false,
             auto_adjust_line_height: true,
@@ -230,6 +240,18 @@ greet("World")
     /// Adds a log message.
     fn log(&mut self, level: &str, message: &str) {
         self.log_messages.push(format!("[{}] {}", level, message));
+        self.refresh_log_content();
+    }
+
+    /// Rebuilds [`log_content`](Self::log_content) from
+    /// [`log_messages`](Self::log_messages).
+    ///
+    /// Called after every change to the log so the output pane shows the
+    /// current messages. Rebuilding drops any selection in progress, which
+    /// is the price of keeping `log_messages` the single source of truth.
+    fn refresh_log_content(&mut self) {
+        self.log_content =
+            text_editor::Content::with_text(&self.log_messages.join("\n"));
     }
 
     /// Handles periodic tick events for cursor blinking in all editors.
@@ -282,6 +304,9 @@ greet("World")
 
         let task = editor.reset(template.content());
         editor.set_theme(style);
+        // The tab may have been holding a file: templates are Lua, and the tab
+        // becomes untitled again.
+        editor.set_syntax(Self::UNTITLED_SYNTAX);
         editor.set_reveal_in_file_manager_enabled(false);
         *current_file = None;
 
@@ -349,6 +374,17 @@ greet("World")
                 self.log_messages.clear();
                 self.log("INFO", "Log cleared");
                 Task::none()
+            }
+            Message::LogAction(action) => {
+                // The output pane is read-only: selection, scrolling and
+                // cursor moves are applied, edits are dropped.
+                if !action.is_edit() {
+                    self.log_content.perform(action);
+                }
+                Task::none()
+            }
+            Message::CopyLog => {
+                iced::clipboard::write(self.log_messages.join("\n"))
             }
             // File operations
             Message::OpenFile => self.handle_file_open(),
@@ -559,6 +595,7 @@ greet("World")
                         let default_content = "";
                         let _ = tab.editor.reset(default_content);
                         tab.file_path = None;
+                        tab.editor.set_syntax(Self::UNTITLED_SYNTAX);
                         tab.editor.set_reveal_in_file_manager_enabled(false);
                         tab.is_dirty = false;
                     }
@@ -606,5 +643,54 @@ greet("World")
     /// Returns the current theme for the application.
     pub fn theme(&self) -> Theme {
         self.current_theme.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced::widget::text_editor::{Action, Edit};
+
+    /// The first line every fresh [`DemoApp`] logs.
+    const STARTUP_LOG: &str = "[INFO] Application started";
+
+    #[test]
+    fn test_log_content_mirrors_log_messages() {
+        let (mut app, _) = DemoApp::new();
+
+        app.log("OUTPUT", "hello");
+
+        assert_eq!(
+            app.log_content.text().trim_end(),
+            app.log_messages.join("\n")
+        );
+    }
+
+    #[test]
+    fn test_clear_log_rebuilds_the_content() {
+        let (mut app, _) = DemoApp::new();
+        app.log("OUTPUT", "hello");
+
+        let _ = app.update(Message::ClearLog);
+
+        assert_eq!(app.log_content.text().trim_end(), "[INFO] Log cleared");
+    }
+
+    #[test]
+    fn test_log_action_applies_selection() {
+        let (mut app, _) = DemoApp::new();
+
+        let _ = app.update(Message::LogAction(Action::SelectAll));
+
+        assert_eq!(app.log_content.selection().as_deref(), Some(STARTUP_LOG));
+    }
+
+    #[test]
+    fn test_log_action_ignores_edits() {
+        let (mut app, _) = DemoApp::new();
+
+        let _ = app.update(Message::LogAction(Action::Edit(Edit::Insert('x'))));
+
+        assert_eq!(app.log_content.text().trim_end(), STARTUP_LOG);
     }
 }

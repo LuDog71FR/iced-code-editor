@@ -20,6 +20,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `Message::StickyScrollJump(usize)`, emitted when a pinned header is clicked.
   `Message` is not `#[non_exhaustive]`, so an exhaustive `match` over it in a host
   application needs a new arm.
+- feat: `CodeEditor::set_syntax` changes the highlighting language of an existing
+  editor. Previously the language could only be chosen at construction, so a host
+  that reuses one editor for several files had no way to follow the file's
+  extension. Setting the same identifier again is a no-op; changing it drops the
+  cached per-line highlighting so the visible lines are re-tokenized.
+
+### Fixed
+
+- fix: the syntect token palette now follows the editor's own theme. It was
+  hardcoded to `base16-ocean.dark`, which left comments and strings tuned for a
+  dark background unreadable under a light `iced::Theme`. A light editor
+  background selects `base16-ocean.light`, a dark one keeps `base16-ocean.dark`,
+  and `set_theme` invalidates the highlight cache (it stores resolved colors, not
+  scopes).
+- fix: the demo app highlighted every opened file with the Lua grammar. Editors
+  were created with a hardcoded `"lua"` — the right default for the demo's Lua
+  templates, but never updated on open, so a Rust file's `///` doc comments were
+  drawn as plain text and an apostrophe inside a comment opened a Lua string that
+  bled colour across the following lines. The language is now derived from the
+  file extension when a file is opened or saved under a new name, and returns to
+  Lua when a tab becomes untitled again.
+
+### Changed
+
+- chore: the demo app enables the `two-face` feature, adding the Sublime grammars
+  bundled by `bat` (TOML, TypeScript, Dockerfile, a newer Rust definition, ...)
+  on top of syntect's defaults. The `two-face` dependency is now declared with
+  `default-features = false, features = ["syntect-fancy"]`: its default
+  `syntect-onig` feature would have pulled the C `onig` regex backend into a
+  workspace that builds syntect with the pure-Rust `default-fancy` backend and
+  targets WASM.
 
 ## [0.4.2] - 2026-08-21
 
