@@ -167,15 +167,17 @@ impl CodeEditor {
         self.overlay_cache.clear();
     }
 
-    /// Returns the foldable regions for the current buffer, memoized by
+    /// Returns the indentation blocks of the current buffer, memoized by
     /// `buffer_revision`.
     ///
-    /// Returns an empty list when folding is disabled.
-    pub(crate) fn foldable_regions(&self) -> Rc<Vec<super::FoldRegion>> {
-        if !self.folding_enabled {
-            return Rc::new(Vec::new());
-        }
-
+    /// Independent of [`CodeEditor::folding_enabled`]: these are the blocks the
+    /// buffer *has*, not the ones the user may collapse. Sticky scroll reads
+    /// them to know which headers enclose a line
+    /// (see [`CodeEditor::sticky_headroom`]) without offering to fold anything,
+    /// so the two features share the computation and its cache but not the
+    /// toggle. Callers that act on *folding* want
+    /// [`Self::foldable_regions`] instead.
+    pub(crate) fn block_regions(&self) -> Rc<Vec<super::FoldRegion>> {
         let mut cache = self.foldable_regions_cache.borrow_mut();
         if let Some((revision, regions)) = cache.as_ref()
             && *revision == self.buffer_revision
@@ -186,6 +188,19 @@ impl CodeEditor {
         let regions = Rc::new(super::compute_foldable_regions(&self.buffer));
         *cache = Some((self.buffer_revision, regions.clone()));
         regions
+    }
+
+    /// Returns the foldable regions for the current buffer, memoized by
+    /// `buffer_revision`.
+    ///
+    /// Returns an empty list when folding is disabled — which is what makes
+    /// every folding operation a no-op without each of them testing the flag.
+    pub(crate) fn foldable_regions(&self) -> Rc<Vec<super::FoldRegion>> {
+        if !self.folding_enabled {
+            return Rc::new(Vec::new());
+        }
+
+        self.block_regions()
     }
 
     /// Returns the set of logical lines hidden by the currently collapsed folds.

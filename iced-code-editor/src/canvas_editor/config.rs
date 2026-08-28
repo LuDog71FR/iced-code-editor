@@ -875,6 +875,10 @@ impl CodeEditor {
     /// language-agnostic but follows the file's indentation rather than its
     /// syntax tree.
     ///
+    /// Independent of [`CodeEditor::set_folding_enabled`], despite sharing that
+    /// detection: turning code folding off removes the fold chevrons and leaves
+    /// the pinned headers alone.
+    ///
     /// # Arguments
     ///
     /// * `enabled` - Whether to pin enclosing block headers above the viewport

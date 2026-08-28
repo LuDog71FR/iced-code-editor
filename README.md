@@ -703,7 +703,7 @@ if editor.sticky_scroll_enabled() {
 }
 ```
 
-At most five headers are pinned at once, so a deeply nested block cannot bury the code being read. Enclosing blocks are detected from **indentation**, exactly like code folding: the feature needs no language grammar and works on any file, but it follows how the file is indented rather than how it parses. Pinned headers keep the syntax colors of the code they mirror, reusing the per-line highlight cache, and stay anchored to the gutter instead of following the horizontal scroll, so they remain readable when a long line is scrolled sideways.
+At most five headers are pinned at once, so a deeply nested block cannot bury the code being read. Enclosing blocks are detected from **indentation**, exactly like code folding: the feature needs no language grammar and works on any file, but it follows how the file is indented rather than how it parses. Only the detection is shared — the two features are independently toggled, so `set_folding_enabled(false)` removes the fold chevrons and leaves the pinned headers in place. Pinned headers keep the syntax colors of the code they mirror, reusing the per-line highlight cache, and stay anchored to the gutter instead of following the horizontal scroll, so they remain readable when a long line is scrolled sideways.
 
 ### Indentation
 

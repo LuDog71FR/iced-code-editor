@@ -13,6 +13,13 @@
 //! already produces nested and in ascending header order. Detection is
 //! therefore indentation-based, with the same trade-off as folding: it is
 //! language-agnostic, but badly indented code yields misleading headers.
+//!
+//! What is shared is the computation and its cache, not the toggle: the blocks
+//! a line sits in are a property of the buffer, not of whether the user may
+//! collapse them. This module therefore reads
+//! [`CodeEditor::block_regions`], which ignores
+//! [`CodeEditor::folding_enabled`], so turning code folding off removes the
+//! fold chevrons and leaves the pinned headers alone.
 
 use super::folding::FoldRegion;
 use crate::canvas_editor::CodeEditor;
@@ -85,9 +92,9 @@ impl CodeEditor {
     /// actually be readable — the `rows_above` argument of
     /// [`CodeEditor::scroll_to_line`].
     ///
-    /// `0` when sticky scroll is off, when nothing encloses `line`, or when the
-    /// enclosing blocks are unknown because folding is disabled (fold regions
-    /// are shared with code folding, see [`sticky_headers`]).
+    /// `0` when sticky scroll is off or when nothing encloses `line`. Code
+    /// folding being disabled does not affect it: the blocks come from
+    /// [`CodeEditor::block_regions`], which does not consult that toggle.
     ///
     /// # Arguments
     ///
@@ -103,7 +110,7 @@ impl CodeEditor {
             return 0;
         }
 
-        sticky_headers(&self.foldable_regions(), line, DEFAULT_MAX_STICKY_LINES)
+        sticky_headers(&self.block_regions(), line, DEFAULT_MAX_STICKY_LINES)
             .len()
     }
 }
@@ -208,6 +215,23 @@ mod tests {
         let editor = CodeEditor::new(NESTED_SOURCE, "rs");
 
         assert_eq!(editor.sticky_headroom(3), 2);
+    }
+
+    #[test]
+    fn test_headroom_survives_code_folding_being_disabled() {
+        // The two features share the block computation, not the toggle. A user
+        // who turns folding off wants no fold chevrons; nothing about that
+        // says the structural context should stop being pinned.
+        let mut editor = CodeEditor::new(NESTED_SOURCE, "rs");
+        assert_eq!(editor.sticky_headroom(3), 2);
+
+        editor.set_folding_enabled(false);
+
+        assert_eq!(
+            editor.sticky_headroom(3),
+            2,
+            "sticky scroll must not follow the folding toggle"
+        );
     }
 
     #[test]

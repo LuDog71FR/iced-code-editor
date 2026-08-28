@@ -407,7 +407,10 @@ impl CodeEditor {
             (self.viewport_scroll / self.line_height).floor() as usize;
         let top_line = visual_lines.get(first_visible)?.logical_line;
 
-        let regions = self.foldable_regions();
+        // `block_regions`, not `foldable_regions`: the blocks a line sits in
+        // are a property of the buffer, not of whether the user may collapse
+        // them. Sticky scroll keeps working with code folding turned off.
+        let regions = self.block_regions();
         let headers = sticky_scroll::sticky_headers(
             &regions,
             top_line,
@@ -738,6 +741,25 @@ mod tests {
 
         assert!(
             editor.create_sticky_scroll_layer(visual_lines.as_ref()).is_none()
+        );
+    }
+
+    #[test]
+    fn test_sticky_layer_survives_code_folding_being_disabled() {
+        // End-to-end counterpart of
+        // `sticky_scroll::tests::test_headroom_survives_code_folding_being_disabled`:
+        // the layer is built from `block_regions`, so turning folding off
+        // removes the chevrons and leaves the pinned headers alone.
+        let mut editor = CodeEditor::new(
+            "fn main() {\n    let x = 1;\n    let y = 2;\n}",
+            "rs",
+        );
+        editor.set_folding_enabled(false);
+        editor.viewport_scroll = editor.line_height();
+        let visual_lines = editor.visual_lines_cached(editor.viewport_width);
+
+        assert!(
+            editor.create_sticky_scroll_layer(visual_lines.as_ref()).is_some()
         );
     }
 

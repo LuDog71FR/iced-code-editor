@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: sticky scroll no longer stops working when code folding is disabled. It
+  takes its enclosing blocks from the fold regions, and was reading them through
+  the folding toggle as well, so `set_folding_enabled(false)` silently emptied
+  the pinned headers while `sticky_scroll_enabled()` kept returning `true`. Only
+  the block detection is shared now; the two features are independently
+  toggled. In the demo app the two checkboxes were already offered as
+  independent, which is what made the coupling surprising.
+
 - fix: clicking a **nested** sticky-scroll header now scrolls it into view
   instead of underneath the header still pinned above it. The jump placed the
   target at row 0 of the viewport, but the sticky layer is drawn over the top
