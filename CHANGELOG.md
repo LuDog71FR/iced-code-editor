@@ -74,6 +74,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workspace that builds syntect with the pure-Rust `default-fancy` backend and
   targets WASM.
 
+### Security
+
+- fix: updated four transitive dependencies flagged by `cargo audit`
+  (`crossbeam-epoch` 0.9.18 → 0.9.20, RUSTSEC-2026-0204, the only one rated a
+  vulnerability rather than a warning; `memmap2` 0.9.9 → 0.9.11,
+  RUSTSEC-2026-0186; `event-listener` 5.4.1 → 5.4.2, RUSTSEC-2026-0221; `lru`
+  0.16.3 → 0.16.4). Lockfile only — no declared dependency changed, and no
+  public API is affected. RUSTSEC-2026-0253 still applies to `lru` 0.16.4, so
+  it remains on the list until upstream publishes a fix; it is reported as an
+  `unsound` warning, and the path (`iced_wgpu` → `cryoglyph` → `lru`) is not
+  selectable from this workspace. Dependabot only bumps direct dependencies,
+  which is why these went unnoticed.
+
+- chore: `cargo audit` now runs in CI, as a `Security Audit` job separate from
+  `build` so a new advisory is reported on its own rather than behind a build
+  failure. `cargo-audit` is installed from source rather than through a
+  third-party action, to keep the dependency surface of the dependency check at
+  zero. The two `quick-xml` advisories (RUSTSEC-2026-0194, RUSTSEC-2026-0195)
+  are listed in the new `.cargo/audit.toml`, each with the reason it is
+  unreachable here — `quick-xml` is reached only through `syntect` → `plist`,
+  which parses `.tmTheme` and `.sublime-syntax` definitions, and this crate
+  loads exclusively the definitions bundled with syntect and `two-face`, so no
+  file opened in the editor and no language-server output ever reaches that
+  parser — and the condition that would let it be removed. Anything not listed
+  there fails the build.
+
 ## [0.4.2] - 2026-08-21
 
 ### Added

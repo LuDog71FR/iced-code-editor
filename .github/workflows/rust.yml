@@ -33,3 +33,26 @@ jobs:
       
       - name: Format Check
         run: cargo fmt -- --check
+
+  # Separate job so a new advisory is reported on its own rather than hidden
+  # behind a build failure, and so it runs in parallel with `build` instead of
+  # adding to its wall time.
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Installed from source rather than through a third-party action: the
+      # dependency surface of the step that checks dependencies is worth
+      # keeping at zero.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      # Advisories this project cannot act on are listed, with the reason each
+      # is unreachable, in `.cargo/audit.toml`. `cargo audit` reads that file
+      # itself, so the rationale lives next to the exception instead of in a
+      # command line here. Anything not listed there fails the build.
+      - name: Audit
+        run: cargo audit
