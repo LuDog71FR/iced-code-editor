@@ -672,11 +672,9 @@ pub fn view_output_pane(
 
     let lsp_panel = lsp::view_lsp_panel();
 
-    let palette = LogPalette {
-        error: Color::from_rgb(1.0, 0.4, 0.4),
-        output: Color::from_rgb(0.4, 1.0, 0.4),
-        default: text_color,
-    };
+    // `LogPalette` doubles as the highlighter's settings, so deriving it from
+    // the theme is also what makes switching the theme recolor the log.
+    let palette = LogPalette::for_theme(&app.current_theme);
 
     let log_view = text_editor(&app.log_content)
         .on_action(Message::LogAction)

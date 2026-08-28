@@ -32,12 +32,26 @@ impl DemoApp {
     /// so an untitled tab starts out as Lua.
     pub(super) const UNTITLED_SYNTAX: &'static str = "lua";
 
+    /// Syntax identifier for a file whose language cannot be guessed.
+    ///
+    /// `CodeEditor::set_syntax` normalizes this to syntect's plain-text
+    /// grammar, so the status bar reports "Plain Text" rather than naming a
+    /// language the file is not written in.
+    pub(super) const PLAIN_TEXT_SYNTAX: &'static str = "text";
+
     /// Resolves the syntax highlighting identifier for a tab backed by `path`.
     ///
     /// The identifier is the file's extension, lowercased so `FOO.RS` and
-    /// `foo.rs` resolve alike. A path with no extension, and an untitled tab,
-    /// both fall back to [`Self::UNTITLED_SYNTAX`]; an extension the
-    /// highlighter does not know degrades to plain text on its own.
+    /// `foo.rs` resolve alike. An extension the highlighter does not know
+    /// degrades to plain text on its own.
+    ///
+    /// The two cases without an extension are *not* the same, and the
+    /// difference is the whole point of this function. An untitled tab holds
+    /// one of the demo's Lua templates, so it gets [`Self::UNTITLED_SYNTAX`].
+    /// A real file with no extension — `Makefile`, `LICENSE`, `.bashrc` — is a
+    /// file whose language is simply unknown, and colouring it as Lua would
+    /// both misrender it and make the status bar claim "Lua"; it gets
+    /// [`Self::PLAIN_TEXT_SYNTAX`] instead.
     ///
     /// # Arguments
     ///
@@ -47,11 +61,17 @@ impl DemoApp {
     ///
     /// The syntax identifier to hand to `CodeEditor::set_syntax`.
     pub(super) fn syntax_for_path(path: Option<&Path>) -> String {
-        path.and_then(Path::extension)
+        let Some(path) = path else {
+            return Self::UNTITLED_SYNTAX.to_string();
+        };
+
+        path.extension()
             .and_then(|extension| extension.to_str())
             .filter(|extension| !extension.is_empty())
-            .map(str::to_lowercase)
-            .unwrap_or_else(|| Self::UNTITLED_SYNTAX.to_string())
+            .map_or_else(
+                || Self::PLAIN_TEXT_SYNTAX.to_string(),
+                str::to_lowercase,
+            )
     }
 
     /// Creates an editor with the demo context-menu and command-palette
@@ -472,12 +492,43 @@ mod tests {
     }
 
     #[test]
-    fn test_syntax_for_path_falls_back_for_untitled_and_extensionless() {
-        assert_eq!(
-            DemoApp::syntax_for_path(Some(Path::new("/tmp/Makefile"))),
-            DemoApp::UNTITLED_SYNTAX
-        );
+    fn test_an_untitled_tab_gets_the_template_language() {
+        // No file behind it, so the content is one of the demo's Lua
+        // templates.
         assert_eq!(DemoApp::syntax_for_path(None), DemoApp::UNTITLED_SYNTAX);
+    }
+
+    #[test]
+    fn test_a_file_without_an_extension_is_plain_text_not_lua() {
+        // A real file whose language is unknown. Colouring these as Lua both
+        // misrendered them and made the status bar claim "Lua" once the active
+        // grammar was displayed there.
+        for name in ["Makefile", "LICENSE", ".bashrc", "Dockerfile"] {
+            assert_eq!(
+                DemoApp::syntax_for_path(Some(
+                    &PathBuf::from("/tmp").join(name)
+                )),
+                DemoApp::PLAIN_TEXT_SYNTAX,
+                "{name} has no extension to guess a language from"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_file_without_an_extension_reports_plain_text_in_the_status_bar() {
+        // End to end: the identifier has to be one the highlighter actually
+        // resolves, not merely a different string from "lua".
+        let (mut app, _) = DemoApp::new();
+
+        let tab = app.open_content_in_tab(
+            Some(&PathBuf::from("/tmp/Makefile")),
+            "all:\n\tcargo build\n",
+        );
+
+        assert!(
+            app.get_tab(tab)
+                .is_some_and(|tab| tab.editor.syntax_name() == "Plain Text")
+        );
     }
 
     #[test]

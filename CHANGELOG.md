@@ -36,6 +36,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: the demo app no longer highlights an extension-less file as Lua.
+  `Makefile`, `LICENSE`, `.bashrc` and the like fell back to the same default
+  as an untitled tab, whose content really is one of the demo's Lua templates,
+  so they were mis-coloured and — since the active grammar is now shown in the
+  status bar — announced as "Lua". A file with no extension resolves to plain
+  text; only a tab with no file behind it still starts as Lua.
+
+- fix: the demo app's output log colours now follow the theme. `[ERROR]` and
+  `[OUTPUT]` were fixed values tuned for a dark background — the green had a
+  relative luminance of 0.83, near-invisible on white — while every other
+  colour in the pane came from the palette. They are now taken from the theme's
+  `danger` and `success` colours, the same defect and the same fix as the
+  editor's rainbow-bracket palette earlier this cycle.
+
 - fix: the demo app's output log is now capped at 2000 lines, dropping the
   oldest when it overflows. It was bounded by nothing while the LSP client
   feeds it directly — up to 256 messages a tick, from a language server the

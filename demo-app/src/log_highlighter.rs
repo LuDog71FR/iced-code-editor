@@ -7,8 +7,8 @@
 //! [`Highlighter`](iced::advanced::text::Highlighter) that colors each whole
 //! line according to the `[LEVEL]` tag it carries.
 
-use iced::Color;
 use iced::advanced::text::Highlighter;
+use iced::{Color, Theme};
 use std::ops::Range;
 
 /// Colors used by [`LogHighlighter`], one per log level.
@@ -27,6 +27,31 @@ pub struct LogPalette {
 }
 
 impl LogPalette {
+    /// Builds the palette from a theme's own colors.
+    ///
+    /// Derived rather than hard-coded so the log stays legible under every
+    /// theme. A fixed pair tuned for a dark background — the bright red and
+    /// green this replaced — leaves `[OUTPUT]` and `[ERROR]` lines washed out
+    /// on a light one, which is the same defect the editor's rainbow-bracket
+    /// palette had before it gained a light variant.
+    ///
+    /// # Arguments
+    ///
+    /// * `theme` - The theme the output pane is drawn in
+    ///
+    /// # Returns
+    ///
+    /// The colors for `[ERROR]`, `[OUTPUT]` and every other line
+    pub fn for_theme(theme: &Theme) -> Self {
+        let palette = theme.extended_palette();
+
+        Self {
+            error: palette.danger.base.color,
+            output: palette.success.base.color,
+            default: palette.background.base.text,
+        }
+    }
+
     /// Returns the color a whole log line must be drawn with.
     pub fn color_for(&self, line: &str) -> Color {
         if line.contains("[ERROR]") {
@@ -87,6 +112,53 @@ mod tests {
         output: Color::from_rgb(0.0, 1.0, 0.0),
         default: Color::from_rgb(0.0, 0.0, 1.0),
     };
+
+    /// Relative luminance, ITU-R BT.709, matching how the editor's own theme
+    /// module classifies a background.
+    fn luminance(color: Color) -> f32 {
+        0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
+    }
+
+    #[test]
+    fn test_the_palette_differs_between_a_light_and_a_dark_theme() {
+        // Colors that did not move with the theme would make the assertion
+        // below vacuous for one of the two.
+        let dark = LogPalette::for_theme(&Theme::TokyoNightStorm);
+        let light = LogPalette::for_theme(&Theme::Light);
+
+        assert_ne!(dark.error, light.error);
+        assert_ne!(dark.output, light.output);
+        assert_ne!(dark.default, light.default);
+    }
+
+    #[test]
+    fn test_every_level_color_contrasts_with_its_own_theme_background() {
+        // The defect this replaced: `[OUTPUT]` was a fixed
+        // `rgb(0.4, 1.0, 0.4)`, luminance 0.83 against a white background --
+        // a separation of 0.17. The threshold is set above that and below the
+        // 0.31 of the worst theme-derived pair (Dracula's danger red), so this
+        // test discriminates rather than merely passing. Asserting the property
+        // rather than the values keeps a future palette tweak honest without
+        // editing the test.
+        const MIN_SEPARATION: f32 = 0.25;
+
+        for theme in [Theme::Light, Theme::TokyoNightStorm, Theme::Dracula] {
+            let palette = LogPalette::for_theme(&theme);
+            let background =
+                luminance(theme.extended_palette().background.base.color);
+
+            for (level, color) in [
+                ("error", palette.error),
+                ("output", palette.output),
+                ("default", palette.default),
+            ] {
+                assert!(
+                    (luminance(color) - background).abs() > MIN_SEPARATION,
+                    "{level} is invisible on {theme}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_color_for_picks_the_level_color() {
