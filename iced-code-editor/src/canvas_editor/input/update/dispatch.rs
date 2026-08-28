@@ -210,8 +210,12 @@ impl CodeEditor {
             Message::DuplicateLineDown => self.duplicate_lines(true),
             Message::ToggleComment => self.toggle_comment(),
 
-            // Sticky scroll
-            Message::StickyScrollJump(line) => self.scroll_to_line(*line),
+            // Sticky scroll. The headroom matters: the blocks enclosing `line`
+            // stay pinned once it is at the top, so a jump to row 0 would land
+            // it underneath its own outer header.
+            Message::StickyScrollJump(line) => {
+                self.scroll_to_line(*line, self.sticky_headroom(*line))
+            }
         }
     }
 }

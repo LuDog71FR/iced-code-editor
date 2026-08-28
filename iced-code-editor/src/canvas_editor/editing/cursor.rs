@@ -534,21 +534,32 @@ impl CodeEditor {
         count
     }
 
-    /// Returns a scroll command placing `line` at the top of the viewport.
+    /// Returns a scroll command placing `line` `rows_above` rows below the top
+    /// of the viewport.
     ///
     /// Unlike [`Self::scroll_to_cursor`], this scrolls unconditionally and
     /// leaves the cursor untouched: it backs the sticky-scroll headers, where
     /// clicking a pinned header is a navigation gesture, not an edit.
     ///
+    /// `rows_above` is what reserves room for anything drawn *over* the top of
+    /// the viewport. Scrolling a line to row 0 only makes it visible when
+    /// nothing covers row 0, which is not the case once sticky-scroll headers
+    /// are pinned there — see [`CodeEditor::sticky_headroom`].
+    ///
     /// # Arguments
     ///
-    /// * `line` - Index of the logical line to bring to the top
+    /// * `line` - Index of the logical line to bring into view
+    /// * `rows_above` - Rows to leave free above it; `0` puts it at the very top
     ///
     /// # Returns
     ///
     /// A `Task<Message>` scrolling the editor, or `Task::none()` when `line` is
     /// hidden by a collapsed fold or out of bounds
-    pub(crate) fn scroll_to_line(&self, line: usize) -> Task<Message> {
+    pub(crate) fn scroll_to_line(
+        &self,
+        line: usize,
+        rows_above: usize,
+    ) -> Task<Message> {
         let visual_lines = self.visual_lines_cached(self.viewport_width);
 
         let Some(visual_index) =
@@ -557,11 +568,16 @@ impl CodeEditor {
             return Task::none();
         };
 
+        // Saturating: a line already within `rows_above` of the top of the
+        // buffer cannot be pushed down, and scrolling to a negative offset is
+        // not a thing.
+        let first_visible = visual_index.saturating_sub(rows_above);
+
         scroll_to(
             self.scrollable_id.clone(),
             scrollable::AbsoluteOffset {
                 x: 0.0,
-                y: visual_index as f32 * self.line_height,
+                y: first_visible as f32 * self.line_height,
             },
         )
     }

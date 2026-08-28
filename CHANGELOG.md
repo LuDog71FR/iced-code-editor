@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: clicking a **nested** sticky-scroll header now scrolls it into view
+  instead of underneath the header still pinned above it. The jump placed the
+  target at row 0 of the viewport, but the sticky layer is drawn over the top
+  rows and the blocks enclosing the target stay pinned once it arrives — so for
+  any header below the outermost one, the line the user clicked landed exactly
+  under a pin. The jump now reserves one row per header that remains pinned.
+  Only the outermost header, where nothing stays pinned, behaved correctly
+  before.
+
 - fix: the syntect token palette now follows the editor's own theme. It was
   hardcoded to `base16-ocean.dark`, which left comments and strings tuned for a
   dark background unreadable under a light `iced::Theme`. A light editor

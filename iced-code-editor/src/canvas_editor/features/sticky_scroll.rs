@@ -3,9 +3,9 @@
 //! Sticky scroll pins the header lines of the blocks enclosing the topmost
 //! visible line to the top of the viewport, so the structural context (which
 //! `impl`, which function, which `match`) stays readable while scrolling deep
-//! inside a long block. This module holds the pure logic — which lines to pin —
-//! so it can be unit-tested without a renderer; the drawing itself lives in
-//! [`crate::canvas_editor::render`].
+//! inside a long block. This module holds the logic — which lines to pin, and
+//! how much room they take — so it can be unit-tested without a renderer; the
+//! drawing itself lives in [`crate::canvas_editor::render`].
 //!
 //! Scope detection is shared with code folding: the enclosing blocks are the
 //! [`FoldRegion`]s containing the line, which
@@ -15,6 +15,7 @@
 //! language-agnostic, but badly indented code yields misleading headers.
 
 use super::folding::FoldRegion;
+use crate::canvas_editor::CodeEditor;
 
 /// Maximum number of header lines pinned at once, mirroring VS Code's default.
 ///
@@ -73,6 +74,40 @@ pub(crate) fn sticky_headers(
         .collect()
 }
 
+impl CodeEditor {
+    /// Returns how many header rows will still be pinned once `line` is the
+    /// topmost visible line.
+    ///
+    /// Scrolling a line to row 0 of the viewport does not make it visible: the
+    /// sticky layer is drawn *over* the top rows, so a line that is itself
+    /// enclosed by a block arrives underneath that block's pinned header. This
+    /// is the number of rows a scroll must leave free above `line` for it to
+    /// actually be readable — the `rows_above` argument of
+    /// [`CodeEditor::scroll_to_line`].
+    ///
+    /// `0` when sticky scroll is off, when nothing encloses `line`, or when the
+    /// enclosing blocks are unknown because folding is disabled (fold regions
+    /// are shared with code folding, see [`sticky_headers`]).
+    ///
+    /// # Arguments
+    ///
+    /// * `line` - Index of the logical line that is about to become the topmost
+    ///   visible one
+    ///
+    /// # Returns
+    ///
+    /// The number of headers that will remain pinned above it, at most
+    /// [`DEFAULT_MAX_STICKY_LINES`]
+    pub(crate) fn sticky_headroom(&self, line: usize) -> usize {
+        if !self.sticky_scroll_enabled {
+            return 0;
+        }
+
+        sticky_headers(&self.foldable_regions(), line, DEFAULT_MAX_STICKY_LINES)
+            .len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,6 +116,10 @@ mod tests {
     fn nested_regions() -> Vec<FoldRegion> {
         vec![FoldRegion::new(0, 4), FoldRegion::new(1, 4)]
     }
+
+    /// `fn` at line 0, `if` at line 1, three statements, both blocks closing.
+    const NESTED_SOURCE: &str =
+        "fn main() {\n    if a {\n        b();\n        c();\n    }\n}";
 
     #[test]
     fn test_no_headers_without_regions() {
@@ -143,6 +182,43 @@ mod tests {
     fn test_zero_max_lines_pins_nothing() {
         let regions = nested_regions();
         assert!(sticky_headers(&regions, 3, 0).is_empty());
+    }
+
+    #[test]
+    fn test_headroom_is_zero_for_an_outermost_header() {
+        // Nothing encloses line 0, so scrolling it to row 0 leaves it visible.
+        let editor = CodeEditor::new(NESTED_SOURCE, "rs");
+
+        assert_eq!(editor.sticky_headroom(0), 0);
+    }
+
+    #[test]
+    fn test_headroom_reserves_a_row_for_a_nested_header() {
+        // Line 1 is the `if` header, still enclosed by `fn`. Scrolled to row 0
+        // it would land underneath the `fn` header the layer keeps pinned --
+        // the jump has to leave that one row free.
+        let editor = CodeEditor::new(NESTED_SOURCE, "rs");
+
+        assert_eq!(editor.sticky_headroom(1), 1);
+    }
+
+    #[test]
+    fn test_headroom_counts_every_enclosing_block() {
+        // Deep inside both blocks: two headers stay pinned.
+        let editor = CodeEditor::new(NESTED_SOURCE, "rs");
+
+        assert_eq!(editor.sticky_headroom(3), 2);
+    }
+
+    #[test]
+    fn test_headroom_is_zero_when_sticky_scroll_is_off() {
+        // No layer, nothing covering row 0, nothing to reserve.
+        let mut editor = CodeEditor::new(NESTED_SOURCE, "rs");
+        assert_eq!(editor.sticky_headroom(3), 2);
+
+        editor.set_sticky_scroll_enabled(false);
+
+        assert_eq!(editor.sticky_headroom(3), 0);
     }
 
     #[test]
