@@ -209,6 +209,9 @@ impl CodeEditor {
             Message::DuplicateLineUp => self.duplicate_lines(false),
             Message::DuplicateLineDown => self.duplicate_lines(true),
             Message::ToggleComment => self.toggle_comment(),
+
+            // Sticky scroll
+            Message::StickyScrollJump(line) => self.scroll_to_line(*line),
         }
     }
 }

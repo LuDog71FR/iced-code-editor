@@ -4,17 +4,11 @@ use iced::mouse;
 use iced::widget::canvas::{self, Action, Geometry};
 use iced::{Event, Rectangle, Theme, keyboard};
 use std::rc::Rc;
-use std::sync::OnceLock;
-use syntect::highlighting::ThemeSet;
-use syntect::parsing::SyntaxSet;
 
 use super::text::RenderContext;
 use super::wrapping::VisualLine;
 use crate::canvas_editor::features::color_preview;
 use crate::canvas_editor::{CodeEditor, HIGHLIGHT_LINES_PER_FRAME, Message};
-
-static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
-static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
 
 impl canvas::Program<Message> for CodeEditor {
     type State = ();
@@ -82,36 +76,10 @@ impl canvas::Program<Message> for CodeEditor {
                 // blocking the UI while parsing every preceding line.
                 self.highlight_lines_remaining.set(HIGHLIGHT_LINES_PER_FRAME);
 
-                // syntect initialization is relatively expensive; keep it global.
-                let syntax_set = SYNTAX_SET.get_or_init(|| {
-                    #[cfg(feature = "two-face")]
-                    {
-                        two_face::syntax::extra_newlines()
-                    }
-                    #[cfg(not(feature = "two-face"))]
-                    {
-                        SyntaxSet::load_defaults_newlines()
-                    }
-                });
-                let theme_set = THEME_SET.get_or_init(ThemeSet::load_defaults);
-                let syntax_theme = theme_set
-                    .themes
-                    .get("base16-ocean.dark")
-                    .or_else(|| theme_set.themes.values().next());
-
-                // Normalize common language aliases/extensions used by consumers.
-                let syntax_ref = match self.syntax.as_str() {
-                    "python" => syntax_set.find_syntax_by_extension("py"),
-                    "rust" => syntax_set.find_syntax_by_extension("rs"),
-                    "javascript" => syntax_set.find_syntax_by_extension("js"),
-                    "htm" => syntax_set.find_syntax_by_extension("html"),
-                    "svg" => syntax_set.find_syntax_by_extension("xml"),
-                    "markdown" => syntax_set.find_syntax_by_extension("md"),
-                    "text" => Some(syntax_set.find_syntax_plain_text()),
-                    _ => syntax_set
-                        .find_syntax_by_extension(self.syntax.as_str()),
-                }
-                .or(Some(syntax_set.find_syntax_plain_text()));
+                // Shared with the sticky-scroll layer, which colors the same
+                // lines outside the canvas.
+                let (syntax_set, syntax_ref, syntax_theme) =
+                    self.resolve_syntax();
 
                 let ctx = RenderContext {
                     visual_lines: visual_lines_for_content.as_ref(),

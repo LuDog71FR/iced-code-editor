@@ -209,6 +209,8 @@ pub struct CodeEditor {
     pub(crate) bracket_match_highlight_enabled: bool,
     /// Whether bracket-pair colorization (rainbow brackets) is enabled.
     pub(crate) bracket_pair_colorization_enabled: bool,
+    /// Whether the headers of the enclosing blocks are pinned above the viewport.
+    pub(crate) sticky_scroll_enabled: bool,
     /// Whether LSP support is enabled
     pub(crate) lsp_enabled: bool,
     /// Active LSP client connection, if configured.
@@ -492,6 +494,8 @@ pub enum Message {
     DuplicateLineDown,
     /// Ctrl+/: toggle line comments on the current line or primary selection.
     ToggleComment,
+    /// Scroll back to the given logical line, whose sticky-scroll header was clicked.
+    StickyScrollJump(usize),
 }
 
 /// Indentation style used when pressing the Tab key.
@@ -664,6 +668,7 @@ impl CodeEditor {
             show_color_previews: true,
             bracket_match_highlight_enabled: true,
             bracket_pair_colorization_enabled: true,
+            sticky_scroll_enabled: true,
             lsp_enabled: true,
             lsp_client: None,
             lsp_document: None,

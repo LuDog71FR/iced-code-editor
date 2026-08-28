@@ -19,7 +19,7 @@ use crate::app::{DemoApp, Message};
 use crate::ui::view;
 use iced::keyboard::key::Named;
 use iced::keyboard::{self, Key, Modifiers};
-use iced::{Event, Point, Rectangle};
+use iced::{Event, Point, Rectangle, mouse};
 use iced_code_editor::Message as EditorMessage;
 use iced_test::selector::Candidate;
 use iced_test::simulator;
@@ -288,6 +288,64 @@ impl<'a> Ui<'a> {
             Some((0, 0)),
             "the editor must be focused and its cursor homed"
         );
+    }
+
+    /// Scrolls the code canvas down by `lines` mouse-wheel notches.
+    ///
+    /// The wheel is the only way a headless test can move the viewport:
+    /// `scrollable::Viewport` has no public constructor, so the editor's
+    /// `Scrolled` message cannot be forged by hand.
+    fn scroll_code_canvas(&mut self, lines: f32) {
+        let messages: Vec<Message> = {
+            let mut ui = simulator(view(self.app));
+            let found = ui.find(code_canvas);
+            assert!(found.is_ok(), "the code canvas must be rendered");
+            let bounds = found.unwrap_or_default();
+            ui.point_at(Point::new(
+                bounds.x + bounds.width / 2.0,
+                bounds.y + bounds.height / 2.0,
+            ));
+            let _ =
+                ui.simulate(vec![Event::Mouse(mouse::Event::WheelScrolled {
+                    delta: mouse::ScrollDelta::Lines { x: 0.0, y: -lines },
+                })]);
+            ui.into_messages().collect()
+        };
+
+        for message in &messages {
+            let _ = self.app.update(message.clone());
+        }
+    }
+
+    /// Clicks the code area's very first row, where a pinned sticky header
+    /// sits when there is one.
+    fn click_top_of_code_area(&mut self) -> Vec<Message> {
+        let messages: Vec<Message> = {
+            let mut ui = simulator(view(self.app));
+            let found = ui.find(code_canvas);
+            assert!(found.is_ok(), "the code canvas must be rendered");
+            let bounds = found.unwrap_or_default();
+            // Past the 45px gutter, on the topmost row of the code area —
+            // the same spot `open_editor_with` proves reaches the canvas.
+            ui.point_at(Point::new(bounds.x + 80.0, bounds.y + 8.0));
+            let _ = ui.simulate(iced_test::simulator::click());
+            ui.into_messages().collect()
+        };
+
+        for message in &messages {
+            let _ = self.app.update(message.clone());
+        }
+        messages
+    }
+
+    /// The active tab's vertical scroll offset, in pixels.
+    fn scroll_offset(&self) -> f32 {
+        self.app
+            .tabs
+            .iter()
+            .find(|tab| tab.id == self.app.active_tab_id)
+            .map(|tab| tab.editor.viewport_scroll())
+            .unwrap_or_default()
     }
 }
 
@@ -1394,4 +1452,85 @@ fn test_typing_a_query_goes_to_the_palette_instead_of_the_buffer() {
         "the query must not reach the buffer"
     );
     assert_eq!(ui.cursor(), (0, 0), "the caret must not move in the buffer");
+}
+
+// ---- Sticky scroll ----
+
+/// A function long enough to scroll past its own header.
+fn nested_source() -> String {
+    let mut source = String::from("fn outer() {\n");
+    for index in 0..80 {
+        source.push_str(&format!("    let value_{index} = {index};\n"));
+    }
+    source.push('}');
+    source
+}
+
+#[test]
+fn test_clicking_the_pinned_header_scrolls_back_to_it() {
+    // The whole feature in one gesture: scrolling deep into a block puts a
+    // header where there was none, and clicking it navigates. Without the
+    // sticky layer the same click lands on the canvas and moves the caret,
+    // so the assertion fails loudly rather than silently passing.
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with(&nested_source());
+
+    ui.scroll_code_canvas(10.0);
+    assert!(ui.scroll_offset() > 0.0, "the wheel must have moved the viewport");
+
+    let messages = ui.click_top_of_code_area();
+
+    assert!(
+        carries(&messages, &EditorMessage::StickyScrollJump(0)),
+        "clicking the pinned header must ask the editor to scroll back to it"
+    );
+    assert_eq!(
+        ui.cursor(),
+        (0, 0),
+        "navigating from a pinned header must leave the caret alone"
+    );
+}
+
+#[test]
+fn test_the_top_row_stays_the_canvas_without_a_pinned_header() {
+    // The counterpart: at the top of the file nothing encloses the visible
+    // text, so the same click must reach the canvas as it always did.
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with(&nested_source());
+
+    let messages = ui.click_top_of_code_area();
+
+    assert!(
+        !carries(&messages, &EditorMessage::StickyScrollJump(0)),
+        "nothing may be pinned at the top of the file"
+    );
+    assert!(
+        carries(&messages, &EditorMessage::MouseRelease),
+        "with no header pinned the click must reach the canvas"
+    );
+}
+
+#[test]
+fn test_disabling_sticky_scroll_gives_the_top_row_back() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with(&nested_source());
+    ui.toggle_option("Sticky scroll");
+    // Fold the panel back: while it is open it covers the code area, and the
+    // click below must land on the editor rather than on the options.
+    let _ = ui.click("Options ▲");
+    ui.scroll_code_canvas(10.0);
+
+    let messages = ui.click_top_of_code_area();
+
+    assert!(
+        !carries(&messages, &EditorMessage::StickyScrollJump(0)),
+        "a disabled sticky scroll must pin nothing"
+    );
+    assert!(
+        carries(&messages, &EditorMessage::MouseRelease),
+        "with sticky scroll off the click must reach the canvas again"
+    );
 }

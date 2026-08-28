@@ -12,7 +12,7 @@ None
 
 ### Testing
 
-0. Code UI tests to validate all features.
+None
 
 ### Editing
 
@@ -29,8 +29,7 @@ None
 
 ### Navigation / UI
 
-8. **Sticky scroll** (pinned scope header)
-9. **Minimap** (overview of entire file & clickable navigation)
+8. **Minimap** (overview of entire file & clickable navigation)
 
 ## Performance Improvements
 

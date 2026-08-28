@@ -860,6 +860,79 @@ impl CodeEditor {
         self
     }
 
+    /// Enables or disables sticky scroll.
+    ///
+    /// Sticky scroll pins the header lines of the blocks enclosing the topmost
+    /// visible line to the top of the viewport, so the structural context stays
+    /// readable while scrolling deep inside a long block. Clicking a pinned
+    /// header scrolls back to it. Enclosing blocks are detected from
+    /// indentation, exactly like code folding, so the feature is
+    /// language-agnostic but follows the file's indentation rather than its
+    /// syntax tree.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to pin enclosing block headers above the viewport
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {\n    let x = 1;\n}", "rs");
+    /// editor.set_sticky_scroll_enabled(false);
+    /// ```
+    pub fn set_sticky_scroll_enabled(&mut self, enabled: bool) {
+        self.sticky_scroll_enabled = enabled;
+    }
+
+    /// Returns whether sticky scroll is enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` if enclosing block headers are pinned, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {\n    let x = 1;\n}", "rs");
+    /// // Enabled by default.
+    /// assert!(editor.sticky_scroll_enabled());
+    ///
+    /// editor.set_sticky_scroll_enabled(false);
+    /// assert!(!editor.sticky_scroll_enabled());
+    /// ```
+    pub fn sticky_scroll_enabled(&self) -> bool {
+        self.sticky_scroll_enabled
+    }
+
+    /// Sets sticky scroll with builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to pin enclosing block headers above the viewport
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {\n    let x = 1;\n}", "rs")
+    ///     .with_sticky_scroll_enabled(false);
+    /// assert!(!editor.sticky_scroll_enabled());
+    /// ```
+    #[must_use]
+    pub fn with_sticky_scroll_enabled(mut self, enabled: bool) -> Self {
+        self.sticky_scroll_enabled = enabled;
+        self
+    }
+
     /// Enables or disables the matching-bracket/quote-pair highlight overlay.
     ///
     /// When enabled, placing the cursor next to a bracket (`(`, `)`, `[`,

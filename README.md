@@ -48,6 +48,7 @@ Screenshot of the demo application:
 - **Visible whitespace rendering** — spaces shown as `·`, tabs as `→`
 - **Indentation guides** — vertical lines marking each indentation level
 - **Inline color previews** — a swatch next to every `#rrggbb`, `0xrrggbb` or `rgb(…)` literal
+- **Sticky scroll** — the headers of the enclosing blocks stay pinned above the viewport, and clicking one scrolls back to it
 - **Optional Vim mode** with Normal, Insert, Visual, and Visual Line modes
 
 ## Quick Start
@@ -683,6 +684,26 @@ if editor.show_color_previews() {
 ```
 
 Detection is purely lexical, so a literal inside a comment or a string gets a swatch too — which is what a reader looking for colors expects. Runs of hexadecimal digits of any other length are rejected (`#12345` is not a color), and a literal that continues an identifier (`raw0xff0000`) is ignored. The swatch is drawn as geometry and Iced renders all text above all geometry, so the character following the literal stays readable even when the square extends under it. Its frame uses `Style::gutter_border`, and translucent colors are composited over `Style::background`.
+
+### Sticky scroll
+
+Sticky scroll is **enabled by default**. While scrolling deep inside a long block, the header lines of the blocks enclosing the topmost visible line stay pinned at the top of the viewport, outermost first — so the structural context (which `impl`, which function, which `match`) never leaves the screen. Clicking a pinned header scrolls back to that line; the cursor and the selection are left untouched.
+
+```rust
+// Disable sticky scroll
+editor.set_sticky_scroll_enabled(false);
+
+// Or use builder pattern during initialization
+let editor = CodeEditor::new(source, "rs")
+    .with_sticky_scroll_enabled(false);
+
+// Check current state
+if editor.sticky_scroll_enabled() {
+    println!("Enclosing block headers are pinned");
+}
+```
+
+At most five headers are pinned at once, so a deeply nested block cannot bury the code being read. Enclosing blocks are detected from **indentation**, exactly like code folding: the feature needs no language grammar and works on any file, but it follows how the file is indented rather than how it parses. Pinned headers keep the syntax colors of the code they mirror, reusing the per-line highlight cache, and stay anchored to the gutter instead of following the horizontal scroll, so they remain readable when a long line is scrolled sideways.
 
 ### Indentation
 

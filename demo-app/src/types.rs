@@ -195,7 +195,7 @@ impl std::fmt::Display for Template {
 /// Collecting them here — rather than one `Message` variant, one `update`
 /// handler, and one hand-written checkbox per setting — is what lets
 /// [`EditorToggle::ALL`] drive both the options panel layout and the
-/// `update` dispatch from a single list, instead of thirteen near-identical
+/// `update` dispatch from a single list, instead of fourteen near-identical
 /// copies of the same three pieces of code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EditorToggle {
@@ -221,6 +221,8 @@ pub enum EditorToggle {
     BracketMatchHighlight,
     /// Colors nested bracket pairs by nesting depth.
     BracketPairColorization,
+    /// Pins the headers of the enclosing blocks above the viewport.
+    StickyScroll,
     /// Enables Vim modal editing.
     Vim,
     /// Enables the LSP client for this editor.
@@ -229,7 +231,7 @@ pub enum EditorToggle {
 
 impl EditorToggle {
     /// Every toggle, in the order the options panel displays them.
-    pub const ALL: [EditorToggle; 13] = [
+    pub const ALL: [EditorToggle; 14] = [
         EditorToggle::Wrap,
         EditorToggle::Folding,
         EditorToggle::AutoIndent,
@@ -241,6 +243,7 @@ impl EditorToggle {
         EditorToggle::ColorPreviews,
         EditorToggle::BracketMatchHighlight,
         EditorToggle::BracketPairColorization,
+        EditorToggle::StickyScroll,
         EditorToggle::Vim,
         EditorToggle::Lsp,
     ];
@@ -259,6 +262,7 @@ impl EditorToggle {
             EditorToggle::ColorPreviews => "Show color previews",
             EditorToggle::BracketMatchHighlight => "Highlight matching bracket",
             EditorToggle::BracketPairColorization => "Rainbow brackets",
+            EditorToggle::StickyScroll => "Sticky scroll",
             EditorToggle::Vim => "Vim mode (Cmd/Ctrl+Alt+V)",
             EditorToggle::Lsp => "LSP",
         }
@@ -282,6 +286,7 @@ impl EditorToggle {
             EditorToggle::BracketPairColorization => {
                 editor.bracket_pair_colorization_enabled()
             }
+            EditorToggle::StickyScroll => editor.sticky_scroll_enabled(),
             EditorToggle::Vim => editor.vim_enabled(),
             EditorToggle::Lsp => editor.lsp_enabled(),
         }
@@ -319,6 +324,9 @@ impl EditorToggle {
             }
             EditorToggle::BracketPairColorization => {
                 editor.set_bracket_pair_colorization_enabled(enabled)
+            }
+            EditorToggle::StickyScroll => {
+                editor.set_sticky_scroll_enabled(enabled)
             }
             EditorToggle::Vim => editor.set_vim_enabled(enabled),
             EditorToggle::Lsp => editor.set_lsp_enabled(enabled),

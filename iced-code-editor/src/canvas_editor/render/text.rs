@@ -5,11 +5,12 @@ use iced::widget::canvas;
 use iced::{Color, Point, Size};
 use std::borrow::Cow;
 use std::rc::Rc;
+use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{
-    HighlightIterator, HighlightState, Highlighter, Style,
+    HighlightIterator, HighlightState, Highlighter, Style, ThemeSet,
 };
-use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
+use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 
 use crate::buffer::text_utils::char_range_to_byte_range;
 
@@ -22,6 +23,13 @@ use crate::canvas_editor::{
     CodeEditor, HighlightCache, TAB_WIDTH, measure_char_width,
     measure_text_width,
 };
+
+/// Loading syntect's syntax definitions is expensive, so the set is built once
+/// per process and shared by every editor instance.
+static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+
+/// Syntect's bundled themes, loaded once per process (see [`SYNTAX_SET`]).
+static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
 
 /// Width in pixels of a single indentation guide line.
 const INDENT_GUIDE_WIDTH: f32 = 1.0;
@@ -88,7 +96,10 @@ pub(super) fn calculate_segment_geometry(
     (base_offset + prefix_width, segment_width)
 }
 
-fn expand_tabs(text: &str, tab_width: usize) -> Cow<'_, str> {
+/// Replaces each tab with `tab_width` spaces, borrowing when there is nothing
+/// to expand. Shared by the canvas text layer and the sticky-scroll headers so
+/// both render indentation identically.
+pub(crate) fn expand_tabs(text: &str, tab_width: usize) -> Cow<'_, str> {
     if !text.contains('\t') {
         return Cow::Borrowed(text);
     }
@@ -110,7 +121,7 @@ fn expand_tabs(text: &str, tab_width: usize) -> Cow<'_, str> {
 /// Expands tabs and replaces whitespace with visible symbols: `\t` → `→` +
 /// `·` fill, ` ` → `·`. The output has the same logical width as the
 /// `expand_tabs` output, so existing width measurements remain valid.
-fn expand_tabs_visible(text: &str, tab_width: usize) -> String {
+pub(crate) fn expand_tabs_visible(text: &str, tab_width: usize) -> String {
     let mut result = String::with_capacity(text.len() * 2);
     for ch in text.chars() {
         match ch {
@@ -242,6 +253,57 @@ pub(super) struct RenderContext<'a> {
 }
 
 impl CodeEditor {
+    /// Resolves the syntect syntax and theme used to color this editor's text.
+    ///
+    /// Both the syntax set and the theme set are process-wide singletons, so
+    /// this is cheap enough to call on every render. Common language aliases and
+    /// extensions (`python`/`py`, `markdown`/`md`, …) are normalized here, and
+    /// an unknown syntax falls back to plain text rather than losing the text.
+    ///
+    /// # Returns
+    ///
+    /// The shared syntax set, the syntax to tokenize with, and the theme
+    /// providing token colors. The syntax and theme are `None` only when
+    /// syntect ships no definition at all for them.
+    pub(crate) fn resolve_syntax(
+        &self,
+    ) -> (
+        &'static SyntaxSet,
+        Option<&'static SyntaxReference>,
+        Option<&'static syntect::highlighting::Theme>,
+    ) {
+        let syntax_set = SYNTAX_SET.get_or_init(|| {
+            #[cfg(feature = "two-face")]
+            {
+                two_face::syntax::extra_newlines()
+            }
+            #[cfg(not(feature = "two-face"))]
+            {
+                SyntaxSet::load_defaults_newlines()
+            }
+        });
+        let theme_set = THEME_SET.get_or_init(ThemeSet::load_defaults);
+        let theme = theme_set
+            .themes
+            .get("base16-ocean.dark")
+            .or_else(|| theme_set.themes.values().next());
+
+        // Normalize common language aliases/extensions used by consumers.
+        let syntax = match self.syntax.as_str() {
+            "python" => syntax_set.find_syntax_by_extension("py"),
+            "rust" => syntax_set.find_syntax_by_extension("rs"),
+            "javascript" => syntax_set.find_syntax_by_extension("js"),
+            "htm" => syntax_set.find_syntax_by_extension("html"),
+            "svg" => syntax_set.find_syntax_by_extension("xml"),
+            "markdown" => syntax_set.find_syntax_by_extension("md"),
+            "text" => Some(syntax_set.find_syntax_plain_text()),
+            _ => syntax_set.find_syntax_by_extension(self.syntax.as_str()),
+        }
+        .or(Some(syntax_set.find_syntax_plain_text()));
+
+        (syntax_set, syntax, theme)
+    }
+
     /// Returns the memoized syntax-highlighted spans for a logical line.
     ///
     /// Highlighting is performed sequentially: lines `0..=logical_line` are
@@ -264,7 +326,7 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A shared handle to the line's colored token spans.
-    fn highlighted_line_cached(
+    pub(crate) fn highlighted_line_cached(
         &self,
         logical_line: usize,
         syntax: &syntect::parsing::SyntaxReference,

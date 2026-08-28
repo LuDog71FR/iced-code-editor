@@ -2,21 +2,32 @@
 
 use iced::Size;
 use iced::advanced::input_method;
+use iced::alignment;
+use iced::mouse;
 use iced::widget::canvas::Canvas;
 use iced::widget::{
-    Column, Row, Scrollable, Space, container, scrollable, text,
+    Column, MouseArea, Row, Scrollable, Space, container, scrollable, text,
 };
 use iced::{Background, Border, Color, Element, Length, Rectangle, Shadow};
 use iced_aw::ContextMenu;
 
+use super::text::{expand_tabs, expand_tabs_visible};
 use super::wrapping::{self, WrappingCalculator};
 use crate::canvas_editor::features::command_palette::dialog as command_palette_dialog;
 use crate::canvas_editor::features::context_menu;
 use crate::canvas_editor::features::goto_line::dialog as goto_line_dialog;
 use crate::canvas_editor::features::search::dialog as search_dialog;
+use crate::canvas_editor::features::sticky_scroll;
 use crate::canvas_editor::input::ime_requester::ImeRequester;
-use crate::canvas_editor::{CodeEditor, GUTTER_WIDTH, Message};
+use crate::canvas_editor::{CodeEditor, GUTTER_WIDTH, Message, TAB_WIDTH};
 use std::rc::Rc;
+
+/// Horizontal gap in pixels between the gutter and the code text, matching the
+/// offset the canvas text layer uses so pinned headers line up with the code.
+const CODE_TEXT_LEFT_PADDING: f32 = 5.0;
+
+/// Thickness in pixels of the separator drawn under the sticky-scroll headers.
+const STICKY_SEPARATOR_WIDTH: f32 = 1.0;
 
 /// Builds the transparent-container scrollable style shared by the canvas
 /// editor's vertical and horizontal scrollbars.
@@ -288,6 +299,163 @@ impl CodeEditor {
         }
     }
 
+    /// Builds one pinned header row: its line number, then its colored text.
+    ///
+    /// The row reuses the memoized per-line highlight spans, so pinning a header
+    /// costs no extra syntect work. Unlike the canvas text layer, it ignores
+    /// `horizontal_scroll_offset`: a pinned header exists to be read, and would
+    /// be useless if it scrolled out of view sideways.
+    ///
+    /// # Arguments
+    ///
+    /// * `line` - Index of the logical header line to render
+    /// * `syntax_set` - The syntax set `syntax` belongs to
+    /// * `syntax` - The syntect syntax definition to tokenize with
+    /// * `theme` - The syntect theme providing token colors
+    fn create_sticky_header_row(
+        &self,
+        line: usize,
+        syntax_set: &syntect::parsing::SyntaxSet,
+        syntax: &syntect::parsing::SyntaxReference,
+        theme: &syntect::highlighting::Theme,
+    ) -> Element<'_, Message> {
+        let font = self.font;
+        let font_size = self.font_size;
+        let line_number_color = self.style.line_number_color;
+
+        let mut row = Row::new();
+
+        if self.line_numbers_enabled {
+            row = row.push(
+                container(
+                    text(format!("{}", line + 1))
+                        .size(font_size)
+                        .font(font)
+                        .style(move |_| text::Style {
+                            color: Some(line_number_color),
+                        }),
+                )
+                .width(Length::Fixed(self.line_number_gutter_width()))
+                .align_x(alignment::Horizontal::Center),
+            );
+        }
+
+        // Keep the fold margin empty: a pinned header is not where the user
+        // folds, and a chevron there would invite a click that does nothing.
+        row = row
+            .push(Space::new().width(Length::Fixed(self.fold_margin_width())));
+        row =
+            row.push(Space::new().width(Length::Fixed(CODE_TEXT_LEFT_PADDING)));
+
+        let spans =
+            self.highlighted_line_cached(line, syntax, theme, syntax_set);
+        let mut code = Row::new();
+        for (color, content) in spans.iter() {
+            let color = *color;
+            // Match the canvas text layer, so a pinned header shows the same
+            // whitespace glyphs as the line it mirrors.
+            let content = if self.show_whitespace {
+                expand_tabs_visible(content, TAB_WIDTH)
+            } else {
+                expand_tabs(content, TAB_WIDTH).into_owned()
+            };
+            code = code.push(
+                text(content)
+                    .size(font_size)
+                    .font(font)
+                    .wrapping(text::Wrapping::None)
+                    .style(move |_| text::Style { color: Some(color) }),
+            );
+        }
+        row = row.push(code);
+
+        MouseArea::new(
+            container(row)
+                .width(Length::Fill)
+                .height(Length::Fixed(self.line_height))
+                .clip(true),
+        )
+        .interaction(mouse::Interaction::Pointer)
+        .on_press(Message::StickyScrollJump(line))
+        .into()
+    }
+
+    /// Creates the sticky-scroll layer: the headers of the blocks enclosing the
+    /// topmost visible line, pinned above the viewport.
+    ///
+    /// # Arguments
+    ///
+    /// * `visual_lines` - The visual line mapping, used to resolve the topmost
+    ///   visible visual line back to its logical line
+    ///
+    /// # Returns
+    ///
+    /// `Some(layer)` when at least one header must be pinned, `None` when the
+    /// feature is disabled or the topmost visible line sits at the top level
+    fn create_sticky_scroll_layer(
+        &self,
+        visual_lines: &[wrapping::VisualLine],
+    ) -> Option<Element<'_, Message>> {
+        if !self.sticky_scroll_enabled || self.line_height <= 0.0 {
+            return None;
+        }
+
+        // Same first-visible-line formula the canvas layer uses. The topmost
+        // entry is a *visual* line, so it must be mapped back to a logical one:
+        // wrapping and collapsed folds make the two indices diverge.
+        let first_visible =
+            (self.viewport_scroll / self.line_height).floor() as usize;
+        let top_line = visual_lines.get(first_visible)?.logical_line;
+
+        let regions = self.foldable_regions();
+        let headers = sticky_scroll::sticky_headers(
+            &regions,
+            top_line,
+            sticky_scroll::DEFAULT_MAX_STICKY_LINES,
+        );
+        if headers.is_empty() {
+            return None;
+        }
+
+        let (syntax_set, syntax, theme) = self.resolve_syntax();
+        let (Some(syntax), Some(theme)) = (syntax, theme) else {
+            return None;
+        };
+
+        let mut column = Column::new();
+        for line in headers {
+            column = column.push(
+                self.create_sticky_header_row(line, syntax_set, syntax, theme),
+            );
+        }
+
+        let background = self.style.gutter_background;
+        let border_color = self.style.gutter_border;
+
+        // An explicit rule rather than a container shadow: it must sit exactly
+        // one pixel under the last header, on top of the code scrolling beneath.
+        let column = column.push(
+            container(Space::new().width(Length::Fill).height(Length::Fill))
+                .width(Length::Fill)
+                .height(Length::Fixed(STICKY_SEPARATOR_WIDTH))
+                .style(move |_| container::Style {
+                    background: Some(Background::Color(border_color)),
+                    ..container::Style::default()
+                }),
+        );
+
+        Some(
+            container(column)
+                .width(Length::Fill)
+                .height(Length::Shrink)
+                .style(move |_| container::Style {
+                    background: Some(Background::Color(background)),
+                    ..container::Style::default()
+                })
+                .into(),
+        )
+    }
+
     /// Creates the IME (Input Method Editor) layer widget.
     ///
     /// # Arguments
@@ -352,6 +520,14 @@ impl CodeEditor {
         // Build editor stack: backgrounds + scrollable
         let mut editor_stack =
             iced::widget::Stack::new().push(background_row).push(scrollable);
+
+        // Pin the enclosing block headers above the viewport. This goes right
+        // above the scrollable so the dialogs pushed below stay on top of it.
+        if let Some(sticky_layer) =
+            self.create_sticky_scroll_layer(visual_lines.as_ref())
+        {
+            editor_stack = editor_stack.push(sticky_layer);
+        }
 
         // Add IME layer for input method support.
         // The IME requester needs the cursor rect in viewport coordinates, which
@@ -525,6 +701,59 @@ mod tests {
         assert_eq!(
             rail.scroller.border.radius,
             iced::border::Radius::from(4.0)
+        );
+    }
+
+    #[test]
+    fn test_sticky_layer_absent_when_disabled() {
+        let mut editor =
+            CodeEditor::new("fn main() {\n    let x = 1;\n}", "rs");
+        editor.set_sticky_scroll_enabled(false);
+        let visual_lines = editor.visual_lines_cached(editor.viewport_width);
+
+        assert!(
+            editor.create_sticky_scroll_layer(visual_lines.as_ref()).is_none()
+        );
+    }
+
+    #[test]
+    fn test_sticky_layer_absent_without_enclosing_block() {
+        // A flat buffer has no fold region, so nothing can be pinned.
+        let editor = CodeEditor::new("a\nb\nc", "rs");
+        let visual_lines = editor.visual_lines_cached(editor.viewport_width);
+
+        assert!(
+            editor.create_sticky_scroll_layer(visual_lines.as_ref()).is_none()
+        );
+    }
+
+    #[test]
+    fn test_sticky_layer_absent_at_top_of_file() {
+        // Scrolled to the top, the header is on screen and must not be pinned.
+        let editor = CodeEditor::new(
+            "fn main() {\n    let x = 1;\n    let y = 2;\n}",
+            "rs",
+        );
+        let visual_lines = editor.visual_lines_cached(editor.viewport_width);
+
+        assert!(
+            editor.create_sticky_scroll_layer(visual_lines.as_ref()).is_none()
+        );
+    }
+
+    #[test]
+    fn test_sticky_layer_present_when_scrolled_into_block() {
+        let mut editor = CodeEditor::new(
+            "fn main() {\n    let x = 1;\n    let y = 2;\n}",
+            "rs",
+        );
+        // Scroll so the second line is the topmost visible one, putting the
+        // viewport inside the `fn` block.
+        editor.viewport_scroll = editor.line_height();
+        let visual_lines = editor.visual_lines_cached(editor.viewport_width);
+
+        assert!(
+            editor.create_sticky_scroll_layer(visual_lines.as_ref()).is_some()
         );
     }
 

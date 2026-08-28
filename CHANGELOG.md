@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- feat: **Sticky scroll**
+  - The header lines of the blocks enclosing the topmost visible
+  line are pinned above the viewport, outermost first, capped at five. Clicking a
+  pinned header scrolls back to it without moving the cursor. Enclosing blocks are
+  detected from indentation, reusing the fold regions already computed for code
+  folding, and pinned headers reuse the per-line syntax-highlight cache.
+  Enabled by default; toggle with `set_sticky_scroll_enabled`,
+  `with_sticky_scroll_enabled` and `sticky_scroll_enabled`.
+  - `Message::StickyScrollJump(usize)`, emitted when a pinned header is clicked.
+  `Message` is not `#[non_exhaustive]`, so an exhaustive `match` over it in a host
+  application needs a new arm.
 
 ## [0.4.2] - 2026-08-21
 
