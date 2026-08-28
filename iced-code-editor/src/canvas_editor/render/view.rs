@@ -742,6 +742,45 @@ mod tests {
     }
 
     #[test]
+    fn test_sticky_layer_maps_a_wrapped_segment_back_to_its_logical_line() {
+        // The subtlest line in the feature: the topmost entry of the viewport
+        // is a *visual* line, and soft wrapping makes visual and logical
+        // indices diverge. Here the body of the `if` wraps into several
+        // segments, so scrolling onto one of its continuations puts the
+        // topmost visual index well past any logical line index.
+        //
+        // The fixture discriminates: reading the visual index as a logical one
+        // would land on `}` or past the end of the buffer, where nothing
+        // encloses anything and the layer would be `None`.
+        let mut editor = CodeEditor::new(
+            "fn main() {\n    if a {\n        let x = 1; let y = 2; let z = 3; let w = 4;\n    }\n}",
+            "rs",
+        )
+        .with_wrap_column(Some(20));
+
+        let visual_lines = editor.visual_lines_cached(editor.viewport_width);
+        let continuation = visual_lines
+            .iter()
+            .position(|line| line.logical_line == 2 && line.segment_index == 1)
+            .unwrap_or_default();
+        assert!(
+            continuation > 2,
+            "the fixture must wrap far enough for the two indices to diverge"
+        );
+
+        editor.viewport_scroll = continuation as f32 * editor.line_height();
+        let visual_lines = editor.visual_lines_cached(editor.viewport_width);
+
+        assert!(
+            editor.create_sticky_scroll_layer(visual_lines.as_ref()).is_some(),
+            "a continuation segment is still inside both enclosing blocks"
+        );
+        // Both headers, so the layer really resolved logical line 2 and not
+        // whatever line the raw visual index points at.
+        assert_eq!(editor.sticky_headroom(2), 2);
+    }
+
+    #[test]
     fn test_sticky_layer_present_when_scrolled_into_block() {
         let mut editor = CodeEditor::new(
             "fn main() {\n    let x = 1;\n    let y = 2;\n}",

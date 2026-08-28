@@ -369,6 +369,20 @@ pub enum LspOverlayMessage {
 }
 
 /// Measures the maximum pixel width of any line in the given text.
+///
+/// A hover tooltip is as wide as its widest line, so the whole text is
+/// measured line by line rather than as one string — measuring it whole would
+/// return the sum of every line's width. Measurement goes through the editor's
+/// own metrics, so a CJK line is measured at its real double width.
+///
+/// # Arguments
+///
+/// * `editor` - The editor whose font metrics measure the text
+/// * `text` - The hover text, possibly spanning several lines
+///
+/// # Returns
+///
+/// The width in pixels of the widest line, or `0.0` when `text` is empty
 fn measure_hover_width(editor: &CodeEditor, text: &str) -> f32 {
     text.lines().map(|line| editor.measure_text_width(line)).fold(0.0, f32::max)
 }
@@ -775,6 +789,50 @@ fn empty_overlay<'a, M: 'a>() -> Element<'a, M> {
 mod tests {
     use super::*;
     use iced::Point;
+
+    /// Asserts two widths are equal within the layout epsilon, since
+    /// `float_cmp` is denied crate-wide.
+    fn assert_same_width(measured: f32, expected: f32) {
+        assert_eq!(
+            crate::canvas_editor::compare_floats(measured, expected),
+            std::cmp::Ordering::Equal,
+            "expected {expected}, measured {measured}"
+        );
+    }
+
+    #[test]
+    fn test_hover_width_is_the_widest_line_not_the_first_or_the_last() {
+        // The tooltip has to fit its widest line. Measuring the text as one
+        // string would sum every line instead, and taking the first or last
+        // line would clip the others -- the middle line is the widest here so
+        // all three mistakes are distinguishable.
+        let editor = CodeEditor::new("", "rs");
+        let text = "fn a()\nfn a_much_longer_signature()\nfn b()";
+
+        assert_same_width(
+            measure_hover_width(&editor, text),
+            editor.measure_text_width("fn a_much_longer_signature()"),
+        );
+    }
+
+    #[test]
+    fn test_hover_width_of_a_single_line_is_that_line() {
+        let editor = CodeEditor::new("", "rs");
+
+        assert_same_width(
+            measure_hover_width(&editor, "fn main()"),
+            editor.measure_text_width("fn main()"),
+        );
+    }
+
+    #[test]
+    fn test_hover_width_of_empty_text_is_zero() {
+        // `"".lines()` yields nothing, so the fold returns its seed. Pinned
+        // because a tooltip sized from a `NEG_INFINITY` seed would not render.
+        let editor = CodeEditor::new("", "rs");
+
+        assert_same_width(measure_hover_width(&editor, ""), 0.0);
+    }
 
     #[test]
     fn test_lsp_overlay_state_new() {

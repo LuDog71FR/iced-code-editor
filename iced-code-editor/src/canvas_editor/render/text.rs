@@ -43,6 +43,33 @@ const SWATCH_GAP: f32 = 3.0;
 /// Thickness in pixels of the border framing a color-preview swatch.
 const SWATCH_BORDER_WIDTH: f32 = 1.0;
 
+/// Returns whether a literal's swatch belongs to the visual segment spanning
+/// `[segment_start_col, segment_end_col)`.
+///
+/// The swatch is drawn just *after* the literal, so what decides which segment
+/// owns it is where the literal **ends**, not where it starts. A literal
+/// straddling a soft wrap therefore gets its swatch on the segment carrying its
+/// last character, and gets exactly one: the two comparisons are the two halves
+/// of a half-open interval, so no segment can claim the same swatch twice and
+/// none can drop it.
+///
+/// # Arguments
+///
+/// * `literal_end_col` - Column one past the literal's last character
+/// * `segment_start_col` - First column of the segment, inclusive
+/// * `segment_end_col` - Column one past the segment's last character
+///
+/// # Returns
+///
+/// `true` when this segment is the one that must draw the swatch
+fn swatch_belongs_to_segment(
+    literal_end_col: usize,
+    segment_start_col: usize,
+    segment_end_col: usize,
+) -> bool {
+    literal_end_col > segment_start_col && literal_end_col <= segment_end_col
+}
+
 /// Computes geometry (x start and width) for a text segment used in rendering or highlighting.
 ///
 /// # Arguments
@@ -742,9 +769,11 @@ impl CodeEditor {
         let inner_side = (side - 2.0 * SWATCH_BORDER_WIDTH).max(1.0);
 
         for literal in literals.get(&self.buffer, visual_line.logical_line) {
-            if literal.end_col <= visual_line.start_col
-                || literal.end_col > visual_line.end_col
-            {
+            if !swatch_belongs_to_segment(
+                literal.end_col,
+                visual_line.start_col,
+                visual_line.end_col,
+            ) {
                 continue;
             }
 
@@ -857,6 +886,50 @@ mod tests {
 
     use super::*;
     use crate::canvas_editor::{CHAR_WIDTH, FONT_SIZE, compare_floats};
+
+    #[test]
+    fn test_a_swatch_lands_on_the_segment_holding_the_literals_last_character()
+    {
+        // A literal spanning columns 30..37 on a line wrapped every 20
+        // columns: only the second segment, which holds column 36, draws it.
+        assert!(
+            !swatch_belongs_to_segment(37, 0, 20),
+            "the first segment ends before the literal does"
+        );
+        assert!(swatch_belongs_to_segment(37, 20, 40));
+        assert!(
+            !swatch_belongs_to_segment(37, 40, 60),
+            "a later segment must not draw it a second time"
+        );
+    }
+
+    #[test]
+    fn test_every_column_is_claimed_by_exactly_one_segment() {
+        // The property the two comparisons exist to guarantee: whatever the
+        // literal's end column, exactly one segment of the wrapped line owns
+        // its swatch -- never zero (a dropped swatch), never two (a doubled
+        // one). This is what a rewrite of the filter would have to preserve.
+        const SEGMENTS: [(usize, usize); 3] = [(0, 20), (20, 40), (40, 60)];
+
+        for literal_end_col in 1..=60 {
+            let owners = SEGMENTS
+                .iter()
+                .filter(|(start, end)| {
+                    swatch_belongs_to_segment(literal_end_col, *start, *end)
+                })
+                .count();
+
+            assert_eq!(owners, 1, "end column {literal_end_col} has {owners}");
+        }
+    }
+
+    #[test]
+    fn test_a_swatch_at_the_very_end_of_a_segment_belongs_to_it() {
+        // The boundary the half-open interval turns on: a literal ending
+        // exactly where a segment ends is drawn by that segment, not the next.
+        assert!(swatch_belongs_to_segment(20, 0, 20));
+        assert!(!swatch_belongs_to_segment(20, 20, 40));
+    }
 
     #[test]
     fn test_bracket_pair_colors_follow_the_editor_theme() {

@@ -382,7 +382,10 @@ fn parse_ratio(component: &str, full_scale: f32) -> Option<f32> {
 mod tests {
     use std::cmp::Ordering;
 
-    use super::{ColorLiteral, LineLiterals, TextBuffer, color_literals};
+    use super::{
+        ColorLiteral, LineLiterals, MAX_FUNCTION_SCAN, TextBuffer,
+        color_literals,
+    };
     use crate::canvas_editor::compare_floats;
     use iced::Color;
 
@@ -559,6 +562,69 @@ mod tests {
     #[test]
     fn test_out_of_range_components_are_clamped() {
         assert_single("rgb(300, -20, 0)", 0, 16, Color::from_rgb8(255, 0, 0));
+    }
+
+    #[test]
+    fn test_a_literal_touching_the_previous_one_is_not_reported() {
+        // Scanning resumes at the end of a match, and `starts_new_token` then
+        // looks at the character *before* the candidate -- here the previous
+        // literal's last hex digit, which is alphanumeric. So the second
+        // literal is rejected and only the first gets a swatch.
+        //
+        // Contrived input, and not a behaviour worth changing: this pins it so
+        // a future rewrite of the scanner cannot alter it by accident.
+        let literals = color_literals("#ff0000#00ff00");
+
+        assert_eq!(literals.len(), 1, "the second literal continues a token");
+        assert_eq!(literals[0].start_col, 0);
+        assert_eq!(literals[0].end_col, 7);
+    }
+
+    #[test]
+    fn test_separated_adjacent_literals_are_both_reported() {
+        // The counterpart, so the test above reads as a statement about token
+        // boundaries rather than about literals being close together.
+        let literals = color_literals("#ff0000 #00ff00");
+
+        assert_eq!(literals.len(), 2);
+        assert_eq!(literals[1].start_col, 8);
+    }
+
+    /// Builds `rgb(1,2,3<padding>)` whose closing parenthesis sits at
+    /// `offset` characters past the opening one.
+    ///
+    /// The components are valid and the trailing spaces are trimmed by
+    /// `parse_ratio`, so the only thing that can reject the result is
+    /// [`MAX_FUNCTION_SCAN`].
+    fn functional_with_close_at(offset: usize) -> String {
+        const ARGUMENTS: &str = "1,2,3";
+        let padding = " ".repeat(offset - ARGUMENTS.len());
+
+        format!("rgb({ARGUMENTS}{padding})")
+    }
+
+    #[test]
+    fn test_closing_parenthesis_at_the_scan_limit_is_still_found() {
+        // The last position the scan reaches: `take(MAX_FUNCTION_SCAN)` yields
+        // offsets 0..=63, so a `)` at offset 63 is the final one accepted.
+        let line = functional_with_close_at(MAX_FUNCTION_SCAN - 1);
+
+        let literals = color_literals(&line);
+
+        assert_eq!(literals.len(), 1, "{line:?} closes within the scan window");
+        assert_eq!(literals[0].end_col, line.len());
+    }
+
+    #[test]
+    fn test_closing_parenthesis_past_the_scan_limit_is_rejected() {
+        // One character further, and the literal is dropped rather than
+        // truncated -- which is the only guarantee `MAX_FUNCTION_SCAN` makes.
+        let line = functional_with_close_at(MAX_FUNCTION_SCAN);
+
+        assert!(
+            color_literals(&line).is_empty(),
+            "{line:?} closes past the scan window"
+        );
     }
 
     #[test]
