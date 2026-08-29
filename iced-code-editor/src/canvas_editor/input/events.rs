@@ -41,6 +41,24 @@ fn is_key_char(
         || matches!(modified_key, keyboard::Key::Character(c) if c.as_str() == ch)
 }
 
+/// Returns `true` when the platform's "command" modifier is held.
+///
+/// `Modifiers::command()` alone is not enough: it maps to Cmd on macOS and to
+/// Ctrl elsewhere, but a keyboard reporting a raw Ctrl press on macOS still
+/// has to work for the shortcuts that are documented as `Ctrl/Cmd+X`. Every
+/// such shortcut in this file goes through here so the two-way check is
+/// spelled out once instead of at each group.
+///
+/// # Examples
+///
+/// ```text
+/// // Ctrl+C on Linux and Cmd+C on macOS both answer `true`.
+/// assert!(command_pressed(&keyboard::Modifiers::CTRL));
+/// ```
+fn command_pressed(modifiers: &keyboard::Modifiers) -> bool {
+    modifiers.command() || modifiers.control()
+}
+
 // =============================================================================
 // Keyboard shortcut groups
 // =============================================================================
@@ -64,8 +82,7 @@ fn vim_toggle_shortcut(
     modified_key: &keyboard::Key,
     modifiers: &keyboard::Modifiers,
 ) -> Option<Action<Message>> {
-    let command_pressed = modifiers.command() || modifiers.control();
-    if command_pressed
+    if command_pressed(modifiers)
         && modifiers.alt()
         && !modifiers.shift()
         && is_key_char(key, modified_key, "v")
@@ -82,8 +99,7 @@ fn write_shortcut(
     modified_key: &keyboard::Key,
     modifiers: &keyboard::Modifiers,
 ) -> Option<Action<Message>> {
-    let command_pressed = modifiers.command() || modifiers.control();
-    if command_pressed
+    if command_pressed(modifiers)
         && !modifiers.alt()
         && !modifiers.shift()
         && is_key_char(key, modified_key, "s")
@@ -101,9 +117,7 @@ fn clipboard_shortcut(
     modified_key: &keyboard::Key,
     modifiers: &keyboard::Modifiers,
 ) -> Option<Action<Message>> {
-    let command_pressed = modifiers.command() || modifiers.control();
-
-    if (command_pressed && is_key_char(key, modified_key, "c"))
+    if (command_pressed(modifiers) && is_key_char(key, modified_key, "c"))
         || (modifiers.control()
             && matches!(
                 key,
@@ -113,15 +127,15 @@ fn clipboard_shortcut(
         return Some(Action::publish(Message::Copy).and_capture());
     }
 
-    if command_pressed && is_key_char(key, modified_key, "x") {
+    if command_pressed(modifiers) && is_key_char(key, modified_key, "x") {
         return Some(Action::publish(Message::Cut).and_capture());
     }
 
-    if command_pressed && is_key_char(key, modified_key, "a") {
+    if command_pressed(modifiers) && is_key_char(key, modified_key, "a") {
         return Some(Action::publish(Message::SelectAll).and_capture());
     }
 
-    if (command_pressed && is_key_char(key, modified_key, "v"))
+    if (command_pressed(modifiers) && is_key_char(key, modified_key, "v"))
         || (modifiers.shift()
             && matches!(
                 key,
@@ -141,9 +155,7 @@ fn multi_cursor_shortcut(
     modified_key: &keyboard::Key,
     modifiers: &keyboard::Modifiers,
 ) -> Option<Action<Message>> {
-    let command_pressed = modifiers.command() || modifiers.control();
-
-    if command_pressed && is_key_char(key, modified_key, "d") {
+    if command_pressed(modifiers) && is_key_char(key, modified_key, "d") {
         return Some(
             Action::publish(Message::SelectNextOccurrence).and_capture(),
         );
@@ -174,11 +186,9 @@ fn editing_shortcut(
     modified_key: &keyboard::Key,
     modifiers: &keyboard::Modifiers,
 ) -> Option<Action<Message>> {
-    let command_pressed = modifiers.command() || modifiers.control();
-
     // On French AZERTY `/` is Shift+`:` and only appears in `modified_key`;
     // see `is_key_char`.
-    if command_pressed && is_key_char(key, modified_key, "/") {
+    if command_pressed(modifiers) && is_key_char(key, modified_key, "/") {
         return Some(Action::publish(Message::ToggleComment).and_capture());
     }
 
@@ -230,15 +240,13 @@ fn navigation_shortcut(
     key: &keyboard::Key,
     modifiers: &keyboard::Modifiers,
 ) -> Option<Action<Message>> {
-    let command_pressed = modifiers.command() || modifiers.control();
-
-    if command_pressed
+    if command_pressed(modifiers)
         && matches!(key, keyboard::Key::Named(keyboard::key::Named::Home))
     {
         return Some(Action::publish(Message::CtrlHome).and_capture());
     }
 
-    if command_pressed
+    if command_pressed(modifiers)
         && matches!(key, keyboard::Key::Named(keyboard::key::Named::End))
     {
         return Some(Action::publish(Message::CtrlEnd).and_capture());
@@ -336,16 +344,14 @@ impl CodeEditor {
         modified_key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
     ) -> Option<Action<Message>> {
-        let command_pressed = modifiers.command() || modifiers.control();
-
-        if command_pressed
+        if command_pressed(modifiers)
             && !modifiers.shift()
             && is_key_char(key, modified_key, "z")
         {
             return Some(Action::publish(Message::Undo).and_capture());
         }
 
-        if command_pressed
+        if command_pressed(modifiers)
             && (is_key_char(key, modified_key, "y")
                 || (modifiers.shift() && is_key_char(key, modified_key, "z")))
         {
@@ -374,9 +380,7 @@ impl CodeEditor {
         modified_key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
     ) -> Option<Action<Message>> {
-        let command_pressed = modifiers.command() || modifiers.control();
-
-        if command_pressed
+        if command_pressed(modifiers)
             && modifiers.shift()
             && is_key_char(key, modified_key, "p")
             && self.command_palette_enabled
@@ -386,14 +390,14 @@ impl CodeEditor {
             );
         }
 
-        if command_pressed
+        if command_pressed(modifiers)
             && is_key_char(key, modified_key, "f")
             && self.search_replace_enabled
         {
             return Some(Action::publish(Message::OpenSearch).and_capture());
         }
 
-        if command_pressed
+        if command_pressed(modifiers)
             && is_key_char(key, modified_key, "h")
             && self.search_replace_enabled
         {
@@ -402,7 +406,7 @@ impl CodeEditor {
             );
         }
 
-        if command_pressed && is_key_char(key, modified_key, "g") {
+        if command_pressed(modifiers) && is_key_char(key, modified_key, "g") {
             return Some(Action::publish(Message::OpenGotoLine).and_capture());
         }
 
@@ -896,6 +900,18 @@ mod tests {
     use crate::canvas_editor::metrics::compare_floats;
     use iced::event;
     use std::cmp::Ordering;
+
+    #[test]
+    fn test_command_pressed_accepts_either_command_or_control() {
+        assert!(command_pressed(&keyboard::Modifiers::CTRL));
+        assert!(command_pressed(&keyboard::Modifiers::COMMAND));
+        assert!(command_pressed(
+            &(keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT)
+        ));
+        assert!(!command_pressed(&keyboard::Modifiers::SHIFT));
+        assert!(!command_pressed(&keyboard::Modifiers::ALT));
+        assert!(!command_pressed(&keyboard::Modifiers::default()));
+    }
 
     /// Shorthand for a printable-character key.
     fn character(ch: &str) -> keyboard::Key {
