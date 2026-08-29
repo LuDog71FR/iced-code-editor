@@ -4,7 +4,7 @@
 //! of the public API. It exposes internal hot-path functions so the
 //! `criterion` benchmarks (which run as a separate crate) can measure them.
 pub use super::folding::compute_foldable_regions;
-pub use super::render::text::highlight_line_spans;
+pub use super::render::highlighting::highlight_line_spans;
 pub use super::render::wrapping::WrappingCalculator;
 pub use super::search::find_matches;
 pub use crate::buffer::TextBuffer;
