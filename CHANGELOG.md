@@ -34,6 +34,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - feat: the demo app's editor toolbar shows the active grammar next to the LSP
   status.
 
+- feat: `CodeEditor::is_search_open` reports whether the search dialog is
+  currently shown. A host that opens the dialog from its own toolbar had no way
+  to keep that button in sync with the dialog the user may also have opened by
+  keyboard.
+
+### Documentation
+
+- docs: every public function reachable from outside the crate now carries a
+  running `# Example`. Eleven were missing one: `FoldRegion::new`, the seven
+  fold/unfold operations on `CodeEditor`, and the three search-dialog entry
+  points.
+
+- docs: no doctest in the workspace is ` ```ignore `d any more. The three that
+  were — on `sticky_headers`, `DemoApp::current_word_at` and
+  `DemoApp::is_lsp_jump_target_allowed` — documented items that are not
+  publicly reachable, so their examples could never compile, and each was a
+  silent duplicate of an existing test free to drift from it. They are now
+  prose sections naming the test that does the checking.
+
 ### Fixed
 
 - fix: the demo app no longer highlights an extension-less file as Lua.

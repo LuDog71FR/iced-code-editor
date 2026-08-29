@@ -36,6 +36,20 @@ impl FoldRegion {
     ///
     /// * `start_line` - Index of the header line
     /// * `end_line` - Index of the last line in the region
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::FoldRegion;
+    ///
+    /// // A `fn` header on line 0 whose body runs to line 2.
+    /// let region = FoldRegion::new(0, 2);
+    ///
+    /// assert_eq!(region.start_line, 0);
+    /// assert_eq!(region.end_line, 2);
+    /// ```
+    ///
+    /// Collapsing this region hides lines 1 and 2; the header stays visible.
     pub fn new(start_line: usize, end_line: usize) -> Self {
         Self { start_line, end_line }
     }

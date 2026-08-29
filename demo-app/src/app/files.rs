@@ -247,13 +247,13 @@ impl DemoApp {
     /// filesystem-readable path (e.g. an SSH private key). Confining jump
     /// targets to the workspace root prevents that.
     ///
-    /// # Examples
+    /// # Behaviour
     ///
-    /// ```ignore
-    /// let cwd = std::env::current_dir().unwrap();
-    /// assert!(DemoApp::is_lsp_jump_target_allowed(&cwd.join("src/main.rs")));
-    /// assert!(!DemoApp::is_lsp_jump_target_allowed(Path::new("/etc/passwd")));
-    /// ```
+    /// A path under the working directory is allowed; `/etc/passwd` is not.
+    ///
+    /// This method is private, so neither case can be a doctest. Both are
+    /// asserted by `test_is_lsp_jump_target_allowed_confines_to_workspace_root`
+    /// below, alongside the traversal case that motivates the `canonicalize`.
     #[cfg(not(target_arch = "wasm32"))]
     fn is_lsp_jump_target_allowed(path: &Path) -> bool {
         let Ok(cwd) = std::env::current_dir() else {

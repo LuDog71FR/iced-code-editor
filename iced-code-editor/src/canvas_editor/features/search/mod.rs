@@ -703,6 +703,34 @@ impl CodeEditor {
             || (self.vim_enabled && self.vim_state.last_search().is_some())
     }
 
+    /// Returns whether the search dialog is currently open.
+    ///
+    /// Both [`Self::open_search_dialog`] and
+    /// [`Self::open_search_replace_dialog`] open it; only
+    /// [`Self::close_search_dialog`] closes it. A host driving the dialog from
+    /// its own toolbar needs this to keep that button's pressed state in sync
+    /// with the dialog the user may also have opened by keyboard.
+    ///
+    /// # Returns
+    ///
+    /// `true` while the dialog is shown, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert!(!editor.is_search_open());
+    ///
+    /// let _task = editor.open_search_dialog();
+    /// assert!(editor.is_search_open());
+    /// ```
+    #[must_use]
+    pub fn is_search_open(&self) -> bool {
+        self.search_state.is_open
+    }
+
     /// Opens the search dialog programmatically.
     ///
     /// This is useful when wiring your own UI button instead of relying on
@@ -711,6 +739,19 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that focuses the search input.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    ///
+    /// // Returned to the host's `update`, the task focuses the query field.
+    /// let _task = editor.open_search_dialog();
+    ///
+    /// assert!(editor.is_search_open());
+    /// ```
     pub fn open_search_dialog(&mut self) -> iced::Task<Message> {
         self.update(&Message::OpenSearch)
     }
@@ -723,6 +764,19 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` that focuses the search input.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    ///
+    /// // Same dialog as `open_search_dialog`, with the replace row shown.
+    /// let _task = editor.open_search_replace_dialog();
+    ///
+    /// assert!(editor.is_search_open());
+    /// ```
     pub fn open_search_replace_dialog(&mut self) -> iced::Task<Message> {
         self.update(&Message::OpenSearchReplace)
     }
@@ -732,6 +786,19 @@ impl CodeEditor {
     /// # Returns
     ///
     /// A `Task<Message>` for any follow-up UI work.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// let _task = editor.open_search_dialog();
+    ///
+    /// let _task = editor.close_search_dialog();
+    ///
+    /// assert!(!editor.is_search_open());
+    /// ```
     pub fn close_search_dialog(&mut self) -> iced::Task<Message> {
         self.update(&Message::CloseSearch)
     }
@@ -1039,5 +1106,22 @@ mod tests {
     fn test_get_visible_match_range_empty() {
         let matches = vec![];
         assert_eq!(get_visible_match_range(&matches, 0, 100), 0..0);
+    }
+
+    #[test]
+    fn test_is_search_open_tracks_both_ways_of_opening_the_dialog() {
+        let mut editor = CodeEditor::new("fn main() {}", "rs");
+        assert!(!editor.is_search_open());
+
+        let _task = editor.open_search_dialog();
+        assert!(editor.is_search_open());
+
+        let _task = editor.close_search_dialog();
+        assert!(!editor.is_search_open());
+
+        // The replace dialog is the same dialog with one more row, so the
+        // predicate must report it as open too.
+        let _task = editor.open_search_replace_dialog();
+        assert!(editor.is_search_open());
     }
 }

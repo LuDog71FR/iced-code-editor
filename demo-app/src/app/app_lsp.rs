@@ -144,12 +144,15 @@ impl DemoApp {
     ///
     /// Returns an empty string when no word character precedes the cursor.
     ///
-    /// # Examples
+    /// # Behaviour
     ///
-    /// ```ignore
-    /// assert_eq!(DemoApp::current_word_at("foo.ba", 6), "ba");
-    /// assert_eq!(DemoApp::current_word_at("héllo", 5), "héllo");
-    /// ```
+    /// `("foo.ba", 6)` yields `"ba"`, the dot stopping the scan; `("héllo", 5)`
+    /// yields the whole word, the accent counting as one character rather than
+    /// its two bytes.
+    ///
+    /// This method is `pub(super)`, so those two cases cannot be a doctest.
+    /// They are asserted verbatim by `test_current_word_at_ascii` and
+    /// `test_current_word_at_multibyte` below.
     pub(super) fn current_word_at(line: &str, cursor_col: usize) -> String {
         let word_start = Self::find_word_start(line, cursor_col);
         line.chars()

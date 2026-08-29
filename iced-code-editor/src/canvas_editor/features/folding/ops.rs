@@ -9,6 +9,32 @@ use crate::canvas_editor::CodeEditor;
 
 impl CodeEditor {
     /// Returns whether the region whose header is `header_line` is collapsed.
+    ///
+    /// # Arguments
+    ///
+    /// * `header_line` - Logical line index of the region header
+    ///
+    /// # Returns
+    ///
+    /// `true` if that region is currently collapsed, `false` otherwise --
+    /// including when `header_line` is not a fold header at all.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// // A single block: the `fn` header on line 0 encloses lines 1 and 2.
+    /// let mut editor = CodeEditor::new(
+    ///     "fn main() {\n    let a = 1;\n    let b = 2;\n}",
+    ///     "rs",
+    /// );
+    ///
+    /// assert!(!editor.is_folded(0));
+    ///
+    /// editor.toggle_fold(0);
+    /// assert!(editor.is_folded(0));
+    /// ```
     pub fn is_folded(&self, header_line: usize) -> bool {
         self.collapsed_folds.contains(&header_line)
     }
@@ -23,6 +49,29 @@ impl CodeEditor {
     /// # Arguments
     ///
     /// * `header_line` - Logical line index of the region header
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// // A single block: the `fn` header on line 0 encloses lines 1 and 2.
+    /// let mut editor = CodeEditor::new(
+    ///     "fn main() {\n    let a = 1;\n    let b = 2;\n}",
+    ///     "rs",
+    /// );
+    ///
+    /// editor.toggle_fold(0);
+    /// assert!(editor.is_folded(0));
+    ///
+    /// editor.toggle_fold(0);
+    /// assert!(!editor.is_folded(0));
+    ///
+    /// // Line 1 sits inside the block but does not head it, so nothing moves.
+    /// editor.toggle_fold(1);
+    /// assert!(!editor.is_folded(0));
+    /// assert!(!editor.is_folded(1));
+    /// ```
     pub fn toggle_fold(&mut self, header_line: usize) {
         let regions = self.foldable_regions();
         if !super::is_fold_header(&regions, header_line) {
@@ -48,6 +97,25 @@ impl CodeEditor {
     /// # Arguments
     ///
     /// * `line` - A logical line inside (or heading) the region to toggle
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// // A single block: the `fn` header on line 0 encloses lines 1 and 2.
+    /// let mut editor = CodeEditor::new(
+    ///     "fn main() {\n    let a = 1;\n    let b = 2;\n}",
+    ///     "rs",
+    /// );
+    ///
+    /// // Line 1 is inside the block, so the block's header collapses.
+    /// editor.toggle_fold_at(1);
+    /// assert!(editor.is_folded(0));
+    ///
+    /// editor.toggle_fold_at(1);
+    /// assert!(!editor.is_folded(0));
+    /// ```
     pub fn toggle_fold_at(&mut self, line: usize) {
         let regions = self.foldable_regions();
         let header = regions
@@ -74,6 +142,25 @@ impl CodeEditor {
     /// # Arguments
     ///
     /// * `line` - A logical line inside (or heading) the region to fold
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// // A single block: the `fn` header on line 0 encloses lines 1 and 2.
+    /// let mut editor = CodeEditor::new(
+    ///     "fn main() {\n    let a = 1;\n    let b = 2;\n}",
+    ///     "rs",
+    /// );
+    ///
+    /// editor.fold_at(2);
+    /// assert!(editor.is_folded(0));
+    ///
+    /// // Already collapsed: a second call is a no-op rather than a re-open.
+    /// editor.fold_at(2);
+    /// assert!(editor.is_folded(0));
+    /// ```
     pub fn fold_at(&mut self, line: usize) {
         let regions = self.foldable_regions();
         // Innermost containing region: the one with the greatest start line.
@@ -96,6 +183,28 @@ impl CodeEditor {
     /// # Arguments
     ///
     /// * `line` - A logical line inside (or heading) the region to unfold
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// // A single block: the `fn` header on line 0 encloses lines 1 and 2.
+    /// let mut editor = CodeEditor::new(
+    ///     "fn main() {\n    let a = 1;\n    let b = 2;\n}",
+    ///     "rs",
+    /// );
+    ///
+    /// editor.fold_at(1);
+    /// assert!(editor.is_folded(0));
+    ///
+    /// editor.unfold_at(1);
+    /// assert!(!editor.is_folded(0));
+    ///
+    /// // Nothing is collapsed any more, so unfolding again does nothing.
+    /// editor.unfold_at(1);
+    /// assert!(!editor.is_folded(0));
+    /// ```
     pub fn unfold_at(&mut self, line: usize) {
         let regions = self.foldable_regions();
         let header = regions
@@ -115,6 +224,26 @@ impl CodeEditor {
     }
 
     /// Folds every foldable block in the buffer.
+    ///
+    /// Nested blocks are collapsed too, so the outermost header is the only
+    /// line each top-level block leaves on screen.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// // Two sibling blocks: headers on lines 0 and 3.
+    /// let mut editor = CodeEditor::new(
+    ///     "fn a() {\n    let x = 1;\n}\nfn b() {\n    let y = 2;\n}",
+    ///     "rs",
+    /// );
+    ///
+    /// editor.fold_all();
+    ///
+    /// assert!(editor.is_folded(0));
+    /// assert!(editor.is_folded(3));
+    /// ```
     pub fn fold_all(&mut self) {
         let regions = self.foldable_regions();
         let mut changed = false;
@@ -127,6 +256,26 @@ impl CodeEditor {
     }
 
     /// Unfolds every collapsed block in the buffer.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// // Two sibling blocks: headers on lines 0 and 3.
+    /// let mut editor = CodeEditor::new(
+    ///     "fn a() {\n    let x = 1;\n}\nfn b() {\n    let y = 2;\n}",
+    ///     "rs",
+    /// );
+    ///
+    /// editor.fold_all();
+    /// assert!(editor.is_folded(0));
+    ///
+    /// editor.unfold_all();
+    ///
+    /// assert!(!editor.is_folded(0));
+    /// assert!(!editor.is_folded(3));
+    /// ```
     pub fn unfold_all(&mut self) {
         if !self.collapsed_folds.is_empty() {
             self.collapsed_folds.clear();

@@ -48,18 +48,17 @@ pub(crate) const DEFAULT_MAX_STICKY_LINES: usize = 5;
 /// Header line indices, outermost first, at most `max_lines` of them. Empty
 /// when `top_line` sits at the top level or when `max_lines` is `0`.
 ///
-/// # Example
+/// # Behaviour
 ///
-/// ```ignore
-/// // `fn` at line 0 encloses lines 1..=3, `if` at line 1 encloses lines 2..=3.
-/// let regions = vec![FoldRegion::new(0, 3), FoldRegion::new(1, 3)];
+/// Take a `fn` at line 0 enclosing an `if` at line 1, both closing at line 4.
+/// Asked from line 3, deep inside both blocks, this returns `[0, 1]`: both
+/// headers, outermost first. Asked from line 1 — the inner header itself,
+/// already on screen — it returns `[0]` alone.
 ///
-/// // Deep inside both blocks, both headers are pinned, outermost first.
-/// assert_eq!(sticky_headers(&regions, 3, 5), vec![0, 1]);
-///
-/// // On the inner header itself, only the outer one is pinned.
-/// assert_eq!(sticky_headers(&regions, 1, 5), vec![0]);
-/// ```
+/// Both this function and [`FoldRegion::new`] are `pub(crate)`, so the two
+/// cases above cannot be written as a doctest. They are pinned instead by
+/// `test_nested_headers_are_outermost_first` and
+/// `test_visible_header_is_not_pinned` below, which the compiler does read.
 pub(crate) fn sticky_headers(
     regions: &[FoldRegion],
     top_line: usize,
