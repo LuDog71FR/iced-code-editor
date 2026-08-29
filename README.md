@@ -58,7 +58,7 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 iced = "0.14"
-iced-code-editor = "0.4"
+iced-code-editor = "0.5"
 ```
 
 ### Basic Example
@@ -229,7 +229,9 @@ The editor supports a comprehensive set of keyboard shortcuts:
 | **Home** / **End**                     | Jump to start/end of line     |
 | **Shift + Home** / **Shift + End**     | Select to start/end of line   |
 | **Ctrl + Home** / **Ctrl + End**       | Jump to start/end of document |
-| **Page Up** / **Page Down**            | Scroll one page up/down       |
+| **Page Up** / **Page Down**            | Move cursor one page up/down  |
+| **Shift + Page Up** / **Shift + Page Down** | Select one page up/down  |
+| **Shift + Tab**                        | Move focus to the previous editor |
 
 ### Editing
 
@@ -243,20 +245,23 @@ The editor supports a comprehensive set of keyboard shortcuts:
 | **Alt + Up/Down**  | Move current line (or selected lines) up/down                            |
 | **Shift + Alt + Up/Down** | Duplicate current line (or selected lines) above/below            |
 | **Ctrl + /**       | Toggle line comment on current line (or selected lines)                  |
+| **Ctrl + S**       | Request a save from the host application (emits `Message::WriteRequested`) |
 
 ### Clipboard
 
 | Shortcut                           | Action               |
 | ---------------------------------- | -------------------- |
 | **Ctrl + C** or **Ctrl + Insert**  | Copy selected text   |
+| **Ctrl + X**                       | Cut selected text    |
 | **Ctrl + V** or **Shift + Insert** | Paste from clipboard |
+| **Ctrl + A**                       | Select the whole document |
 
 ### Undo/Redo
 
 | Shortcut     | Action                     |
 | ------------ | -------------------------- |
-| **Ctrl + Z** | Undo last operation        |
-| **Ctrl + Y** | Redo last undone operation |
+| **Ctrl + Z**                        | Undo last operation        |
+| **Ctrl + Y** or **Shift + Ctrl + Z** | Redo last undone operation |
 
 The editor features smart command grouping - consecutive typing is grouped into single undo operations, while navigation or deletion actions create separate undo points.
 
@@ -280,7 +285,19 @@ All editing operations (typing, backspace, delete, enter, tab, paste) apply simu
 | **Ctrl + H**      | Open search and replace dialog |
 | **F3**            | Find next match                |
 | **Shift + F3**    | Find previous match            |
+| **Tab** / **Shift + Tab** | Cycle through the dialog fields |
 | **Escape**        | Close search dialog            |
+
+### Go to Line
+
+| Shortcut     | Action                              |
+| ------------ | ----------------------------------- |
+| **Ctrl + G** | Open the go-to-line dialog          |
+| **Enter**    | Jump to the entered 1-based line    |
+| **Escape**   | Close the dialog                    |
+
+The target line is clamped to the document, so a number past the end jumps to
+the last line.
 
 ### Command Palette
 
@@ -788,7 +805,7 @@ LSP support provides hover documentation, auto-completion, and go-to-definition.
 
 ```toml
 [dependencies]
-iced-code-editor = { version = "0.3", features = ["lsp-process"] }
+iced-code-editor = { version = "0.5", features = ["lsp-process"] }
 ```
 
 #### Enable/disable LSP on an editor

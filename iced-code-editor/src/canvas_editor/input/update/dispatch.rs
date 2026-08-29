@@ -99,8 +99,8 @@ impl CodeEditor {
             Message::SubmitCommandPalette => {
                 self.handle_submit_command_palette_msg()
             }
-            Message::PageUp => self.handle_page_up(),
-            Message::PageDown => self.handle_page_down(),
+            Message::PageUp(shift) => self.handle_page_up(*shift),
+            Message::PageDown(shift) => self.handle_page_down(*shift),
 
             // Mouse and selection operations
             Message::MouseClick(point) => self.handle_mouse_click_msg(*point),

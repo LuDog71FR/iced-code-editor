@@ -389,10 +389,10 @@ pub enum Message {
     SelectAll,
     /// Request redraw for cursor blink
     Tick,
-    /// Page Up pressed
-    PageUp,
-    /// Page Down pressed
-    PageDown,
+    /// Page Up pressed (move up one page, shift_pressed)
+    PageUp(bool),
+    /// Page Down pressed (move down one page, shift_pressed)
+    PageDown(bool),
     /// Home key pressed (move to start of line, shift_pressed)
     Home(bool),
     /// End key pressed (move to end of line, shift_pressed)

@@ -9,6 +9,31 @@ impl CodeEditor {
         !self.vim_enabled || self.vim_state.mode() == VimMode::Insert
     }
 
+    /// Prepares the selection state of every cursor before a navigation move.
+    ///
+    /// When Shift is held, each cursor that has no anchor yet gets one at its
+    /// current position so the upcoming move extends a selection. Otherwise
+    /// every selection is dropped, so the move only relocates the cursors.
+    ///
+    /// Shared by the arrow keys, Home/End and Page Up/Down handlers.
+    ///
+    /// # Arguments
+    ///
+    /// * `shift_pressed` - Whether Shift is held (for selection)
+    fn prepare_selection_for_move(&mut self, shift_pressed: bool) {
+        if shift_pressed {
+            // Set anchor on ALL cursors that don't yet have one
+            for cursor in self.cursors.as_mut_slice() {
+                if cursor.anchor.is_none() {
+                    cursor.set_anchor();
+                }
+            }
+        } else {
+            // Clear all selections so the move does not drag one along
+            self.clear_selection();
+        }
+    }
+
     /// Handles arrow key navigation.
     ///
     /// # Arguments
@@ -27,19 +52,8 @@ impl CodeEditor {
         // End grouping on navigation
         self.end_grouping_if_active();
 
-        if shift_pressed {
-            // Set anchor on ALL cursors that don't yet have one
-            for cursor in self.cursors.as_mut_slice() {
-                if cursor.anchor.is_none() {
-                    cursor.set_anchor();
-                }
-            }
-            self.move_cursor(direction);
-        } else {
-            // Clear all selections, then move all cursors
-            self.clear_selection();
-            self.move_cursor(direction);
-        }
+        self.prepare_selection_for_move(shift_pressed);
+        self.move_cursor(direction);
         self.finish_navigation_operation();
         self.scroll_to_cursor()
     }
@@ -57,18 +71,9 @@ impl CodeEditor {
     /// A `Task<Message>` that scrolls to keep the cursor visible (including
     /// horizontal scroll back to x=0 when wrap is disabled)
     pub(crate) fn handle_home(&mut self, shift_pressed: bool) -> Task<Message> {
-        if shift_pressed {
-            for cursor in self.cursors.as_mut_slice() {
-                if cursor.anchor.is_none() {
-                    cursor.set_anchor();
-                }
-                cursor.position.1 = 0;
-            }
-        } else {
-            self.clear_selection();
-            for cursor in self.cursors.as_mut_slice() {
-                cursor.position.1 = 0;
-            }
+        self.prepare_selection_for_move(shift_pressed);
+        for cursor in self.cursors.as_mut_slice() {
+            cursor.position.1 = 0;
         }
         self.cursors.sort_and_merge();
         self.finish_navigation_operation();
@@ -88,18 +93,9 @@ impl CodeEditor {
     /// A `Task<Message>` that scrolls to keep the cursor visible (including
     /// horizontal scroll to end of line when wrap is disabled)
     pub(crate) fn handle_end(&mut self, shift_pressed: bool) -> Task<Message> {
-        if shift_pressed {
-            for cursor in self.cursors.as_mut_slice() {
-                if cursor.anchor.is_none() {
-                    cursor.set_anchor();
-                }
-                cursor.position.1 = self.buffer.line_len(cursor.position.0);
-            }
-        } else {
-            self.clear_selection();
-            for cursor in self.cursors.as_mut_slice() {
-                cursor.position.1 = self.buffer.line_len(cursor.position.0);
-            }
+        self.prepare_selection_for_move(shift_pressed);
+        for cursor in self.cursors.as_mut_slice() {
+            cursor.position.1 = self.buffer.line_len(cursor.position.0);
         }
         self.cursors.sort_and_merge();
         self.finish_navigation_operation();
@@ -140,12 +136,23 @@ impl CodeEditor {
 
     /// Handles Page Up key press.
     ///
-    /// Scrolls the view up by one page.
+    /// Moves every cursor up by one viewport height.
+    ///
+    /// # Arguments
+    ///
+    /// * `shift_pressed` - Whether Shift is held (for selection)
     ///
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible
-    pub(crate) fn handle_page_up(&mut self) -> Task<Message> {
+    pub(crate) fn handle_page_up(
+        &mut self,
+        shift_pressed: bool,
+    ) -> Task<Message> {
+        // End grouping on navigation
+        self.end_grouping_if_active();
+
+        self.prepare_selection_for_move(shift_pressed);
         self.page_up();
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -153,12 +160,23 @@ impl CodeEditor {
 
     /// Handles Page Down key press.
     ///
-    /// Scrolls the view down by one page.
+    /// Moves every cursor down by one viewport height.
+    ///
+    /// # Arguments
+    ///
+    /// * `shift_pressed` - Whether Shift is held (for selection)
     ///
     /// # Returns
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible
-    pub(crate) fn handle_page_down(&mut self) -> Task<Message> {
+    pub(crate) fn handle_page_down(
+        &mut self,
+        shift_pressed: bool,
+    ) -> Task<Message> {
+        // End grouping on navigation
+        self.end_grouping_if_active();
+
+        self.prepare_selection_for_move(shift_pressed);
         self.page_down();
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -226,6 +244,103 @@ mod tests {
         let _ = editor.update(&Message::ArrowKey(ArrowDirection::Right, false));
         assert!(editor.cursors.primary().anchor.is_none());
         assert!(!editor.cursors.primary().has_selection());
+    }
+
+    /// Builds a multi-line editor whose viewport is exactly three lines tall,
+    /// so `Page Up`/`Page Down` move by a known number of lines.
+    fn paged_editor() -> CodeEditor {
+        let content = (0..10)
+            .map(|index| format!("line{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut editor = CodeEditor::new(&content, "py");
+        editor.viewport_height = editor.line_height * 3.0;
+        editor
+    }
+
+    #[test]
+    fn test_page_down_without_shift_clears_selection() {
+        let mut editor = paged_editor();
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        editor.cursors.primary_mut().position = (0, 2);
+
+        let _ = editor.update(&Message::PageDown(false));
+
+        assert_eq!(editor.cursors.primary_position(), (3, 2));
+        assert!(editor.cursors.primary().anchor.is_none());
+        assert!(!editor.cursors.primary().has_selection());
+    }
+
+    #[test]
+    fn test_page_up_without_shift_clears_selection() {
+        let mut editor = paged_editor();
+        editor.cursors.primary_mut().anchor = Some((9, 0));
+        editor.cursors.primary_mut().position = (5, 2);
+
+        let _ = editor.update(&Message::PageUp(false));
+
+        assert_eq!(editor.cursors.primary_position(), (2, 2));
+        assert!(editor.cursors.primary().anchor.is_none());
+        assert!(!editor.cursors.primary().has_selection());
+    }
+
+    #[test]
+    fn test_page_down_with_shift_creates_selection() {
+        let mut editor = paged_editor();
+        editor.cursors.primary_mut().position = (0, 0);
+
+        let _ = editor.update(&Message::PageDown(true));
+
+        assert_eq!(editor.cursors.primary_position(), (3, 0));
+        assert_eq!(editor.cursors.primary().anchor, Some((0, 0)));
+        assert!(editor.cursors.primary().has_selection());
+    }
+
+    #[test]
+    fn test_page_up_with_shift_creates_selection() {
+        let mut editor = paged_editor();
+        editor.cursors.primary_mut().position = (5, 0);
+
+        let _ = editor.update(&Message::PageUp(true));
+
+        assert_eq!(editor.cursors.primary_position(), (2, 0));
+        assert_eq!(editor.cursors.primary().anchor, Some((5, 0)));
+        assert!(editor.cursors.primary().has_selection());
+    }
+
+    #[test]
+    fn test_page_down_after_click_does_not_select() {
+        // Regression test: a plain click leaves an anchor behind for a
+        // potential drag selection; Page Down must not turn it into one.
+        let mut editor = paged_editor();
+        let point = iced::Point::new(
+            editor.gutter_width() + 5.0 + editor.char_width * 2.0,
+            editor.line_height / 2.0,
+        );
+
+        let _ = editor.update(&Message::MouseClick(point));
+        let _ = editor.update(&Message::MouseRelease);
+        assert!(!editor.cursors.primary().has_selection());
+
+        let _ = editor.update(&Message::PageDown(false));
+
+        assert!(editor.cursors.primary().anchor.is_none());
+        assert!(!editor.cursors.primary().has_selection());
+    }
+
+    #[test]
+    fn test_page_down_ends_grouping() {
+        let mut editor = paged_editor();
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+        editor.cursors.primary_mut().position = (0, 5);
+
+        let _ = editor.update(&Message::CharacterInput('!'));
+        assert!(editor.is_grouping);
+
+        let _ = editor.update(&Message::PageDown(false));
+        assert!(!editor.is_grouping);
     }
 
     #[test]

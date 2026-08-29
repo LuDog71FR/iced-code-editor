@@ -149,10 +149,10 @@ impl CodeEditor {
                 Message::ArrowKey(ArrowDirection::Right, modifiers.shift()),
             ),
             keyboard::Key::Named(keyboard::key::Named::PageUp) => {
-                Some(Message::PageUp)
+                Some(Message::PageUp(modifiers.shift()))
             }
             keyboard::Key::Named(keyboard::key::Named::PageDown) => {
-                Some(Message::PageDown)
+                Some(Message::PageDown(modifiers.shift()))
             }
             keyboard::Key::Named(keyboard::key::Named::Home) => {
                 Some(Message::Home(modifiers.shift()))

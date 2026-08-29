@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.5.0] - 2026-08-29
+
 ### Added
 
 - feat: **Sticky scroll**
@@ -46,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fold/unfold operations on `CodeEditor`, and the three search-dialog entry
   points.
 
-- docs: no doctest in the workspace is ` ```ignore `d any more. The three that
+- docs: no doctest in the workspace is ignored any more. The three that
   were — on `sticky_headers`, `DemoApp::current_word_at` and
   `DemoApp::is_lsp_jump_target_allowed` — documented items that are not
   publicly reachable, so their examples could never compile, and each was a
