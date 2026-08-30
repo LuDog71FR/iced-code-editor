@@ -16,6 +16,45 @@ use crate::canvas_editor::render::wrapping::{VisualLine, WrappingCalculator};
 use crate::canvas_editor::{
     ArrowDirection, CodeEditor, Message, measure_char_width, measure_text_width,
 };
+/// Maps a cursor's column onto the visual row it is moving to.
+///
+/// Within one logical line the cursor keeps its offset inside the row, so it
+/// stays under the same on-screen column; crossing into another logical line
+/// it keeps that offset but is clamped to what the target line actually holds.
+///
+/// Shared by arrow Up/Down and by Page Up/Down: both land a cursor on a
+/// different visual row and need the same answer to "which column now?".
+///
+/// # Arguments
+///
+/// * `pos` - The cursor's current logical position
+/// * `current_vl` - The visual row the cursor is leaving
+/// * `target_vl` - The visual row the cursor is landing on
+/// * `buffer` - The text buffer, for the target line's length
+///
+/// # Returns
+///
+/// The column the cursor takes on `target_vl`.
+fn column_on_visual_row(
+    pos: (usize, usize),
+    current_vl: &VisualLine,
+    target_vl: &VisualLine,
+    buffer: &TextBuffer,
+) -> usize {
+    let (line, col) = pos;
+    if target_vl.logical_line == line {
+        let offset_in_current = col.saturating_sub(current_vl.start_col);
+        let target_col = target_vl.start_col + offset_in_current;
+        if target_col >= target_vl.end_col {
+            target_vl.end_col.saturating_sub(1).max(target_vl.start_col)
+        } else {
+            target_col
+        }
+    } else {
+        let target_line_len = buffer.line_len(target_vl.logical_line);
+        (target_vl.start_col + col.min(target_vl.len())).min(target_line_len)
+    }
+}
 
 /// Computes the next logical `(line, col)` position for a cursor at `pos` moving in `direction`.
 ///
@@ -48,22 +87,10 @@ fn compute_next_position(
             let target_vl = &visual_lines[target_visual];
             let current_vl = &visual_lines[current_visual];
 
-            let new_col = if target_vl.logical_line == line {
-                let offset_in_current =
-                    col.saturating_sub(current_vl.start_col);
-                let target_col = target_vl.start_col + offset_in_current;
-                if target_col >= target_vl.end_col {
-                    target_vl.end_col.saturating_sub(1).max(target_vl.start_col)
-                } else {
-                    target_col
-                }
-            } else {
-                let target_line_len = buffer.line_len(target_vl.logical_line);
-                (target_vl.start_col + col.min(target_vl.len()))
-                    .min(target_line_len)
-            };
-
-            Some((target_vl.logical_line, new_col))
+            Some((
+                target_vl.logical_line,
+                column_on_visual_row(pos, current_vl, target_vl, buffer),
+            ))
         }
         ArrowDirection::Left => {
             if col > 0 {
@@ -680,36 +707,77 @@ impl CodeEditor {
         Task::batch([vertical_task, h_task])
     }
 
-    /// Moves every cursor to a new line computed by `map_line`, clamping each
-    /// cursor's column to the new line's length, then merges overlapping
-    /// cursors and invalidates the overlay cache.
+    /// Returns how many whole text rows the viewport shows.
+    ///
+    /// The unit is the *visual* row, the one [`Self::visual_lines_cached`]
+    /// returns: with wrapping enabled one logical line occupies several of
+    /// them, so a page measured in logical lines would be as many times too
+    /// long as the lines it crosses happen to wrap.
+    ///
+    /// # Returns
+    ///
+    /// The number of complete rows that fit in the viewport.
+    fn rows_per_page(&self) -> usize {
+        (self.viewport_height / self.line_height) as usize
+    }
+
+    /// Moves every cursor to the visual row given by `map_row`, clamped to the
+    /// last row, then merges overlapping cursors and invalidates the overlay
+    /// cache.
+    ///
+    /// Working in visual rows is what keeps a page one screenful: it is the
+    /// same space the viewport is measured in, wrapped segments and lines
+    /// hidden by a collapsed fold included, so the cursor travels exactly as
+    /// far as the view does. A cursor sitting on a line the layout does not
+    /// emit — hidden inside a collapsed fold — has no row to move from and
+    /// stays where it is.
     ///
     /// Shared by [`page_up`](Self::page_up) and [`page_down`](Self::page_down).
     ///
     /// # Arguments
     ///
-    /// * `map_line` - Maps a cursor's current line to its target line.
-    fn move_cursors_by_line(&mut self, map_line: impl Fn(usize) -> usize) {
+    /// * `map_row` - Maps a cursor's current visual row to its target row.
+    fn move_cursors_by_visual_row(&mut self, map_row: impl Fn(usize) -> usize) {
+        let visual_lines = self.visual_lines_cached(self.viewport_width);
+        let Some(last_row) = visual_lines.len().checked_sub(1) else {
+            return; // No layout at all: nothing to page through.
+        };
+
         for cursor in self.cursors.as_mut_slice() {
-            let new_line = map_line(cursor.position.0);
-            let line_len = self.buffer.line_len(new_line);
-            cursor.position = (new_line, cursor.position.1.min(line_len));
+            let Some(current_row) = WrappingCalculator::logical_to_visual(
+                &visual_lines,
+                cursor.position.0,
+                cursor.position.1,
+            ) else {
+                continue;
+            };
+
+            let target_row = map_row(current_row).min(last_row);
+            cursor.position = (
+                visual_lines[target_row].logical_line,
+                column_on_visual_row(
+                    cursor.position,
+                    &visual_lines[current_row],
+                    &visual_lines[target_row],
+                    &self.buffer,
+                ),
+            );
         }
+
         self.cursors.sort_and_merge();
         self.overlay_cache.clear();
     }
 
-    /// Moves all cursors up by one page (approximately viewport height).
+    /// Moves all cursors up by one viewport height.
     pub(crate) fn page_up(&mut self) {
-        let lines_per_page = (self.viewport_height / self.line_height) as usize;
-        self.move_cursors_by_line(|line| line.saturating_sub(lines_per_page));
+        let rows = self.rows_per_page();
+        self.move_cursors_by_visual_row(|row| row.saturating_sub(rows));
     }
 
-    /// Moves all cursors down by one page (approximately viewport height).
+    /// Moves all cursors down by one viewport height.
     pub(crate) fn page_down(&mut self) {
-        let lines_per_page = (self.viewport_height / self.line_height) as usize;
-        let max_line = self.buffer.line_count().saturating_sub(1);
-        self.move_cursors_by_line(|line| (line + lines_per_page).min(max_line));
+        let rows = self.rows_per_page();
+        self.move_cursors_by_visual_row(|row| row.saturating_add(rows));
     }
 
     /// Handles mouse drag for text selection.
@@ -948,6 +1016,111 @@ mod tests {
         editor.page_down();
         // Should be at last line (line 9)
         assert_eq!(editor.cursors.primary_position().0, 9);
+    }
+
+    /// Builds an editor whose logical lines each wrap over several visual rows,
+    /// with a viewport exactly three rows tall. Paging it by logical lines and
+    /// paging it by visual rows give visibly different answers, which is what
+    /// these tests are for.
+    fn wrapped_editor() -> CodeEditor {
+        let long = "x".repeat(400);
+        let content =
+            (0..10).map(|_| long.clone()).collect::<Vec<_>>().join("\n");
+        let mut editor = CodeEditor::new(&content, "py");
+        editor.viewport_height = editor.line_height * 3.0;
+        editor.viewport_width = 300.0;
+        editor
+    }
+
+    #[test]
+    fn test_page_down_moves_one_viewport_of_visual_rows() {
+        // Regression test. Paging used to add `viewport_height / line_height`
+        // to the *logical* line index, so with wrapping on -- the default --
+        // one press moved the cursor as many screenfuls as the lines it
+        // crossed happened to wrap: 45 rows here, in a viewport showing 3.
+        let mut editor = wrapped_editor();
+        let visual_lines = editor.visual_lines_cached(editor.viewport_width);
+        let rows_in_first_line =
+            visual_lines.iter().filter(|row| row.logical_line == 0).count();
+        assert!(
+            rows_in_first_line > 3,
+            "the fixture only tests anything if its lines really wrap"
+        );
+
+        // The cursor starts on visual row 0, which is (0, 0) by construction.
+        editor.cursors.primary_mut().position = (0, 0);
+        editor.page_down();
+
+        let target = &visual_lines[3];
+        assert_eq!(
+            editor.cursors.primary_position(),
+            (target.logical_line, target.start_col)
+        );
+        // Three rows into a line that wraps is still that same line.
+        assert_eq!(editor.cursors.primary_position().0, 0);
+    }
+
+    #[test]
+    fn test_page_up_moves_one_viewport_of_visual_rows() {
+        let mut editor = wrapped_editor();
+        let visual_lines = editor.visual_lines_cached(editor.viewport_width);
+
+        let start = &visual_lines[20];
+        editor.cursors.primary_mut().position =
+            (start.logical_line, start.start_col);
+        editor.page_up();
+
+        let target = &visual_lines[17];
+        assert_eq!(
+            editor.cursors.primary_position(),
+            (target.logical_line, target.start_col)
+        );
+    }
+
+    #[test]
+    fn test_paging_stops_at_the_last_visual_row() {
+        let mut editor = wrapped_editor();
+        let visual_lines = editor.visual_lines_cached(editor.viewport_width);
+        let last = visual_lines.len() - 1;
+
+        let start = &visual_lines[last];
+        editor.cursors.primary_mut().position =
+            (start.logical_line, start.start_col);
+        editor.page_down();
+
+        assert_eq!(editor.cursors.primary_position().0, start.logical_line);
+    }
+
+    #[test]
+    fn test_rows_per_page_counts_whole_rows_only() {
+        let mut editor = CodeEditor::new("line0\nline1", "py");
+
+        editor.viewport_height = editor.line_height * 3.0;
+        assert_eq!(editor.rows_per_page(), 3);
+
+        // Half a row at the bottom is not a row the user can page onto.
+        editor.viewport_height = editor.line_height * 3.5;
+        assert_eq!(editor.rows_per_page(), 3);
+    }
+
+    #[test]
+    fn test_column_on_visual_row_keeps_the_offset_inside_a_wrapped_line() {
+        let buffer = TextBuffer::new("hello world");
+        let current = VisualLine::new(0, 0, 0, 5);
+        let target = VisualLine::new(0, 1, 5, 11);
+
+        // Column 2 is the third character of the current row; it stays the
+        // third character of the target row.
+        assert_eq!(column_on_visual_row((0, 2), &current, &target, &buffer), 7);
+    }
+
+    #[test]
+    fn test_column_on_visual_row_clamps_when_the_target_line_is_shorter() {
+        let buffer = TextBuffer::new("longer line\nab");
+        let current = VisualLine::new(0, 0, 0, 11);
+        let target = VisualLine::new(1, 0, 0, 2);
+
+        assert_eq!(column_on_visual_row((0, 9), &current, &target, &buffer), 2);
     }
 
     #[test]

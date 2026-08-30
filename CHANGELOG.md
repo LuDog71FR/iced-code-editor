@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- fix: **Page Up / Page Down move by one screenful again when lines wrap.**
+  Both keys added `viewport_height / line_height` to the *logical* line index,
+  but that quotient counts *visual* rows — the two coincide only when wrapping
+  is off, and wrapping is on by default. A line wrapping over 15 rows in a
+  viewport showing 3 therefore moved the cursor 45 rows, fifteen screenfuls,
+  per press; harmless while the keys only scrolled the view, and not harmless
+  since they move the cursor and extend the selection. Paging now happens in
+  the visual-row space the viewport itself is measured in, reusing the layout
+  `visual_lines_cached` already memoizes for rendering and arrow navigation,
+  so lines hidden by a collapsed fold are skipped for free. Behaviour with
+  wrapping disabled is unchanged.
 
 ## [0.5.0] - 2026-08-29
 
