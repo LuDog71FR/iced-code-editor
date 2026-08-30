@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: **One Ctrl+Z after Home, End, Ctrl+Home or Ctrl+End no longer erases the
+  typing that preceded the move.** Those four handlers never closed the undo
+  group, so a run of typing, a navigation and a second run all collapsed into a
+  single group. The arrows, Page Up/Down and go-to-position did close it, which
+  is what made the four an inconsistency rather than a policy. The rule now
+  lives in one place: `prepare_selection_for_move` became `begin_navigation`,
+  which closes the group before preparing the selection, and pairs with the
+  `finish_navigation_operation` every handler already called at the end.
+
 - fix: **Page Up / Page Down move by one screenful again when lines wrap.**
   Both keys added `viewport_height / line_height` to the *logical* line index,
   but that quotient counts *visual* rows — the two coincide only when wrapping

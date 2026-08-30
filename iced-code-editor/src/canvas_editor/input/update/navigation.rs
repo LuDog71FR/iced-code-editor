@@ -9,18 +9,27 @@ impl CodeEditor {
         !self.vim_enabled || self.vim_state.mode() == VimMode::Insert
     }
 
-    /// Prepares the selection state of every cursor before a navigation move.
+    /// Opens a navigation move: closes the current undo group and puts every
+    /// cursor's selection into the state the move needs.
+    ///
+    /// Navigating ends the run of typing that preceded it, so the next
+    /// character typed starts an undo group of its own and one Ctrl+Z does not
+    /// swallow both runs. Every navigation handler needs that, which is why it
+    /// lives here rather than being repeated at each call site.
     ///
     /// When Shift is held, each cursor that has no anchor yet gets one at its
     /// current position so the upcoming move extends a selection. Otherwise
     /// every selection is dropped, so the move only relocates the cursors.
     ///
-    /// Shared by the arrow keys, Home/End and Page Up/Down handlers.
+    /// Pairs with [`Self::finish_navigation_operation`], which every handler
+    /// calls once the move is done.
     ///
     /// # Arguments
     ///
     /// * `shift_pressed` - Whether Shift is held (for selection)
-    fn prepare_selection_for_move(&mut self, shift_pressed: bool) {
+    fn begin_navigation(&mut self, shift_pressed: bool) {
+        self.end_grouping_if_active();
+
         if shift_pressed {
             // Set anchor on ALL cursors that don't yet have one
             for cursor in self.cursors.as_mut_slice() {
@@ -49,10 +58,7 @@ impl CodeEditor {
         direction: ArrowDirection,
         shift_pressed: bool,
     ) -> Task<Message> {
-        // End grouping on navigation
-        self.end_grouping_if_active();
-
-        self.prepare_selection_for_move(shift_pressed);
+        self.begin_navigation(shift_pressed);
         self.move_cursor(direction);
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -71,7 +77,7 @@ impl CodeEditor {
     /// A `Task<Message>` that scrolls to keep the cursor visible (including
     /// horizontal scroll back to x=0 when wrap is disabled)
     pub(crate) fn handle_home(&mut self, shift_pressed: bool) -> Task<Message> {
-        self.prepare_selection_for_move(shift_pressed);
+        self.begin_navigation(shift_pressed);
         for cursor in self.cursors.as_mut_slice() {
             cursor.position.1 = 0;
         }
@@ -93,7 +99,7 @@ impl CodeEditor {
     /// A `Task<Message>` that scrolls to keep the cursor visible (including
     /// horizontal scroll to end of line when wrap is disabled)
     pub(crate) fn handle_end(&mut self, shift_pressed: bool) -> Task<Message> {
-        self.prepare_selection_for_move(shift_pressed);
+        self.begin_navigation(shift_pressed);
         for cursor in self.cursors.as_mut_slice() {
             cursor.position.1 = self.buffer.line_len(cursor.position.0);
         }
@@ -111,7 +117,7 @@ impl CodeEditor {
     /// A `Task<Message>` that scrolls to keep the cursor visible
     pub(crate) fn handle_ctrl_home(&mut self) -> Task<Message> {
         // Move cursor to the beginning of the document
-        self.clear_selection();
+        self.begin_navigation(false);
         self.cursors.set_single((0, 0));
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -126,7 +132,7 @@ impl CodeEditor {
     /// A `Task<Message>` that scrolls to keep the cursor visible
     pub(crate) fn handle_ctrl_end(&mut self) -> Task<Message> {
         // Move cursor to the end of the document
-        self.clear_selection();
+        self.begin_navigation(false);
         let last_line = self.buffer.line_count().saturating_sub(1);
         let last_col = self.buffer.line_len(last_line);
         self.cursors.set_single((last_line, last_col));
@@ -149,10 +155,7 @@ impl CodeEditor {
         &mut self,
         shift_pressed: bool,
     ) -> Task<Message> {
-        // End grouping on navigation
-        self.end_grouping_if_active();
-
-        self.prepare_selection_for_move(shift_pressed);
+        self.begin_navigation(shift_pressed);
         self.page_up();
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -173,10 +176,7 @@ impl CodeEditor {
         &mut self,
         shift_pressed: bool,
     ) -> Task<Message> {
-        // End grouping on navigation
-        self.end_grouping_if_active();
-
-        self.prepare_selection_for_move(shift_pressed);
+        self.begin_navigation(shift_pressed);
         self.page_down();
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -328,19 +328,88 @@ mod tests {
         assert!(!editor.cursors.primary().has_selection());
     }
 
-    #[test]
-    fn test_page_down_ends_grouping() {
-        let mut editor = paged_editor();
+    /// Builds a focused editor whose cursor sits mid-line, ready to type.
+    fn typing_editor() -> CodeEditor {
+        let mut editor = CodeEditor::new("line0\nline1\nline2", "py");
         editor.request_focus();
         editor.has_canvas_focus = true;
         editor.focus_locked = false;
-        editor.cursors.primary_mut().position = (0, 5);
+        editor.cursors.primary_mut().position = (1, 2);
+        editor
+    }
 
-        let _ = editor.update(&Message::CharacterInput('!'));
-        assert!(editor.is_grouping);
+    #[test]
+    fn test_one_undo_after_navigating_keeps_the_earlier_typing() {
+        // Regression test, and the one that says what the user experiences:
+        // Home, End, Ctrl+Home and Ctrl+End used to leave the undo group open,
+        // so a run of typing, a navigation and a second run all collapsed into
+        // one group and a single Ctrl+Z erased both runs.
+        for message in [
+            Message::Home(false),
+            Message::End(false),
+            Message::CtrlHome,
+            Message::CtrlEnd,
+            Message::ArrowKey(ArrowDirection::Down, false),
+            Message::PageDown(false),
+            Message::PageUp(false),
+        ] {
+            let mut editor = typing_editor();
 
-        let _ = editor.update(&Message::PageDown(false));
-        assert!(!editor.is_grouping);
+            let _ = editor.update(&Message::CharacterInput('A'));
+            let _ = editor.update(&message);
+            // What one undo has to restore: the first run of typing is kept,
+            // the second is not.
+            let after_move = editor.content();
+
+            let _ = editor.update(&Message::CharacterInput('B'));
+            assert_ne!(editor.content(), after_move);
+
+            let _ = editor.update(&Message::Undo);
+
+            assert_eq!(
+                editor.content(),
+                after_move,
+                "{message:?}: one undo did not stop at the navigation"
+            );
+        }
+    }
+
+    #[test]
+    fn test_navigating_closes_the_undo_group() {
+        for message in [
+            Message::Home(false),
+            Message::End(false),
+            Message::CtrlHome,
+            Message::CtrlEnd,
+            Message::ArrowKey(ArrowDirection::Up, false),
+            Message::PageDown(false),
+            Message::PageUp(false),
+        ] {
+            let mut editor = typing_editor();
+
+            let _ = editor.update(&Message::CharacterInput('!'));
+            assert!(editor.is_grouping, "{message:?}: nothing to close");
+
+            let _ = editor.update(&message);
+            assert!(
+                !editor.is_grouping,
+                "{message:?} left the undo group open"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ctrl_home_still_drops_the_selection() {
+        // `begin_navigation(false)` replaced a bare `clear_selection` here;
+        // the selection must still go.
+        let mut editor = typing_editor();
+        editor.cursors.primary_mut().anchor = Some((0, 0));
+        assert!(editor.cursors.primary().has_selection());
+
+        let _ = editor.update(&Message::CtrlHome);
+
+        assert!(!editor.cursors.primary().has_selection());
+        assert_eq!(editor.cursors.primary_position(), (0, 0));
     }
 
     #[test]
