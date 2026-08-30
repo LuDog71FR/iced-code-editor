@@ -209,9 +209,12 @@ impl SharedAction {
     /// Every shared action, in no particular display order.
     ///
     /// Test-only: each surface spells out its own order, so nothing in the
-    /// rendering path iterates the whole set. It exists so the cross-surface
-    /// test below is exhaustive by construction — a new variant that is not
-    /// added here fails to compile against the array's length.
+    /// rendering path iterates the whole set. It exists so
+    /// `context_menu::tests::test_both_surfaces_render_every_shared_action_from_the_same_binding`
+    /// is exhaustive by construction — a new variant that is not added here
+    /// fails to compile against the array's length. That test lives beside the
+    /// menu it walks, not beside this array, which is why it is named here
+    /// rather than pointed at.
     #[cfg(test)]
     pub(crate) const ALL: [Self; 7] = [
         Self::Undo,

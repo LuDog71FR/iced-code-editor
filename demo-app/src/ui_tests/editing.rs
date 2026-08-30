@@ -124,6 +124,68 @@ fn test_ctrl_shift_z_also_redoes() {
     assert_eq!(ui.content(), "alpha\nalpha");
 }
 
+// ---- Page Up / Page Down ----
+
+/// Eighty numbered lines: more than the viewport shows, so a page press lands
+/// in the middle of the document rather than clamping to its end.
+fn paged_document() -> String {
+    (0..80).map(|index| format!("line{index}")).collect::<Vec<_>>().join("\n")
+}
+
+#[test]
+fn test_page_down_then_page_up_returns_the_cursor() {
+    // The library tests dispatch `Message::PageDown` straight into the editor.
+    // What only a UI test covers is the step before that: the canvas reading a
+    // real key event, and capturing it rather than letting it through.
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with(&paged_document());
+
+    let _ = ui.tap(Named::PageDown);
+    let after_down = ui.cursor();
+    assert!(after_down.0 > 0, "page down did not move the cursor");
+
+    let _ = ui.tap(Named::PageUp);
+
+    assert_eq!(ui.cursor(), (0, 0));
+}
+
+#[test]
+fn test_shift_page_down_selects_from_the_cursor_to_the_new_line() {
+    // Whether Shift reached the editor is not visible in the message stream --
+    // `carries` compares variants, and `PageDown(true)` and `PageDown(false)`
+    // are the same variant. Cutting is what makes the selection observable,
+    // the way the Ctrl+X test above does it.
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with(&paged_document());
+
+    let _ = ui.press(Key::Named(Named::PageDown), Modifiers::SHIFT);
+    let landed = ui.cursor();
+    let _ = ui.press(Key::Character("x".into()), Modifiers::COMMAND);
+
+    // Everything above the line the page landed on is gone; the rest stays.
+    let expected = (landed.0..80)
+        .map(|index| format!("line{index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(ui.content(), expected);
+}
+
+#[test]
+fn test_page_down_without_shift_selects_nothing() {
+    // The other half of the same observation: with no Shift there is no
+    // selection, so Ctrl+X has nothing to cut and the buffer is untouched.
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with(&paged_document());
+
+    let _ = ui.tap(Named::PageDown);
+    let _ = ui.press(Key::Character("x".into()), Modifiers::COMMAND);
+
+    assert_eq!(ui.content(), paged_document());
+}
+
 // ---- Cut / copy / paste ----
 
 #[test]
