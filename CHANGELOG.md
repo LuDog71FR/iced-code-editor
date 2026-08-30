@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: Page Up and Page Down are no longer inert when the viewport height is
+  zero. The page size came straight from `viewport_height / line_height`, so a
+  host passing `with_viewport_height(0.0)` or a pane collapsed to nothing gave
+  a page of zero rows: both keys did all their work — closed the undo group,
+  dropped or extended the selection, merged the cursors — to move nothing. The
+  page is now at least one row.
+
 - fix: **the CI security audit now fails on the advisory class it was silently
   passing.** `.cargo/audit.toml` claimed "a new advisory must fail the build"
   and the workflow "anything not listed there fails the build"; neither held

@@ -707,18 +707,26 @@ impl CodeEditor {
         Task::batch([vertical_task, h_task])
     }
 
-    /// Returns how many whole text rows the viewport shows.
+    /// Returns how many whole text rows the viewport shows, never fewer
+    /// than one.
     ///
     /// The unit is the *visual* row, the one [`Self::visual_lines_cached`]
     /// returns: with wrapping enabled one logical line occupies several of
     /// them, so a page measured in logical lines would be as many times too
     /// long as the lines it crosses happen to wrap.
     ///
+    /// A viewport too short to show a single row still pages by one. The
+    /// alternative is a page of zero rows, which makes Page Up and Page Down
+    /// do all their work -- close the undo group, drop or extend the
+    /// selection, merge the cursors -- to move nothing. A host that sets a
+    /// zero height, or a pane collapsed to nothing, gets an inert key rather
+    /// than a broken one.
+    ///
     /// # Returns
     ///
-    /// The number of complete rows that fit in the viewport.
+    /// The number of complete rows that fit in the viewport, at least 1.
     fn rows_per_page(&self) -> usize {
-        (self.viewport_height / self.line_height) as usize
+        ((self.viewport_height / self.line_height) as usize).max(1)
     }
 
     /// Moves every cursor to the visual row given by `map_row`, clamped to the
@@ -1101,6 +1109,22 @@ mod tests {
         // Half a row at the bottom is not a row the user can page onto.
         editor.viewport_height = editor.line_height * 3.5;
         assert_eq!(editor.rows_per_page(), 3);
+
+        // A viewport too short for one row still pages by one, so the keys
+        // are never silently inert.
+        editor.viewport_height = 0.0;
+        assert_eq!(editor.rows_per_page(), 1);
+    }
+
+    #[test]
+    fn test_page_down_still_moves_with_a_zero_height_viewport() {
+        let mut editor = CodeEditor::new("line0\nline1\nline2", "py");
+        editor.viewport_height = 0.0;
+        editor.cursors.primary_mut().position = (0, 0);
+
+        editor.page_down();
+
+        assert_eq!(editor.cursors.primary_position(), (1, 0));
     }
 
     #[test]

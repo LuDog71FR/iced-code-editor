@@ -328,6 +328,68 @@ mod tests {
         assert!(!editor.cursors.primary().has_selection());
     }
 
+    #[test]
+    fn test_shift_page_down_extends_every_cursor_that_stays_apart() {
+        // `page_down` loops over every cursor and then merges; the six tests
+        // above all use one. Cursors far enough apart that their selections
+        // never touch must each keep their own anchor.
+        let mut editor = paged_editor();
+        editor.cursors.set_single((0, 0));
+        editor.cursors.add_cursor((8, 0));
+
+        let _ = editor.update(&Message::PageDown(true));
+
+        let cursors: Vec<_> = editor
+            .cursors
+            .as_slice()
+            .iter()
+            .map(|cursor| (cursor.anchor, cursor.position))
+            .collect();
+        assert_eq!(
+            cursors,
+            vec![(Some((0, 0)), (3, 0)), (Some((8, 0)), (9, 0))]
+        );
+    }
+
+    #[test]
+    fn test_shift_page_down_merges_selections_that_overlap() {
+        // Three cursors one line apart, each extending three lines down, cover
+        // 0..3, 1..4 and 2..5 -- overlapping, so `sort_and_merge` unions them
+        // into the single selection 0..5. Surprising enough (three carets go
+        // in, one comes out) to be worth recording as a decision rather than
+        // rediscovered as a behaviour.
+        let mut editor = paged_editor();
+        editor.cursors.set_single((0, 0));
+        editor.cursors.add_cursor((1, 0));
+        editor.cursors.add_cursor((2, 0));
+
+        let _ = editor.update(&Message::PageDown(true));
+
+        assert_eq!(editor.cursors.len(), 1);
+        assert_eq!(editor.cursors.primary().anchor, Some((0, 0)));
+        assert_eq!(editor.cursors.primary_position(), (5, 0));
+    }
+
+    #[test]
+    fn test_page_down_without_shift_keeps_the_cursors_it_does_not_merge() {
+        // Without Shift there are no selections to overlap, so three cursors
+        // three lines apart stay three cursors.
+        let mut editor = paged_editor();
+        editor.cursors.set_single((0, 0));
+        editor.cursors.add_cursor((3, 0));
+        editor.cursors.add_cursor((6, 0));
+
+        let _ = editor.update(&Message::PageDown(false));
+
+        let positions: Vec<_> = editor
+            .cursors
+            .as_slice()
+            .iter()
+            .map(|cursor| cursor.position)
+            .collect();
+        assert_eq!(positions, vec![(3, 0), (6, 0), (9, 0)]);
+    }
+
     /// Builds a focused editor whose cursor sits mid-line, ready to type.
     fn typing_editor() -> CodeEditor {
         let mut editor = CodeEditor::new("line0\nline1\nline2", "py");
