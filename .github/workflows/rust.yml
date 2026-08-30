@@ -54,5 +54,12 @@ jobs:
       # is unreachable, in `.cargo/audit.toml`. `cargo audit` reads that file
       # itself, so the rationale lives next to the exception instead of in a
       # command line here. Anything not listed there fails the build.
+      #
+      # `--deny warnings` is what makes that last sentence true. Bare
+      # `cargo audit` exits non-zero only for the `vulnerability` class; an
+      # `unmaintained`, `unsound` or `yanked` advisory is printed and the job
+      # still passes, so one could arrive and go unnoticed -- which is exactly
+      # what happened to RUSTSEC-2026-0253 between this job being added and
+      # the 2026-08-30 review.
       - name: Audit
-        run: cargo audit
+        run: cargo audit --deny warnings

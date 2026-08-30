@@ -6,7 +6,11 @@
 # ignored and what would let it be removed, so an ignore that has outlived its
 # reason is visible rather than inherited.
 #
-# Nothing else belongs here. A new advisory must fail the build.
+# Nothing else belongs here. A new advisory must fail the build -- which is
+# true only because CI runs `cargo audit --deny warnings`. Bare `cargo audit`
+# fails on the `vulnerability` class alone, so before that flag was added the
+# `unmaintained` and `unsound` entries below were passing silently instead of
+# being decisions anyone had taken.
 
 [advisories]
 ignore = [
@@ -26,4 +30,50 @@ ignore = [
     # picks it up -- neither version is selectable from this workspace.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+
+    # lru < 0.17: `LruCache::pop()` is not panic-safe, and a panic inside it
+    # can leave the cache in a state a later access frees twice (unsound).
+    #
+    # Reached only through `cryoglyph -> iced_wgpu`, wgpu's internal glyph
+    # cache. Nothing in this workspace constructs an `LruCache` or hands one a
+    # type whose `Drop` or `Hash` could panic, and the release profile is
+    # `panic = "abort"`, so the unwinding the advisory needs cannot happen
+    # there at all.
+    #
+    # Removable once `cryoglyph` depends on lru >= 0.17 and `iced_wgpu` picks
+    # it up -- neither version is selectable from this workspace.
+    "RUSTSEC-2026-0253",
+
+    # The four `unmaintained` advisories below are not defects. Each says its
+    # crate has no active maintainer, which is a supply-chain risk to weigh
+    # rather than a bug to route around, and none is a dependency this
+    # workspace chooses: all four arrive through `syntect` or `iced`. They are
+    # listed so `--deny warnings` can stay on and the *next* advisory is the
+    # one that fails the build.
+
+    # bincode 1.3.3, unmaintained. Via `syntect` (both through `two-face` and
+    # through `iced_highlighter`), which uses it to load its bundled binary
+    # syntax dumps. Removable when syntect moves to bincode 2.
+    "RUSTSEC-2025-0141",
+
+    # yaml-rust 0.4.5, unmaintained. Via `syntect`, which parses
+    # `.sublime-syntax` definitions with it -- here only the definitions
+    # bundled with syntect and `two-face`, never a file opened in the editor.
+    # Removable when syntect moves to `yaml-rust2` or `serde_yaml`.
+    "RUSTSEC-2024-0320",
+
+    # ttf-parser 0.25.1, unmaintained. Via three separate `iced` paths:
+    # `winit -> sctk-adwaita -> ab_glyph`, `iced_aw -> iced_fonts`, and
+    # `fontdb`. Font parsing, which does see untrusted input in the general
+    # case -- but the fonts here are the ones the system and the crate bundle,
+    # not anything the editor opens. Removable when those three agree on a
+    # maintained parser.
+    "RUSTSEC-2026-0192",
+
+    # paste 1.0.15, unmaintained. Via `metal -> wgpu-hal -> wgpu -> iced_wgpu`,
+    # i.e. wgpu's macOS backend; it is in `Cargo.lock` on every platform
+    # because the lockfile is target-independent, and compiled on none but
+    # macOS. A proc-macro crate, so it runs at build time and ships no code.
+    # Removable when wgpu-hal's Metal backend drops it.
+    "RUSTSEC-2024-0436",
 ]

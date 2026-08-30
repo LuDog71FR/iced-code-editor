@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: **the CI security audit now fails on the advisory class it was silently
+  passing.** `.cargo/audit.toml` claimed "a new advisory must fail the build"
+  and the workflow "anything not listed there fails the build"; neither held
+  for the `unmaintained`, `unsound` and `yanked` classes, since bare
+  `cargo audit` exits non-zero for `vulnerability` alone. RUSTSEC-2026-0253
+  (`lru`, unsound) had arrived and passed unremarked. The job now runs
+  `cargo audit --deny warnings`, and the five advisories currently in the tree
+  are recorded in `.cargo/audit.toml` with the reason each is unreachable and
+  what would let the entry go away — the same shape the two `quick-xml`
+  entries already used. Not a fix to any dependency: nothing here was
+  exploitable, and the point is that the *next* one cannot slip through.
+
 - fix: **One Ctrl+Z after Home, End, Ctrl+Home or Ctrl+End no longer erases the
   typing that preceded the move.** Those four handlers never closed the undo
   group, so a run of typing, a navigation and a second run all collapsed into a
