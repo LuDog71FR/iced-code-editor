@@ -57,7 +57,7 @@ fn is_key_char(
 /// // Ctrl+C on Linux and Cmd+C on macOS both answer `true`.
 /// assert!(command_pressed(&keyboard::Modifiers::CTRL));
 /// ```
-fn command_pressed(modifiers: &keyboard::Modifiers) -> bool {
+pub(super) fn command_pressed(modifiers: &keyboard::Modifiers) -> bool {
     modifiers.command() || modifiers.control()
 }
 

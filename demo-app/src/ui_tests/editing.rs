@@ -186,6 +186,46 @@ fn test_page_down_without_shift_selects_nothing() {
     assert_eq!(ui.content(), paged_document());
 }
 
+#[test]
+fn test_ctrl_page_down_is_left_to_the_application() {
+    // The editor declines Ctrl+Page so a host can bind it -- Ctrl+Page Up/Down
+    // is the conventional previous/next-tab combination, and tabs are the
+    // application's. Declining means not capturing: the demo's own
+    // `event::listen()` only ever receives events no widget took.
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with(&paged_document());
+
+    let _ = ui.press(Key::Named(Named::PageDown), Modifiers::CTRL);
+
+    assert_eq!(ui.cursor(), (0, 0), "the editor acted on a host combination");
+}
+
+#[test]
+fn test_alt_page_down_is_left_to_the_application() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with(&paged_document());
+
+    let _ = ui.press(Key::Named(Named::PageDown), Modifiers::ALT);
+
+    assert_eq!(ui.cursor(), (0, 0));
+}
+
+#[test]
+fn test_ctrl_page_up_is_left_to_the_application() {
+    let (mut app, _) = DemoApp::new();
+    let mut ui = Ui::new(&mut app);
+    ui.open_editor_with(&paged_document());
+    // Start away from the top, so a Page Up that fired would be visible.
+    let _ = ui.tap(Named::PageDown);
+    let landed = ui.cursor();
+
+    let _ = ui.press(Key::Named(Named::PageUp), Modifiers::CTRL);
+
+    assert_eq!(ui.cursor(), landed);
+}
+
 // ---- Cut / copy / paste ----
 
 #[test]

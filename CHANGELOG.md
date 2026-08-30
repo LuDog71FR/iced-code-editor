@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix: **Ctrl + Page Up/Down and Alt + Page Up/Down are no longer swallowed by
+  the editor.** The two handlers read `modifiers.shift()` and nothing else,
+  then captured the event, so any modified press behaved as an unmodified one
+  *and* was consumed — and `iced::event::listen()` delivers only events no
+  widget captured, so a host could not bind the combination at all. Ctrl + Page
+  Up/Down is the conventional previous/next-tab shortcut, and tabs belong to
+  the application; the editor also has nothing to do with it, since the
+  document extremes it would otherwise mean are already Ctrl+Home and Ctrl+End.
+  The editor now declines both, leaving the event uncaptured. Unmodified and
+  Shift-modified presses are unchanged.
+
 - fix: Page Up and Page Down are no longer inert when the viewport height is
   zero. The page size came straight from `viewport_height / line_height`, so a
   host passing `with_viewport_height(0.0)` or a pane collapsed to nothing gave

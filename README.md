@@ -231,6 +231,7 @@ The editor supports a comprehensive set of keyboard shortcuts:
 | **Ctrl + Home** / **Ctrl + End**       | Jump to start/end of document |
 | **Page Up** / **Page Down**            | Move cursor one page up/down  |
 | **Shift + Page Up** / **Shift + Page Down** | Select one page up/down  |
+| **Ctrl + Page Up** / **Ctrl + Page Down** | *Not handled* — left uncaptured for the host application to bind (the usual previous/next-tab combination). The same holds for **Alt + Page Up/Down**. |
 | **Shift + Tab**                        | Move focus to the previous editor |
 
 ### Editing

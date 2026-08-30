@@ -9,6 +9,7 @@ use iced::advanced::input_method;
 use iced::widget::canvas::Action;
 use iced::{Point, Rectangle, keyboard, mouse};
 
+use super::shortcuts::command_pressed;
 use crate::canvas_editor::features::folding;
 use crate::canvas_editor::features::vim::VimMode;
 use crate::canvas_editor::{
@@ -148,10 +149,22 @@ impl CodeEditor {
             keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(
                 Message::ArrowKey(ArrowDirection::Right, modifiers.shift()),
             ),
-            keyboard::Key::Named(keyboard::key::Named::PageUp) => {
+            // Ctrl+Page and Alt+Page are the host's to bind, so the editor
+            // declines them: falling through to the catch-all returns `None`,
+            // the event stays uncaptured, and it reaches the application's own
+            // `event::listen()` -- which only ever sees events no widget took.
+            // Ctrl+Page Up/Down is the conventional previous/next-tab
+            // combination, and tabs belong to the application. There is also
+            // nothing for the editor to do with it: the document extremes it
+            // would otherwise mirror are already Ctrl+Home and Ctrl+End.
+            keyboard::Key::Named(keyboard::key::Named::PageUp)
+                if !command_pressed(modifiers) && !modifiers.alt() =>
+            {
                 Some(Message::PageUp(modifiers.shift()))
             }
-            keyboard::Key::Named(keyboard::key::Named::PageDown) => {
+            keyboard::Key::Named(keyboard::key::Named::PageDown)
+                if !command_pressed(modifiers) && !modifiers.alt() =>
+            {
                 Some(Message::PageDown(modifiers.shift()))
             }
             keyboard::Key::Named(keyboard::key::Named::Home) => {
