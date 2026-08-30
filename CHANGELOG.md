@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which closes the group before preparing the selection, and pairs with the
   `finish_navigation_operation` every handler already called at the end.
 
-- fix: **Page Up / Page Down move by one screenful again when lines wrap.**
+- fix: **Page Up / Page Down move by one screenful when lines wrap.**
   Both keys added `viewport_height / line_height` to the *logical* line index,
   but that quotient counts *visual* rows — the two coincide only when wrapping
   is off, and wrapping is on by default. A line wrapping over 15 rows in a
@@ -65,6 +65,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keyboard.
 
 ### Documentation
+
+- docs: two corrections to the shortcut documentation, neither of them a
+  behaviour change. The rustdoc for `handle_page_up`/`handle_page_down` said
+  "Scrolls the view" and the README table "Scroll one page up/down"; both now
+  say "move the cursor", which is what these keys have done since they were
+  added — `scroll_to_cursor` is what makes the view follow. And the README
+  tables gained three rows for behaviour that already existed and had never
+  been listed: **Ctrl + X** (cut), **Ctrl + S** (emits
+  `Message::WriteRequested` for the host to act on) and **Shift + Tab** (move
+  focus to the previous editor).
 
 - docs: every public function reachable from outside the crate now carries a
   running `# Example`. Eleven were missing one: `FoldRegion::new`, the seven
@@ -159,6 +169,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Lua when a tab becomes untitled again.
 
 ### Changed
+
+- **BREAKING**: `Message::PageUp` and `Message::PageDown` now carry whether
+  Shift was held: they are `PageUp(bool)` and `PageDown(bool)`. Any host that
+  matches these variants needs the new binding — `Message::PageUp => ...`
+  becomes `Message::PageUp(shift_pressed) => ...`. Unlike a *new* variant,
+  which only breaks an exhaustive `match`, this breaks every arm that named
+  the old ones.
+
+- feat: **Shift + Page Up / Shift + Page Down extend the selection**, like the
+  arrows and Home/End already did. Without Shift the keys now drop any
+  selection first, so a page press after a click no longer turns the anchor
+  that click left behind into a selection, and they close the current undo
+  group, so a Ctrl+Z after paging stops at the move instead of swallowing the
+  typing before it.
 
 - **BREAKING**: `LspProcessClient::new_with_server` now takes an
   `mpsc::SyncSender<LspEvent>` instead of an `mpsc::Sender<LspEvent>`, so the
