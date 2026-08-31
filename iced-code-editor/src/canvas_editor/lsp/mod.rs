@@ -1,6 +1,10 @@
 //! Minimal LSP types and helpers used by the editor.
 
+pub(crate) mod edits;
 pub(crate) mod sync;
+
+use crate::canvas_editor::IndentStyle;
+use crate::canvas_editor::metrics::TAB_WIDTH;
 
 #[cfg(all(feature = "lsp-process", not(target_arch = "wasm32")))]
 pub mod process;
@@ -131,6 +135,58 @@ pub struct LspTextChange {
     pub text: String,
 }
 
+/// Formatting options sent with a document-formatting request.
+///
+/// Mirrors the two fields of LSP's `FormattingOptions` that every server
+/// requires. Build one from the editor's own indentation setting with the
+/// `From<IndentStyle>` implementation rather than hardcoding values, so the
+/// server formats the way the editor indents.
+///
+/// # Example
+///
+/// ```
+/// use iced_code_editor::{IndentStyle, LspFormattingOptions};
+///
+/// let options = LspFormattingOptions::from(IndentStyle::Spaces(2));
+/// assert_eq!(options.tab_size, 2);
+/// assert!(options.insert_spaces);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LspFormattingOptions {
+    /// Number of columns a single indentation level spans.
+    pub tab_size: u32,
+    /// `true` to indent with spaces, `false` to indent with tab characters.
+    pub insert_spaces: bool,
+}
+
+impl From<IndentStyle> for LspFormattingOptions {
+    /// Derives formatting options from the editor's indentation style.
+    ///
+    /// [`IndentStyle::Tab`] reports the editor's own rendered tab width, which
+    /// is what the server needs to lay out alignment inside a tab-indented
+    /// file. A zero-width spaces style — which no built-in preset produces —
+    /// is raised to 1, since `tabSize: 0` is not a value any server can act on.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{IndentStyle, LspFormattingOptions};
+    ///
+    /// let options = LspFormattingOptions::from(IndentStyle::Tab);
+    /// assert!(!options.insert_spaces);
+    /// ```
+    fn from(style: IndentStyle) -> Self {
+        match style {
+            IndentStyle::Spaces(width) => {
+                Self { tab_size: u32::from(width).max(1), insert_spaces: true }
+            }
+            IndentStyle::Tab => {
+                Self { tab_size: TAB_WIDTH as u32, insert_spaces: false }
+            }
+        }
+    }
+}
+
 /// LSP client hooks invoked by the editor.
 ///
 /// Every method has a no-op default, so an implementation only overrides the
@@ -205,6 +261,22 @@ pub trait LspClient {
         &mut self,
         _document: &LspDocument,
         _position: LspPosition,
+    ) {
+    }
+    /// Requests formatting edits for the whole document.
+    ///
+    /// This method is called when the user triggers a "Format Document"
+    /// action, or when the host formats before saving. The client
+    /// implementation should send a `textDocument/formatting` request to the
+    /// LSP server; the resulting edits come back through whatever channel the
+    /// implementation uses, and the host applies them with
+    /// [`CodeEditor::apply_lsp_text_edits`].
+    ///
+    /// [`CodeEditor::apply_lsp_text_edits`]: crate::CodeEditor::apply_lsp_text_edits
+    fn request_formatting(
+        &mut self,
+        _document: &LspDocument,
+        _options: LspFormattingOptions,
     ) {
     }
 }
@@ -337,5 +409,35 @@ mod tests {
     fn test_position_for_char_index_end_of_text() {
         let pos = position_for_char_index("a\nb", 3);
         assert_eq!(pos, LspPosition { line: 1, character: 1 });
+    }
+
+    #[test]
+    fn test_formatting_options_from_spaces_indent_style() {
+        let options = LspFormattingOptions::from(IndentStyle::Spaces(2));
+        assert_eq!(
+            options,
+            LspFormattingOptions { tab_size: 2, insert_spaces: true }
+        );
+    }
+
+    #[test]
+    fn test_formatting_options_from_tab_indent_style() {
+        let options = LspFormattingOptions::from(IndentStyle::Tab);
+        assert_eq!(
+            options,
+            LspFormattingOptions {
+                tab_size: TAB_WIDTH as u32,
+                insert_spaces: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_formatting_options_never_report_a_zero_tab_size() {
+        // `tabSize: 0` is not a value a server can lay text out with.
+        assert_eq!(
+            LspFormattingOptions::from(IndentStyle::Spaces(0)).tab_size,
+            1
+        );
     }
 }

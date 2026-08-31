@@ -17,7 +17,9 @@ use std::sync::{Arc, Mutex, mpsc};
 use serde_json::json;
 
 use super::pending::{LspRequestKind, PendingRequest};
+use super::text_model::DocumentState;
 use super::{LspEvent, LspPosition, LspRange};
+use crate::canvas_editor::lsp::LspTextChange;
 
 /// JSON-RPC method name for server-push progress notifications.
 const METHOD_PROGRESS: &str = "$/progress";
@@ -244,22 +246,28 @@ pub(super) fn handle_server_request(
 /// Dispatches a server response to the appropriate pending request handler.
 ///
 /// Looks up the request kind by `id`, parses the result, and emits a
-/// [`LspEvent::Hover`], [`LspEvent::Completion`], or [`LspEvent::Definition`].
+/// [`LspEvent::Hover`], [`LspEvent::Completion`], [`LspEvent::Definition`] or
+/// [`LspEvent::Formatting`].
+///
+/// `documents` is the client's mirror of every open document, needed to turn
+/// the UTF-16 columns of a formatting reply back into the character offsets
+/// the editor addresses text by.
 pub(super) fn handle_client_response(
     id: u64,
     value: &serde_json::Value,
     pending: &Arc<Mutex<HashMap<u64, PendingRequest>>>,
     events: &mpsc::SyncSender<LspEvent>,
+    documents: &Arc<Mutex<HashMap<String, DocumentState>>>,
 ) {
-    let kind = {
+    let request = {
         let mut map = pending.lock().unwrap_or_else(|e| e.into_inner());
-        map.remove(&id).map(|entry| entry.kind)
+        map.remove(&id)
     };
 
-    let Some(kind) = kind else { return };
+    let Some(request) = request else { return };
     let result = value.get("result").unwrap_or(&serde_json::Value::Null);
 
-    match kind {
+    match request.kind {
         LspRequestKind::Hover => {
             let text = parse_hover_text(result).unwrap_or_default();
             super::emit(events, LspEvent::Hover { text });
@@ -274,6 +282,32 @@ pub(super) fn handle_client_response(
             if let Some((uri, range)) = parse_definition_location(result) {
                 super::emit(events, LspEvent::Definition { uri, range });
             }
+        }
+        LspRequestKind::Formatting => {
+            let edits = parse_text_edits(result);
+            if edits.is_empty() {
+                return;
+            }
+            let docs = documents.lock().unwrap_or_else(|e| e.into_inner());
+            // Without the mirror there is no way to place the edits, and
+            // applying UTF-16 columns as character offsets would corrupt any
+            // line holding a non-ASCII character. Drop the reply instead.
+            let Some(state) = docs.get(&request.uri) else { return };
+            let edits = edits
+                .into_iter()
+                .map(|edit| LspTextChange {
+                    range: LspRange {
+                        start: state.text.to_char_position(edit.range.start),
+                        end: state.text.to_char_position(edit.range.end),
+                    },
+                    text: edit.text,
+                })
+                .collect();
+            drop(docs);
+            super::emit(
+                events,
+                LspEvent::Formatting { uri: request.uri, edits },
+            );
         }
     }
 }
@@ -412,6 +446,27 @@ fn extract_link(link: &serde_json::Value) -> Option<(String, LspRange)> {
     Some((uri, range))
 }
 
+/// Parses a `TextEdit[]` reply, as returned by `textDocument/formatting`.
+///
+/// Positions stay in the server's UTF-16 coordinates: converting them needs
+/// the document mirror, which the caller holds. A `null` result — what a
+/// server sends for a document it has nothing to change — yields no edits.
+fn parse_text_edits(result: &serde_json::Value) -> Vec<LspTextChange> {
+    let Some(array) = result.as_array() else {
+        return Vec::new();
+    };
+
+    array
+        .iter()
+        .filter_map(|edit| {
+            Some(LspTextChange {
+                range: extract_range(edit.get("range")?)?,
+                text: edit.get("newText")?.as_str()?.to_string(),
+            })
+        })
+        .collect()
+}
+
 /// Parses definition location from an LSP definition response.
 ///
 /// Handles `Location`, `Location[]`, and `LocationLink[]` responses.
@@ -462,7 +517,16 @@ mod tests {
 
     /// Builds a [`PendingRequest`] of `kind`, sent "now" for test purposes.
     fn pending_request(kind: LspRequestKind) -> PendingRequest {
-        PendingRequest { kind, requested_at: Instant::now() }
+        PendingRequest {
+            kind,
+            uri: "file:///test.rs".to_string(),
+            requested_at: Instant::now(),
+        }
+    }
+
+    /// An empty document map, for the responses that never consult the mirror.
+    fn no_documents() -> Arc<Mutex<HashMap<String, DocumentState>>> {
+        Arc::new(Mutex::new(HashMap::new()))
     }
 
     // -------------------------------------------------------------------------
@@ -793,7 +857,13 @@ mod tests {
             "id": 1,
             "result": { "contents": { "value": "hover info" } }
         });
-        handle_client_response(1, &value, &pending, &events_tx);
+        handle_client_response(
+            1,
+            &value,
+            &pending,
+            &events_tx,
+            &no_documents(),
+        );
 
         match events_rx.try_recv().expect("expected a Hover event") {
             LspEvent::Hover { text } => assert_eq!(text, "hover info"),
@@ -816,7 +886,13 @@ mod tests {
             "id": 2,
             "result": { "items": [{ "label": "foo" }, { "label": "bar" }] }
         });
-        handle_client_response(2, &value, &pending, &events_tx);
+        handle_client_response(
+            2,
+            &value,
+            &pending,
+            &events_tx,
+            &no_documents(),
+        );
 
         match events_rx.try_recv().expect("expected a Completion event") {
             LspEvent::Completion { items } => {
@@ -846,7 +922,13 @@ mod tests {
                 }
             }
         });
-        handle_client_response(3, &value, &pending, &events_tx);
+        handle_client_response(
+            3,
+            &value,
+            &pending,
+            &events_tx,
+            &no_documents(),
+        );
 
         match events_rx.try_recv().expect("expected a Definition event") {
             LspEvent::Definition { uri, .. } => {
@@ -875,7 +957,13 @@ mod tests {
             "id": 7,
             "result": { "contents": "fn main()" }
         });
-        handle_client_response(7, &value, &pending, &events_tx);
+        handle_client_response(
+            7,
+            &value,
+            &pending,
+            &events_tx,
+            &no_documents(),
+        );
 
         assert!(
             pending.lock().unwrap().is_empty(),
@@ -889,11 +977,184 @@ mod tests {
         let pending = Arc::new(Mutex::new(HashMap::new()));
 
         let value = serde_json::json!({ "id": 99, "result": null });
-        handle_client_response(99, &value, &pending, &events_tx);
+        handle_client_response(
+            99,
+            &value,
+            &pending,
+            &events_tx,
+            &no_documents(),
+        );
         assert!(
             events_rx.try_recv().is_err(),
             "unknown IDs must not emit events"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // formatting responses
+    // -------------------------------------------------------------------------
+
+    /// A document map holding `text` under `file:///test.rs`.
+    fn documents_with(
+        text: &str,
+    ) -> Arc<Mutex<HashMap<String, DocumentState>>> {
+        let mut map = HashMap::new();
+        map.insert(
+            "file:///test.rs".to_string(),
+            DocumentState {
+                text: super::super::text_model::TextModel::from_text(text),
+            },
+        );
+        Arc::new(Mutex::new(map))
+    }
+
+    #[test]
+    fn test_parse_text_edits_reads_every_edit() {
+        let result = serde_json::json!([
+            {
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 1, "character": 0 }
+                },
+                "newText": "fn main() {}\n"
+            },
+            {
+                "range": {
+                    "start": { "line": 4, "character": 2 },
+                    "end": { "line": 4, "character": 6 }
+                },
+                "newText": ""
+            }
+        ]);
+
+        let edits = parse_text_edits(&result);
+        assert_eq!(edits.len(), 2);
+        assert_eq!(edits[0].text, "fn main() {}\n");
+        assert_eq!(edits[0].range.end, LspPosition { line: 1, character: 0 });
+        assert_eq!(edits[1].text, "");
+    }
+
+    #[test]
+    fn test_parse_text_edits_of_a_null_result_is_empty() {
+        // What a server sends when it has nothing to reformat.
+        assert!(parse_text_edits(&serde_json::Value::Null).is_empty());
+    }
+
+    #[test]
+    fn test_parse_text_edits_skips_malformed_entries() {
+        let result = serde_json::json!([
+            { "newText": "x" },
+            {
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 0, "character": 1 }
+                }
+            }
+        ]);
+        assert!(parse_text_edits(&result).is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+    fn test_handle_client_response_formatting_converts_utf16_columns() {
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        pending
+            .lock()
+            .unwrap()
+            .insert(4u64, pending_request(LspRequestKind::Formatting));
+
+        // The rocket is two UTF-16 units but one character, so the server's
+        // column 3 is the editor's column 2.
+        let value = serde_json::json!({
+            "id": 4,
+            "result": [{
+                "range": {
+                    "start": { "line": 0, "character": 3 },
+                    "end": { "line": 0, "character": 4 }
+                },
+                "newText": "Z"
+            }]
+        });
+        handle_client_response(
+            4,
+            &value,
+            &pending,
+            &events_tx,
+            &documents_with("🚀ab"),
+        );
+
+        match events_rx.try_recv().expect("expected a Formatting event") {
+            LspEvent::Formatting { uri, edits } => {
+                assert_eq!(uri, "file:///test.rs");
+                assert_eq!(edits.len(), 1);
+                assert_eq!(
+                    edits[0].range.start,
+                    LspPosition { line: 0, character: 2 }
+                );
+                assert_eq!(
+                    edits[0].range.end,
+                    LspPosition { line: 0, character: 3 }
+                );
+            }
+            _ => panic!("expected LspEvent::Formatting"),
+        }
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_handle_client_response_formatting_without_a_mirror_emits_nothing() {
+        // Placing the edits needs the mirror; guessing would corrupt the text.
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        pending
+            .lock()
+            .unwrap()
+            .insert(5u64, pending_request(LspRequestKind::Formatting));
+
+        let value = serde_json::json!({
+            "id": 5,
+            "result": [{
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 0, "character": 1 }
+                },
+                "newText": "x"
+            }]
+        });
+        handle_client_response(
+            5,
+            &value,
+            &pending,
+            &events_tx,
+            &no_documents(),
+        );
+
+        assert!(events_rx.try_recv().is_err());
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_handle_client_response_formatting_of_an_empty_reply_emits_nothing()
+    {
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        pending
+            .lock()
+            .unwrap()
+            .insert(6u64, pending_request(LspRequestKind::Formatting));
+
+        let value = serde_json::json!({ "id": 6, "result": null });
+        handle_client_response(
+            6,
+            &value,
+            &pending,
+            &events_tx,
+            &documents_with("fn main() {}"),
+        );
+
+        assert!(events_rx.try_recv().is_err());
     }
 
     // -------------------------------------------------------------------------
