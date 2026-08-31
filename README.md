@@ -311,6 +311,8 @@ the last line.
 
 Typing filters the list by subsequence, so `tc` finds "Toggle Line Comment" and `fldall` finds "Fold All". Only commands that are usable right now are listed — undo does not appear with an empty history, and the folding commands stay out while folding is disabled. Each row shows the command's own keyboard shortcut, so the palette doubles as a way to learn them.
 
+The three commands most recently run from the palette are listed first, above a separator line, and a toggle command shows its current state as an On/Off badge beside its label. The recent block is filtered like the rest of the list, and is kept per editor for the session.
+
 See [Extend the command palette](#extend-the-command-palette) to register the host application's own commands, hide the built-in ones, or turn the palette off entirely.
 
 ### Code Folding
@@ -437,6 +439,19 @@ Entries reuse `ContextMenuItem`, so an action offered in both surfaces is
 described once and keeps a single identifier. An entry built with
 `with_enabled(false)` is left out of the palette entirely rather than dimmed:
 the palette is a search result list, so every row it offers is runnable.
+
+A command that switches a setting can report that setting's state with
+`with_status`, which the palette shows as an On/Off badge beside the label:
+
+```rust
+use iced_code_editor::ContextMenuItem;
+
+let item = ContextMenuItem::new("app.toggle_format_on_save", "Toggle Format On Save")
+    .with_status(format_on_save);
+```
+
+The badge is a snapshot taken when the entries are registered, so register them
+again whenever the setting changes. The context menu ignores the field.
 
 Running a custom entry emits `CommandPaletteAction` carrying its ID. Handle it
 in the outer application, exactly like a custom context-menu action:

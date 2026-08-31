@@ -42,3 +42,5 @@ command_palette:
   fold_at_cursor: "Comprimi/Espandi al cursore"
   fold_all: "Comprimi tutto"
   unfold_all: "Espandi tutto"
+  status_on: "Attivo"
+  status_off: "Disattivo"

@@ -4,8 +4,8 @@ use iced::Task;
 use iced::widget::operation::{focus, scroll_to};
 use iced::widget::scrollable::AbsoluteOffset;
 
-use super::PaletteAction;
-use super::dialog::rows_to_pixels;
+use super::dialog::{row_top, separator_after};
+use super::{PaletteAction, PaletteEntry};
 use crate::canvas_editor::{CodeEditor, Message};
 
 impl CodeEditor {
@@ -29,9 +29,10 @@ impl CodeEditor {
         self.command_palette_state.open();
         self.overlay_cache.clear();
 
+        let entries = self.command_palette_entries();
         Task::batch([
             focus(self.command_palette_state.input_id.clone()),
-            self.scroll_command_palette_to_selection(),
+            self.scroll_command_palette_to_selection(&entries),
         ])
     }
 
@@ -59,7 +60,8 @@ impl CodeEditor {
     ) -> Task<Message> {
         self.command_palette_state.query = query.to_string();
         self.command_palette_state.select_first_row();
-        self.scroll_command_palette_to_selection()
+        let entries = self.command_palette_entries();
+        self.scroll_command_palette_to_selection(&entries)
     }
 
     /// Moves the highlight one row down (`forward`) or up.
@@ -67,9 +69,10 @@ impl CodeEditor {
         &mut self,
         forward: bool,
     ) -> Task<Message> {
-        let len = self.command_palette_entries().len();
-        self.command_palette_state.navigate(if forward { 1 } else { -1 }, len);
-        self.scroll_command_palette_to_selection()
+        let entries = self.command_palette_entries();
+        self.command_palette_state
+            .navigate(if forward { 1 } else { -1 }, entries.len());
+        self.scroll_command_palette_to_selection(&entries)
     }
 
     /// Highlights the clicked row and runs it.
@@ -102,7 +105,9 @@ impl CodeEditor {
                 Message::CommandPaletteAction(id.clone())
             }
         };
+        let key = entry.key();
 
+        self.command_palette_state.record_recent(key);
         self.command_palette_state.close();
         Task::done(message)
     }
@@ -113,12 +118,30 @@ impl CodeEditor {
     /// The offset is taken from `first_visible_row` rather than from
     /// `selected`: scrolling to the selected row would pin it to the top of
     /// the list, so the very first `Down` would push row 0 out of sight.
-    fn scroll_command_palette_to_selection(&self) -> Task<Message> {
+    ///
+    /// `entries` is passed in rather than recomputed: the callers already hold
+    /// the list, and it is what says where the recently-used separator sits,
+    /// which shifts every row below it.
+    ///
+    /// # Arguments
+    ///
+    /// * `entries` - The rows currently displayed, in display order
+    ///
+    /// # Returns
+    ///
+    /// A `Task<Message>` scrolling the result list to that window
+    fn scroll_command_palette_to_selection(
+        &self,
+        entries: &[PaletteEntry],
+    ) -> Task<Message> {
         scroll_to(
             self.command_palette_state.scrollable_id.clone(),
             AbsoluteOffset {
                 x: 0.0,
-                y: rows_to_pixels(self.command_palette_state.first_visible_row),
+                y: row_top(
+                    self.command_palette_state.first_visible_row,
+                    separator_after(entries),
+                ),
             },
         )
     }
@@ -153,6 +176,52 @@ mod tests {
         assert!(editor.command_palette_state.query.is_empty());
         assert!(!editor.search_state.is_open);
         assert!(!editor.goto_line_state.is_open);
+    }
+
+    #[test]
+    fn test_running_a_command_lists_it_first_the_next_time() {
+        let mut editor = CodeEditor::new("one\ntwo", "rs");
+        let _ = editor.update(&Message::OpenCommandPalette);
+        let first_label = selected_label(&editor);
+
+        // Run the second row, then reopen on an empty query.
+        let _ = editor.update(&Message::CommandPaletteNavigate(true));
+        let promoted_label = selected_label(&editor);
+        let _ = editor.update(&Message::SubmitCommandPalette);
+        let _ = editor.update(&Message::OpenCommandPalette);
+
+        let entries = editor.command_palette_entries();
+        assert_eq!(entries[0].label, promoted_label);
+        assert!(entries[0].is_recent);
+        assert_eq!(entries[1].label, first_label);
+        assert!(!entries[1].is_recent);
+    }
+
+    #[test]
+    fn test_only_the_last_three_commands_are_promoted() {
+        let mut editor = CodeEditor::new("one\ntwo", "rs");
+        let mut expected = Vec::new();
+
+        // Run four distinct commands, taking the row one further down each
+        // time so the history fills with four different entries.
+        for steps in 0..4 {
+            let _ = editor.update(&Message::OpenCommandPalette);
+            for _ in 0..steps {
+                let _ = editor.update(&Message::CommandPaletteNavigate(true));
+            }
+            expected.insert(0, selected_label(&editor));
+            let _ = editor.update(&Message::SubmitCommandPalette);
+        }
+
+        let _ = editor.update(&Message::OpenCommandPalette);
+        let entries = editor.command_palette_entries();
+        let recent: Vec<String> = entries
+            .iter()
+            .filter(|entry| entry.is_recent)
+            .map(|entry| entry.label.clone())
+            .collect();
+
+        assert_eq!(recent, expected[..3]);
     }
 
     #[test]

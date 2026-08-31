@@ -42,3 +42,5 @@ command_palette:
   fold_at_cursor: "Replier/Déplier au curseur"
   fold_all: "Tout replier"
   unfold_all: "Tout déplier"
+  status_on: "Activé"
+  status_off: "Désactivé"

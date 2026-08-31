@@ -42,3 +42,5 @@ command_palette:
   fold_at_cursor: "Plegar/Desplegar en el cursor"
   fold_all: "Plegar todo"
   unfold_all: "Desplegar todo"
+  status_on: "Activado"
+  status_off: "Desactivado"

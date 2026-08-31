@@ -32,6 +32,11 @@ impl DemoApp {
     /// so an untitled tab starts out as Lua.
     pub(super) const UNTITLED_SYNTAX: &'static str = "lua";
 
+    /// Value [`Self::format_on_save`] starts at, also used to seed the palette
+    /// badge of a freshly built editor before the app's own state is applied.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) const DEFAULT_FORMAT_ON_SAVE: bool = true;
+
     /// Syntax identifier for a file whose language cannot be guessed.
     ///
     /// `CodeEditor::set_syntax` normalizes this to syntect's plain-text
@@ -93,6 +98,11 @@ impl DemoApp {
     /// host's job — so advertising one the host has not bound points the user
     /// at a combination that does something else or nothing at all.
     pub(super) fn new_editor(content: &str) -> CodeEditor {
+        #[cfg(not(target_arch = "wasm32"))]
+        let format_on_save = Some(Self::DEFAULT_FORMAT_ON_SAVE);
+        #[cfg(target_arch = "wasm32")]
+        let format_on_save = None;
+
         CodeEditor::new(content, Self::UNTITLED_SYNTAX)
             .with_custom_context_menu_entries(vec![
                 ContextMenuEntry::item(
@@ -104,20 +114,60 @@ impl DemoApp {
                     .with_enabled(false),
             ])
             .with_default_context_menu_enabled(true)
-            .with_custom_command_palette_entries(vec![
-                ContextMenuItem::new("app.open_file", "Open File"),
-                ContextMenuItem::new("app.save_file_as", "Save File As"),
-                ContextMenuItem::new("app.new_tab", "New Tab"),
-                ContextMenuItem::new("app.close_tab", "Close Tab"),
-                ContextMenuItem::new("app.run_code", "Run Code"),
-                ContextMenuItem::new("app.clear_log", "Clear Log"),
-                ContextMenuItem::new("app.toggle_settings", "Settings"),
-                ContextMenuItem::new("app.format_document", "Format Document"),
-                ContextMenuItem::new(
-                    "app.toggle_format_on_save",
-                    "Toggle Format On Save",
-                ),
-            ])
+            .with_custom_command_palette_entries(Self::palette_entries(
+                format_on_save,
+            ))
+    }
+
+    /// Builds the palette commands this demo registers with every editor.
+    ///
+    /// `format_on_save` is baked into the entry that toggles it, since the
+    /// palette shows a command's current state as an On/Off badge and reads it
+    /// from the registration. Whenever the setting changes, the entries have to
+    /// be registered again — see [`Self::refresh_palette_entries`].
+    ///
+    /// # Arguments
+    ///
+    /// * `format_on_save` - Whether formatting on save is currently enabled,
+    ///   or `None` on WebAssembly, where there is no language server to format
+    ///   with and the command therefore has no state to report
+    ///
+    /// # Returns
+    ///
+    /// The command list, in the order the palette should show it
+    fn palette_entries(format_on_save: Option<bool>) -> Vec<ContextMenuItem> {
+        let mut toggle_format_on_save = ContextMenuItem::new(
+            "app.toggle_format_on_save",
+            "Toggle Format On Save",
+        );
+        if let Some(enabled) = format_on_save {
+            toggle_format_on_save = toggle_format_on_save.with_status(enabled);
+        }
+
+        vec![
+            ContextMenuItem::new("app.open_file", "Open File"),
+            ContextMenuItem::new("app.save_file_as", "Save File As"),
+            ContextMenuItem::new("app.new_tab", "New Tab"),
+            ContextMenuItem::new("app.close_tab", "Close Tab"),
+            ContextMenuItem::new("app.run_code", "Run Code"),
+            ContextMenuItem::new("app.clear_log", "Clear Log"),
+            ContextMenuItem::new("app.toggle_settings", "Settings"),
+            ContextMenuItem::new("app.format_document", "Format Document"),
+            toggle_format_on_save,
+        ]
+    }
+
+    /// Re-registers the palette commands on every open tab.
+    ///
+    /// Called after a setting one of them reports has changed: the badge is a
+    /// snapshot taken when the entries were registered, so without this the
+    /// palette would keep showing the state the toggle had before it was run.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn refresh_palette_entries(&mut self) {
+        let entries = Self::palette_entries(Some(self.format_on_save));
+        for tab in &mut self.tabs {
+            tab.editor.set_custom_command_palette_entries(entries.clone());
+        }
     }
 
     /// Resolves an action identifier emitted by the context menu or the
@@ -160,6 +210,7 @@ impl DemoApp {
                     self.format_on_save = !self.format_on_save;
                     let state = if self.format_on_save { "on" } else { "off" };
                     self.log("INFO", &format!("Format on save: {state}"));
+                    self.refresh_palette_entries();
                 }
                 #[cfg(target_arch = "wasm32")]
                 self.log("INFO", "Formatting needs a language server");
@@ -187,6 +238,10 @@ impl DemoApp {
     /// [`Self::open_content_in_tab`].
     pub(super) fn configured_editor(&self, content: &str) -> CodeEditor {
         let mut editor = Self::new_editor(content);
+        #[cfg(not(target_arch = "wasm32"))]
+        editor.set_custom_command_palette_entries(Self::palette_entries(Some(
+            self.format_on_save,
+        )));
         editor.set_font(self.current_font.font());
         editor.set_font_size(
             self.current_font_size,
@@ -468,6 +523,47 @@ mod tests {
 
         let _ = app.handle_app_action(editor_id, "app.toggle_format_on_save");
         assert!(app.format_on_save);
+    }
+
+    /// Reads the On/Off state the palette would show for the format-on-save
+    /// toggle in `editor`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn format_on_save_badge(editor: &CodeEditor) -> Option<bool> {
+        editor
+            .custom_command_palette_entries()
+            .iter()
+            .find(|item| item.id == "app.toggle_format_on_save")
+            .and_then(|item| item.status)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_toggle_format_on_save_action_updates_the_palette_badge() {
+        let (mut app, _) = DemoApp::new();
+        let editor_id = app.active_tab_id;
+        let badge = |app: &DemoApp| {
+            app.tabs
+                .iter()
+                .find(|tab| tab.id == editor_id)
+                .and_then(|tab| format_on_save_badge(&tab.editor))
+        };
+        assert_eq!(badge(&app), Some(true));
+
+        let _ = app.handle_app_action(editor_id, "app.toggle_format_on_save");
+
+        assert_eq!(badge(&app), Some(false));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_new_tabs_inherit_the_current_format_on_save_badge() {
+        let (mut app, _) = DemoApp::new();
+        let editor_id = app.active_tab_id;
+        let _ = app.handle_app_action(editor_id, "app.toggle_format_on_save");
+
+        let editor = app.configured_editor("");
+
+        assert_eq!(format_on_save_badge(&editor), Some(false));
     }
 
     #[test]

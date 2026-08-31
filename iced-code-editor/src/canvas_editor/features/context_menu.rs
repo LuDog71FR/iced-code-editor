@@ -37,6 +37,13 @@ pub struct ContextMenuItem {
     pub shortcut: Option<String>,
     /// Whether the item can be selected.
     pub enabled: bool,
+    /// Current state of a toggle command, `None` for every other command.
+    ///
+    /// Only the command palette reads it, where it is drawn as an On/Off badge
+    /// beside the label; the context menu ignores it. Set it on an entry that
+    /// switches a setting the host owns, and re-register the entries when that
+    /// setting changes so the badge stays truthful.
+    pub status: Option<bool>,
 }
 
 impl ContextMenuItem {
@@ -67,6 +74,7 @@ impl ContextMenuItem {
             label: label.into(),
             shortcut: None,
             enabled: true,
+            status: None,
         }
     }
 
@@ -124,6 +132,35 @@ impl ContextMenuItem {
     #[must_use]
     pub fn with_enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
+        self
+    }
+
+    /// Marks this item as a toggle currently in state `status`.
+    ///
+    /// The command palette then shows an On/Off badge beside the label, so the
+    /// user can tell what running the command will do without trying it. The
+    /// value is a snapshot: re-register the entries when the setting changes.
+    ///
+    /// # Arguments
+    ///
+    /// * `status` - Whether the setting the item toggles is currently on
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iced_code_editor::ContextMenuItem;
+    ///
+    /// let item = ContextMenuItem::new("format_on_save", "Toggle Format On Save")
+    ///     .with_status(true);
+    /// assert_eq!(item.status, Some(true));
+    /// ```
+    #[must_use]
+    pub fn with_status(mut self, status: bool) -> Self {
+        self.status = Some(status);
         self
     }
 }
