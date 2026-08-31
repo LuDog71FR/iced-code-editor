@@ -182,10 +182,9 @@ pub(crate) fn find_matching_pair(
 
     let (target_pos, ch) = if let Some(ch) = char_after.filter(is_pairable) {
         ((line, col), ch)
-    } else if let Some(ch) = char_before.filter(is_pairable) {
-        ((line, col - 1), ch)
     } else {
-        return None;
+        let ch = char_before.filter(is_pairable)?;
+        ((line, col - 1), ch)
     };
 
     if is_quote(ch) {
