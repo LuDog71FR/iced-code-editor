@@ -30,24 +30,51 @@ const SAMPLE_LINES: usize = 10_000;
 
 /// Builds a synthetic Rust-like source file of `lines` lines.
 ///
-/// The content mixes function headers, expressions with comments, macro calls
-/// and closing braces so wrapping, folding, search and highlighting all have
-/// representative work to do.
+/// The content mixes module, impl and function headers, a match with arms,
+/// loops, expressions with comments and macro calls, so wrapping, folding,
+/// search and highlighting all have representative work to do.
+///
+/// Blocks nest seven levels deep (`mod` -> `impl` -> `fn` -> `match` -> arm ->
+/// `for` -> `if`) rather than forming a flat run of depth-1 bodies. Nesting is
+/// what separates a linear fold scan from a quadratic one: on depth-1 input a
+/// per-header forward scan stops after a couple of lines and looks optimal, so
+/// a flat sample makes the quadratic algorithm appear ~1.9x *faster* than the
+/// linear one and hides the cost it pays on real, indented source.
 fn sample_source(lines: usize) -> String {
     let mut out = String::with_capacity(lines * 48);
     for i in 0..lines {
-        match i % 4 {
-            0 => {
+        match i % 20 {
+            0 => out.push_str(&format!("mod module_{i} {{\n")),
+            1 => out.push_str("    impl Handler {\n"),
+            2 => {
                 out.push_str(&format!(
-                    "fn function_{i}(value: usize) -> usize {{\n"
+                    "        fn handle_{i}(&self, value: usize) -> usize {{\n"
                 ));
             }
-            1 => {
+            3 => {
                 out.push_str(&format!(
-                    "    let result = value * {i} + 1; // compute result\n"
+                    "            let mut result = value * {i} + 1; // compute result\n"
                 ));
             }
-            2 => out.push_str("    println!(\"{}\", result);\n"),
+            4 => out.push_str("            match result {\n"),
+            5 => out.push_str("                0 => {\n"),
+            6 => out.push_str("                    for item in 0..result {\n"),
+            7 => out.push_str("                        if item % 2 == 0 {\n"),
+            8 => {
+                out.push_str(
+                    "                            println!(\"{}\", result + item);\n",
+                );
+            }
+            9 => out.push_str("                        }\n"),
+            10 => out.push_str("                    }\n"),
+            11 => out.push_str("                }\n"),
+            12 => out.push_str("                _ => {\n"),
+            13 => out.push_str("                    result += 1;\n"),
+            14 => out.push_str("                }\n"),
+            15 => out.push_str("            }\n"),
+            16 => out.push_str("            result\n"),
+            17 => out.push_str("        }\n"),
+            18 => out.push_str("    }\n"),
             _ => out.push_str("}\n"),
         }
     }
