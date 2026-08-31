@@ -7,12 +7,10 @@
 
 use super::{DemoApp, Message};
 use crate::file_ops;
+use crate::types::EditorId;
 use iced::Task;
 use iced_code_editor::theme;
 use std::path::{Path, PathBuf};
-
-#[cfg(not(target_arch = "wasm32"))]
-use crate::types::EditorId;
 
 impl DemoApp {
     #[cfg(not(target_arch = "wasm32"))]
@@ -158,10 +156,32 @@ impl DemoApp {
     }
 
     /// Handles saving the current file to disk.
+    ///
+    /// With format-on-save enabled, an editor backed by a file and a language
+    /// server is formatted first and written once the edits land (or once the
+    /// request times out); everything else is written straight away.
     pub(super) fn handle_file_save(
         &mut self,
         editor_id: EditorId,
     ) -> Task<Message> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.format_on_save
+            && self
+                .get_tab(editor_id)
+                .is_some_and(|tab| tab.file_path.is_some())
+            && self.request_document_formatting(editor_id, true)
+        {
+            // The write happens once the formatting reply is applied.
+            return Task::none();
+        }
+
+        self.write_file(editor_id)
+    }
+
+    /// Writes an editor's current contents to its file, formatting no further.
+    ///
+    /// An editor with no file of its own falls back to "Save As".
+    pub(super) fn write_file(&mut self, editor_id: EditorId) -> Task<Message> {
         let tab_snapshot = self
             .tabs
             .iter()
@@ -226,6 +246,9 @@ impl DemoApp {
 
                 if let Some(tab) = self.get_tab(editor_id) {
                     tab.is_dirty = false;
+                    // Servers that re-run diagnostics or formatting on save
+                    // only learn about it from this notification.
+                    tab.editor.lsp_did_save();
                 }
 
                 self.error_message = None;

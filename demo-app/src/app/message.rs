@@ -28,7 +28,19 @@ pub enum Message {
     /// File opened
     FileOpened(Result<(PathBuf, String), String>),
     /// Save file
+    ///
+    /// With format-on-save enabled and a language server attached, this first
+    /// asks the server to format the document; the write itself is then
+    /// carried out by [`Message::WriteFile`].
     SaveFile,
+    /// Write the editor's current contents to its file, formatting no further.
+    ///
+    /// The second half of [`Message::SaveFile`], and the message the formatted
+    /// document is saved with once the server's edits have been applied. Only
+    /// the formatting detour produces it, so it does not exist where there is
+    /// no language server to detour through.
+    #[cfg(not(target_arch = "wasm32"))]
+    WriteFile(EditorId),
     /// Save file as
     SaveFileAs,
     /// File saved
@@ -76,6 +88,9 @@ pub enum Message {
     SelectTab(EditorId),
     /// New empty tab
     NewTab,
+    /// Ask the language server to format the whole document
+    #[cfg(not(target_arch = "wasm32"))]
+    FormatDocument(EditorId),
     #[cfg(not(target_arch = "wasm32"))]
     LspOverlay(iced_code_editor::LspOverlayMessage),
     #[cfg(not(target_arch = "wasm32"))]

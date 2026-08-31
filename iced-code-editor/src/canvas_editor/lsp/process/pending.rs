@@ -16,12 +16,21 @@ pub(super) enum LspRequestKind {
     Completion,
     /// Definition request — go to definition
     Definition,
+    /// Formatting request — reformats the whole document
+    Formatting,
 }
 
 /// A request awaiting a server response, tracked with the time it was sent.
 pub(super) struct PendingRequest {
     /// Which kind of request this is, used to route the eventual response.
     pub(super) kind: LspRequestKind,
+    /// URI of the document the request was made against.
+    ///
+    /// A JSON-RPC response carries only the request id, so the document has
+    /// to be remembered here: replies whose payload is in document
+    /// coordinates (formatting edits) can only be translated back to
+    /// character offsets against the right document mirror.
+    pub(super) uri: String,
     /// When the request was sent, used by [`evict_expired_requests`] to
     /// drop it if the server never responds.
     pub(super) requested_at: Instant,
@@ -58,7 +67,11 @@ mod tests {
 
     /// Builds a [`PendingRequest`] of `kind`, sent "now" for test purposes.
     fn pending_request(kind: LspRequestKind) -> PendingRequest {
-        PendingRequest { kind, requested_at: Instant::now() }
+        PendingRequest {
+            kind,
+            uri: "file:///test.rs".to_string(),
+            requested_at: Instant::now(),
+        }
     }
 
     #[test]
@@ -68,6 +81,7 @@ mod tests {
             1u64,
             PendingRequest {
                 kind: LspRequestKind::Hover,
+                uri: "file:///test.rs".to_string(),
                 requested_at: Instant::now()
                     - PENDING_REQUEST_TIMEOUT
                     - Duration::from_secs(1),

@@ -9,6 +9,16 @@ use crate::app::Message;
 
 /// Delay in milliseconds before a hover request is sent after the cursor stops.
 const LSP_HOVER_REQUEST_DELAY_MS: u64 = 400;
+
+/// How long a save waits for the formatting reply before writing the file
+/// unformatted.
+///
+/// Formatting is fire-and-forget, so a server that is busy indexing — or that
+/// never answers at all — must not be able to swallow the user's save. Real
+/// replies come back in well under a second; this is generous headroom for a
+/// loaded server while keeping the worst case short enough that the save still
+/// feels like one.
+const LSP_FORMAT_TIMEOUT_MS: u64 = 2_000;
 use iced::Point;
 use iced::Task;
 use iced::widget::Id;
@@ -53,6 +63,16 @@ pub(super) struct LspHoverPending {
     pub(super) point: Point,
     /// The time when this hover request should be executed (after delay)
     pub(super) ready_at: Instant,
+}
+
+/// A formatting request waiting for the server's reply.
+pub(super) struct LspFormatPending {
+    /// The editor whose document is being formatted.
+    pub(super) editor_id: EditorId,
+    /// Whether the document must be written to disk once the edits land.
+    pub(super) save_after: bool,
+    /// When the request stops being waited on — see [`LSP_FORMAT_TIMEOUT_MS`].
+    pub(super) expires_at: Instant,
 }
 
 /// Converts an EditorId to a string label for use in URIs
@@ -515,6 +535,114 @@ impl DemoApp {
         }
     }
 
+    /// Asks the language server to format the whole document.
+    ///
+    /// The reply is applied by [`Self::drain_lsp_events`], which also performs
+    /// the deferred save when `save_after` is set. Only one formatting request
+    /// is in flight at a time: a second one while the first is outstanding
+    /// would leave two replies racing to rewrite the same buffer.
+    ///
+    /// # Arguments
+    ///
+    /// * `editor_id` - The editor whose document should be formatted
+    /// * `save_after` - `true` to write the file once the edits are applied
+    ///
+    /// # Returns
+    ///
+    /// `true` if the request reached a language server; `false` when none is
+    /// attached, the editor is gone, or a request is already pending
+    pub(super) fn request_document_formatting(
+        &mut self,
+        editor_id: EditorId,
+        save_after: bool,
+    ) -> bool {
+        if self.lsp_format_pending.is_some() {
+            self.log("WARN", "Formatting already in progress");
+            return false;
+        }
+
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == editor_id)
+        else {
+            self.log("ERROR", "Editor tab not found for formatting");
+            return false;
+        };
+
+        if !tab.editor.lsp_request_formatting() {
+            self.log("INFO", "No language server attached: nothing to format");
+            return false;
+        }
+
+        self.lsp_format_pending = Some(LspFormatPending {
+            editor_id,
+            save_after,
+            expires_at: Instant::now()
+                + Duration::from_millis(LSP_FORMAT_TIMEOUT_MS),
+        });
+        self.log("INFO", "Formatting document...");
+        true
+    }
+
+    /// Gives up on a formatting reply that never came.
+    ///
+    /// A save waiting behind the request is carried out unformatted rather
+    /// than being lost with it.
+    ///
+    /// # Returns
+    ///
+    /// The task writing the pending file, or `Task::none()` when nothing timed
+    /// out or no save was waiting
+    pub(super) fn process_lsp_format_timeout(&mut self) -> Task<Message> {
+        let Some(pending) = self.lsp_format_pending.take() else {
+            return Task::none();
+        };
+        if Instant::now() < pending.expires_at {
+            self.lsp_format_pending = Some(pending);
+            return Task::none();
+        }
+
+        self.log("WARN", "Formatting timed out");
+        if pending.save_after {
+            return Task::done(Message::WriteFile(pending.editor_id));
+        }
+        Task::none()
+    }
+
+    /// Applies a formatting reply to the editor that asked for it.
+    ///
+    /// Returns the task saving the document when the request came from a save.
+    /// Edits are dropped when they answer a request this app is no longer
+    /// waiting on (a timeout already fired, or the reply names another
+    /// document): the buffer they were computed against is no longer the one
+    /// on screen.
+    fn apply_formatting_edits(
+        &mut self,
+        uri: &str,
+        edits: &[iced_code_editor::LspTextChange],
+    ) -> Task<Message> {
+        let Some(pending) = self.lsp_format_pending.take() else {
+            return Task::none();
+        };
+
+        let editor_id = pending.editor_id;
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == editor_id)
+        else {
+            self.log("ERROR", "Editor tab gone before formatting was applied");
+            return Task::none();
+        };
+
+        if tab.editor.apply_lsp_text_edits(edits) {
+            tab.is_dirty = tab.editor.is_modified();
+            self.log("INFO", &format!("Formatted: {}", uri));
+        } else {
+            self.log("INFO", "Formatting left the document unchanged");
+        }
+
+        if pending.save_after {
+            return Task::done(Message::WriteFile(editor_id));
+        }
+        Task::none()
+    }
+
     /// Drains and processes pending LSP events from the event channel.
     ///
     /// Handles hover responses and completion items from the LSP server, up to
@@ -529,6 +657,9 @@ impl DemoApp {
         };
         let receiver = receiver;
         let mut messages = Vec::new();
+        // Collected rather than applied inside the loop: applying an edit
+        // needs `&mut self`, which the borrow of the receiver rules out here.
+        let mut formatting = Vec::new();
         let mut disconnected = false;
 
         for _ in 0..MAX_LSP_EVENTS_PER_TICK {
@@ -574,6 +705,10 @@ impl DemoApp {
                                 range.start.character as usize,
                             ));
                         }
+                    }
+                    // Handle formatting edits from LSP server
+                    LspEvent::Formatting { uri, edits } => {
+                        formatting.push((uri, edits));
                     }
                     // Handle progress notification from LSP server
                     LspEvent::Progress {
@@ -627,15 +762,15 @@ impl DemoApp {
             self.lsp_events = Some(receiver);
         }
 
-        if messages.is_empty() {
-            Task::none()
-        } else {
-            Task::batch(
-                messages
-                    .into_iter()
-                    .map(|msg| Task::perform(async move { msg }, |m| m)),
-            )
+        let mut tasks: Vec<Task<Message>> = messages
+            .into_iter()
+            .map(|msg| Task::perform(async move { msg }, |m| m))
+            .collect();
+        for (uri, edits) in formatting {
+            tasks.push(self.apply_formatting_edits(&uri, &edits));
         }
+
+        if tasks.is_empty() { Task::none() } else { Task::batch(tasks) }
     }
 }
 
@@ -1125,5 +1260,134 @@ mod tests {
         // tooltip must survive it untouched.
         assert!(app.lsp_overlay.hover_visible);
         assert_eq!(app.lsp_overlay_editor, Some(app.active_tab_id));
+    }
+
+    // ---- document formatting ----
+
+    /// Builds a single-line edit replacing `start..end` on line 0.
+    fn text_edit(
+        start: u32,
+        end: u32,
+        text: &str,
+    ) -> iced_code_editor::LspTextChange {
+        iced_code_editor::LspTextChange {
+            range: iced_code_editor::LspRange {
+                start: LspPosition { line: 0, character: start },
+                end: LspPosition { line: 0, character: end },
+            },
+            text: text.to_string(),
+        }
+    }
+
+    /// A formatting request for `editor_id` that has not expired yet.
+    fn fresh_pending(
+        editor_id: EditorId,
+        save_after: bool,
+    ) -> LspFormatPending {
+        LspFormatPending {
+            editor_id,
+            save_after,
+            expires_at: Instant::now()
+                + Duration::from_millis(LSP_FORMAT_TIMEOUT_MS),
+        }
+    }
+
+    #[test]
+    fn test_request_document_formatting_reports_failure_without_a_server() {
+        let (mut app, _) = DemoApp::new();
+        let editor_id = app.active_tab_id;
+
+        assert!(!app.request_document_formatting(editor_id, false));
+        assert!(app.lsp_format_pending.is_none());
+    }
+
+    #[test]
+    fn test_request_document_formatting_refuses_a_second_request() {
+        // Two replies racing to rewrite the same buffer: the second one would
+        // be computed against text the first has already replaced.
+        let (mut app, _) = DemoApp::new();
+        let editor_id = app.active_tab_id;
+        app.lsp_format_pending = Some(fresh_pending(editor_id, true));
+
+        assert!(!app.request_document_formatting(editor_id, false));
+        // The pending save must survive the refusal.
+        assert!(
+            app.lsp_format_pending
+                .as_ref()
+                .is_some_and(|pending| pending.save_after)
+        );
+    }
+
+    #[test]
+    fn test_process_lsp_format_timeout_waits_for_a_fresh_request() {
+        let (mut app, _) = DemoApp::new();
+        let editor_id = app.active_tab_id;
+        app.lsp_format_pending = Some(fresh_pending(editor_id, true));
+
+        let _ = app.process_lsp_format_timeout();
+
+        assert!(app.lsp_format_pending.is_some());
+    }
+
+    #[test]
+    fn test_process_lsp_format_timeout_gives_up_on_a_stale_request() {
+        let (mut app, _) = DemoApp::new();
+        let editor_id = app.active_tab_id;
+        app.lsp_format_pending = Some(LspFormatPending {
+            editor_id,
+            save_after: true,
+            expires_at: Instant::now() - Duration::from_millis(1),
+        });
+
+        let _ = app.process_lsp_format_timeout();
+
+        assert!(app.lsp_format_pending.is_none());
+        assert_eq!(
+            app.log_messages.last().map(String::as_str),
+            Some("[WARN] Formatting timed out")
+        );
+    }
+
+    #[test]
+    fn test_apply_formatting_edits_rewrites_the_editor_that_asked() {
+        let (mut app, _) = DemoApp::new();
+        let editor_id = app.active_tab_id;
+        let _ =
+            app.update(Message::TemplateSelected(editor_id, Template::Empty));
+        let _ = app.update(Message::EditorEvent(
+            editor_id,
+            EditorMessage::Paste("x  =  1".to_string()),
+        ));
+        app.lsp_format_pending = Some(fresh_pending(editor_id, false));
+
+        let _ = app.apply_formatting_edits(
+            "file:///tmp/demo.lua",
+            &[text_edit(0, 7, "x = 1")],
+        );
+
+        assert_eq!(
+            app.get_tab(editor_id).map(|tab| tab.editor.content()),
+            Some("x = 1".to_string())
+        );
+        assert!(app.lsp_format_pending.is_none());
+    }
+
+    #[test]
+    fn test_apply_formatting_edits_drops_a_reply_nobody_is_waiting_for() {
+        // The timeout already fired: the buffer these edits were computed
+        // against is not necessarily the one on screen any more.
+        let (mut app, _) = DemoApp::new();
+        let editor_id = app.active_tab_id;
+        let before = app.get_tab(editor_id).map(|tab| tab.editor.content());
+
+        let _ = app.apply_formatting_edits(
+            "file:///tmp/demo.lua",
+            &[text_edit(0, 2, "!!")],
+        );
+
+        assert_eq!(
+            app.get_tab(editor_id).map(|tab| tab.editor.content()),
+            before
+        );
     }
 }

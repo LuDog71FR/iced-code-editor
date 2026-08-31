@@ -1,6 +1,6 @@
 //! LSP synchronization for [`CodeEditor`]: attaching/detaching a client,
 //! tracking buffer edits as queued `didChange` notifications, and issuing
-//! hover/completion/definition requests.
+//! hover/completion/definition/formatting requests.
 
 use crate::buffer::TextBuffer;
 use crate::canvas_editor::CodeEditor;
@@ -799,6 +799,71 @@ impl CodeEditor {
         })
         .is_some()
     }
+
+    /// Requests formatting edits for the whole document.
+    ///
+    /// The formatting options are derived from the editor's own
+    /// [`IndentStyle`], so the server formats the way this editor indents.
+    /// Queued changes are flushed first: the server formats the document it
+    /// has, so an unflushed keystroke would come back reformatted away.
+    ///
+    /// Like every other request this is fire-and-forget. The reply is a batch
+    /// of edits, which the host applies with
+    /// [`Self::apply_lsp_text_edits`].
+    ///
+    /// # Returns
+    ///
+    /// `true` if the request was sent; `false` when no client and document are
+    /// attached
+    ///
+    /// [`IndentStyle`]: crate::IndentStyle
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::cell::RefCell;
+    /// use std::rc::Rc;
+    ///
+    /// use iced_code_editor::{
+    ///     CodeEditor, IndentStyle, LspClient, LspDocument, LspFormattingOptions,
+    /// };
+    ///
+    /// /// Records the options each formatting request carried.
+    /// struct FormattingClient(Rc<RefCell<Vec<LspFormattingOptions>>>);
+    ///
+    /// impl LspClient for FormattingClient {
+    ///     fn request_formatting(
+    ///         &mut self,
+    ///         _document: &LspDocument,
+    ///         options: LspFormattingOptions,
+    ///     ) {
+    ///         self.0.borrow_mut().push(options);
+    ///     }
+    /// }
+    ///
+    /// let requests = Rc::new(RefCell::new(Vec::new()));
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    ///
+    /// // Nothing is attached yet, so there is nobody to ask.
+    /// assert!(!editor.lsp_request_formatting());
+    ///
+    /// editor.set_indent_style(IndentStyle::Spaces(2));
+    /// editor.attach_lsp(
+    ///     Box::new(FormattingClient(Rc::clone(&requests))),
+    ///     LspDocument::new("file:///tmp/main.rs", "rust"),
+    /// );
+    ///
+    /// assert!(editor.lsp_request_formatting());
+    /// assert_eq!(requests.borrow()[0].tab_size, 2);
+    /// ```
+    pub fn lsp_request_formatting(&mut self) -> bool {
+        self.lsp_flush_pending_changes();
+        let options = lsp::LspFormattingOptions::from(self.indent_style());
+        self.with_lsp(|client, document| {
+            client.request_formatting(document, options);
+        })
+        .is_some()
+    }
 }
 
 /// Sends `did_open` for `document` (after stamping `version = 1`) on
@@ -874,6 +939,13 @@ mod tests {
             _changes: &[lsp::LspTextChange],
         ) {
             self.calls.borrow_mut().push("did_change".to_string());
+        }
+        fn request_formatting(
+            &mut self,
+            _document: &lsp::LspDocument,
+            _options: lsp::LspFormattingOptions,
+        ) {
+            self.calls.borrow_mut().push("request_formatting".to_string());
         }
     }
 
@@ -1048,5 +1120,34 @@ mod tests {
         editor.lsp_flush_pending_changes();
 
         assert_eq!(editor.lsp_pending_changes.len(), 1);
+    }
+
+    #[test]
+    fn test_lsp_request_formatting_flushes_queued_changes_first() {
+        // The server formats the document it holds, so a keystroke still
+        // sitting in the queue has to reach it before the request does.
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let client = RecordingLspClient { calls: Rc::clone(&calls) };
+        let mut editor = CodeEditor::new("hello", "rs");
+        editor.set_lsp_auto_flush(false);
+        editor.attach_lsp(
+            Box::new(client),
+            lsp::LspDocument::new("file:///test.rs", "rust"),
+        );
+
+        editor.buffer.insert_char(0, 5, '!');
+        editor.enqueue_lsp_change();
+        assert!(editor.lsp_request_formatting());
+
+        assert_eq!(
+            calls.borrow().as_slice(),
+            ["did_open", "did_change", "request_formatting"]
+        );
+    }
+
+    #[test]
+    fn test_lsp_request_formatting_is_a_noop_without_an_attached_client() {
+        let mut editor = CodeEditor::new("hello", "rs");
+        assert!(!editor.lsp_request_formatting());
     }
 }

@@ -18,18 +18,17 @@ None
 
 1. **Snippets**
 
-### LSP / IntelliSense (completion, hover, go-to-definition already done)
+### LSP / IntelliSense (completion, hover, go-to-definition, formatting already done)
 
 2. **Diagnostics display** (underlines + gutter + panel)
 3. **Find references** + **Rename symbol**
-4. **Document formatting** (format on save)
-5. **Signature help**
-6. **Code actions / quick fixes**
-7. **Outline / document symbols** (+ breadcrumbs)
+4. **Signature help**
+5. **Code actions / quick fixes**
+6. **Outline / document symbols** (+ breadcrumbs)
 
 ### Navigation / UI
 
-8. **Minimap** (overview of entire file & clickable navigation)
+7. **Minimap** (overview of entire file & clickable navigation)
 
 ## Performance Improvements
 

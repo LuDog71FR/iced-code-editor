@@ -29,7 +29,8 @@ use self::protocol::{
 };
 use self::text_model::{DocumentState, TextModel, apply_changes_to_document};
 use crate::canvas_editor::lsp::{
-    LspClient, LspDocument, LspPosition, LspRange, LspTextChange,
+    LspClient, LspDocument, LspFormattingOptions, LspPosition, LspRange,
+    LspTextChange,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -64,10 +65,10 @@ pub const LSP_EVENT_QUEUE_CAPACITY: usize = 4_096;
 /// and back-pressure the server for as long as the host took to catch up.
 ///
 /// Dropping is safe for every [`LspEvent`] variant. None of them carries state
-/// the client must not lose: `Hover`, `Completion` and `Definition` are each
-/// one UI update that the user's next gesture re-requests, `Progress` is
-/// superseded by the next notification for the same token, and `Log` is
-/// advisory. In particular a dropped response strands nothing --
+/// the client must not lose: `Hover`, `Completion`, `Definition` and
+/// `Formatting` are each one UI update that the user's next gesture
+/// re-requests, `Progress` is superseded by the next notification for the same
+/// token, and `Log` is advisory. In particular a dropped response strands nothing --
 /// `handle_client_response` removes the entry from `pending_requests` *before*
 /// emitting, so the request is already accounted for.
 ///
@@ -104,6 +105,7 @@ pub(super) fn emit(events: &mpsc::SyncSender<LspEvent>, event: LspEvent) {
 ///         LspEvent::Hover { text } => assert_eq!(text, "fn main()"),
 ///         LspEvent::Completion { items } => drop(items),
 ///         LspEvent::Definition { uri, .. } => drop(uri),
+///         LspEvent::Formatting { edits, .. } => drop(edits),
 ///         LspEvent::Progress { done, .. } => drop(done),
 ///         LspEvent::Log { message, .. } => drop(message),
 ///     }
@@ -126,6 +128,18 @@ pub enum LspEvent {
         uri: String,
         /// Target range within that document.
         range: crate::canvas_editor::lsp::LspRange,
+    },
+    /// Formatting edits received from the LSP server.
+    Formatting {
+        /// URI of the document the edits apply to.
+        uri: String,
+        /// Edits to apply, in the document's own character coordinates.
+        ///
+        /// Apply them with [`CodeEditor::apply_lsp_text_edits`], which takes
+        /// care of ordering and of landing them as a single undo step.
+        ///
+        /// [`CodeEditor::apply_lsp_text_edits`]: crate::CodeEditor::apply_lsp_text_edits
+        edits: Vec<LspTextChange>,
     },
     /// Progress notification from the LSP server.
     Progress {
@@ -287,6 +301,9 @@ impl LspProcessClient {
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         let pending_requests = Arc::new(Mutex::new(HashMap::new()));
         let pending_reader = pending_requests.clone();
+        let documents: Arc<Mutex<HashMap<String, DocumentState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let documents_reader = documents.clone();
         let events_reader = events.clone();
         let events_log = events.clone();
         let events_field = events;
@@ -322,6 +339,7 @@ impl LspProcessClient {
                                 &value,
                                 &pending_reader,
                                 &events_reader,
+                                &documents_reader,
                             );
                         }
                     } else if let Some(method) =
@@ -359,7 +377,7 @@ impl LspProcessClient {
         let client = Self {
             child,
             writer: tx,
-            documents: Arc::new(Mutex::new(HashMap::new())),
+            documents,
             events: events_field,
             server_key,
             request_id: AtomicU64::new(1),
@@ -382,6 +400,9 @@ impl LspProcessClient {
                             "dynamicRegistration": false,
                             "willSave": false,
                             "didSave": true
+                        },
+                        "formatting": {
+                            "dynamicRegistration": false
                         }
                     },
                     "window": {
@@ -576,6 +597,7 @@ impl LspClient for LspProcessClient {
                 id,
                 PendingRequest {
                     kind: LspRequestKind::Hover,
+                    uri: document.uri.clone(),
                     requested_at: Instant::now(),
                 },
             );
@@ -611,6 +633,7 @@ impl LspClient for LspProcessClient {
                 id,
                 PendingRequest {
                     kind: LspRequestKind::Completion,
+                    uri: document.uri.clone(),
                     requested_at: Instant::now(),
                 },
             );
@@ -647,6 +670,7 @@ impl LspClient for LspProcessClient {
                 id,
                 PendingRequest {
                     kind: LspRequestKind::Definition,
+                    uri: document.uri.clone(),
                     requested_at: Instant::now(),
                 },
             );
@@ -659,6 +683,52 @@ impl LspClient for LspProcessClient {
             "params": {
                 "textDocument": { "uri": document.uri },
                 "position": { "line": pos.line, "character": pos.character }
+            }
+        });
+        self.send_message(&msg);
+    }
+
+    fn request_formatting(
+        &mut self,
+        document: &LspDocument,
+        options: LspFormattingOptions,
+    ) {
+        // Unlike the position-based requests this one needs nothing from the
+        // mirror to be *sent* — but the reply's edits can only be placed
+        // against it, so a document the client never opened is not worth
+        // asking about.
+        {
+            let docs = self.documents.lock().unwrap_or_else(|e| e.into_inner());
+            if !docs.contains_key(&document.uri) {
+                return;
+            }
+        }
+
+        let id = self.next_id();
+        {
+            let mut pending =
+                self.pending_requests.lock().unwrap_or_else(|e| e.into_inner());
+            evict_expired_requests(&mut pending);
+            pending.insert(
+                id,
+                PendingRequest {
+                    kind: LspRequestKind::Formatting,
+                    uri: document.uri.clone(),
+                    requested_at: Instant::now(),
+                },
+            );
+        }
+
+        let msg = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/formatting",
+            "params": {
+                "textDocument": { "uri": document.uri },
+                "options": {
+                    "tabSize": options.tab_size,
+                    "insertSpaces": options.insert_spaces
+                }
             }
         });
         self.send_message(&msg);
@@ -997,6 +1067,48 @@ mod tests {
             Some(LspRequestKind::Definition) => {}
             _ => panic!("expected a pending Definition request"),
         }
+    }
+
+    #[test]
+    #[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+    fn test_request_formatting_registers_pending_and_sends_options() {
+        let (mut client, writer_rx, _events_rx) = test_client();
+        let doc = document("file:///a.rs");
+        client.did_open(&doc, "hello");
+        writer_rx.try_recv().expect("drain didOpen");
+
+        client.request_formatting(
+            &doc,
+            LspFormattingOptions { tab_size: 2, insert_spaces: true },
+        );
+
+        let bytes = writer_rx.try_recv().expect("formatting request sent");
+        let value = decode_sent(&bytes);
+        assert_eq!(value["method"], "textDocument/formatting");
+        assert_eq!(value["params"]["textDocument"]["uri"], "file:///a.rs");
+        assert_eq!(value["params"]["options"]["tabSize"], 2);
+        assert_eq!(value["params"]["options"]["insertSpaces"], true);
+
+        let id = value["id"].as_u64().expect("id present");
+        let pending = client.pending_requests.lock().unwrap();
+        let entry = pending.get(&id).expect("a pending request");
+        assert!(matches!(entry.kind, LspRequestKind::Formatting));
+        // The reply's edits are placed against this document's mirror.
+        assert_eq!(entry.uri, "file:///a.rs");
+    }
+
+    #[test]
+    #[allow(clippy::expect_used, clippy::unwrap_used)]
+    fn test_request_formatting_skips_a_document_that_was_never_opened() {
+        let (mut client, writer_rx, _events_rx) = test_client();
+
+        client.request_formatting(
+            &document("file:///never-opened.rs"),
+            LspFormattingOptions { tab_size: 4, insert_spaces: true },
+        );
+
+        assert!(writer_rx.try_recv().is_err(), "nothing should be sent");
+        assert!(client.pending_requests.lock().unwrap().is_empty());
     }
 
     // -------------------------------------------------------------------------

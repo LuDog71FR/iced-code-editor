@@ -51,7 +51,7 @@ pub use tabs::EditorTab;
 #[cfg(not(target_arch = "wasm32"))]
 mod app_lsp;
 #[cfg(not(target_arch = "wasm32"))]
-use app_lsp::LspHoverPending;
+use app_lsp::{LspFormatPending, LspHoverPending};
 
 /// Greatest number of lines the output log keeps.
 ///
@@ -180,6 +180,12 @@ pub struct DemoApp {
     pub lsp_hover_hide_deadline: Option<Instant>,
     #[cfg(not(target_arch = "wasm32"))]
     pub lsp_progress: HashMap<String, HashMap<String, LspProgress>>,
+    /// Formatting request awaiting its reply, if any.
+    #[cfg(not(target_arch = "wasm32"))]
+    lsp_format_pending: Option<LspFormatPending>,
+    /// Whether saving a file first asks the language server to format it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub format_on_save: bool,
     /// Current window width
     pub window_width: f32,
     /// Whether tabs are overflowing the window width
@@ -277,6 +283,10 @@ greet("World")
             lsp_hover_hide_deadline: None,
             #[cfg(not(target_arch = "wasm32"))]
             lsp_progress: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_format_pending: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            format_on_save: true,
             window_width: 1024.0,
             tabs_overflow: false,
             spinner_frame: 0,
@@ -414,7 +424,8 @@ greet("World")
         #[cfg(not(target_arch = "wasm32"))]
         let lsp_task = {
             self.process_lsp_hover_timers();
-            self.drain_lsp_events()
+            let format_task = self.process_lsp_format_timeout();
+            Task::batch([format_task, self.drain_lsp_events()])
         };
         #[cfg(target_arch = "wasm32")]
         let lsp_task = Task::none();
@@ -547,9 +558,16 @@ greet("World")
             Message::OpenFile => self.handle_file_open(),
             Message::FileOpened(result) => self.handle_file_opened(result),
             Message::SaveFile => self.handle_file_save(self.active_tab_id),
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::WriteFile(editor_id) => self.write_file(editor_id),
             Message::SaveFileAs => self.handle_file_save_as(self.active_tab_id),
             Message::FileSaved(editor_id, result) => {
                 self.handle_file_saved(editor_id, result)
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::FormatDocument(editor_id) => {
+                self.request_document_formatting(editor_id, false);
+                Task::none()
             }
             #[cfg(not(target_arch = "wasm32"))]
             Message::FileRevealed(result) => self.handle_file_revealed(result),

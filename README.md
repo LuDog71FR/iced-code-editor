@@ -802,7 +802,7 @@ if editor.bracket_pair_colorization_enabled() {
 
 ### Language Server Protocol (LSP)
 
-LSP support provides hover documentation, auto-completion, and go-to-definition. It requires the `lsp-process` feature (not available on WASM):
+LSP support provides hover documentation, auto-completion, go-to-definition, and document formatting. It requires the `lsp-process` feature (not available on WASM):
 
 ```toml
 [dependencies]
@@ -892,6 +892,30 @@ overlay.show_hover(text);
 // On LspEvent::Completion
 overlay.set_completions(items, cursor_position);
 ```
+
+#### Formatting the document
+
+Ask the server to reformat the whole buffer, then apply the edits it sends
+back. The request is fire-and-forget like every other one: the reply arrives as
+an `LspEvent::Formatting`, so the two halves live in different places.
+
+```rust
+// Trigger it from a menu entry, a shortcut, or just before saving.
+// The formatting options follow the editor's own `IndentStyle`.
+editor.lsp_request_formatting();
+
+// On LspEvent::Formatting { uri, edits }
+// Applies the whole batch as one undo step, keeping the cursor in place.
+editor.apply_lsp_text_edits(&edits);
+```
+
+`apply_lsp_text_edits` returns `false` — leaving the buffer untouched — when
+the reply changes nothing, or when its edits overlap (which LSP forbids).
+
+For *format on save*, send the request first and write the file once the edits
+have been applied. Give that wait a deadline: a server that never answers must
+not be able to swallow the save. The demo app does this with a two-second
+timeout, after which it writes the file unformatted.
 
 #### Supported servers
 

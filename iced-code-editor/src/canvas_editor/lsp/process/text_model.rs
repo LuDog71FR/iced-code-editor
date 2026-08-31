@@ -96,6 +96,40 @@ impl TextModel {
             line.chars().take(char_index).map(|c| c.len_utf16() as u32).sum();
         LspPosition { line: position.line, character: utf16_col }
     }
+
+    /// Converts a UTF-16 position back to a character position.
+    ///
+    /// The inverse of [`Self::to_utf16_position`], needed for every reply
+    /// whose payload is expressed in document coordinates (formatting edits):
+    /// the editor addresses text by character, so a server column counted in
+    /// UTF-16 code units would land in the wrong place on any line holding a
+    /// non-ASCII character.
+    ///
+    /// A column past the end of the line yields that line's character count,
+    /// and a column landing inside a surrogate pair rounds up to the end of
+    /// the character containing it — neither is a position the editor can
+    /// address on its own.
+    pub(super) fn to_char_position(
+        &self,
+        position: LspPosition,
+    ) -> LspPosition {
+        let line = self
+            .lines
+            .get(position.line as usize)
+            .map_or("", |line| line.as_str());
+
+        let mut utf16_col = 0u32;
+        let mut char_col = 0u32;
+        for character in line.chars() {
+            if utf16_col >= position.character {
+                break;
+            }
+            utf16_col += character.len_utf16() as u32;
+            char_col += 1;
+        }
+
+        LspPosition { line: position.line, character: char_col }
+    }
 }
 
 // =============================================================================
@@ -147,6 +181,40 @@ pub(super) fn apply_changes_to_document(
 mod tests {
     use super::*;
     use crate::canvas_editor::lsp::LspRange;
+
+    #[test]
+    fn test_to_char_position_is_the_inverse_on_a_multibyte_line() {
+        // "héllo" and "汉字" are one UTF-16 unit per character; the emoji is
+        // two, which is where the two coordinate systems come apart.
+        let model = TextModel::from_text("héllo\n汉字\n🚀ab");
+
+        for (line, char_col, utf16_col) in
+            [(0u32, 3u32, 3u32), (1, 2, 2), (2, 1, 2), (2, 3, 4)]
+        {
+            let position = LspPosition { line, character: char_col };
+            let utf16 = model.to_utf16_position(position);
+            assert_eq!(utf16.character, utf16_col);
+            assert_eq!(model.to_char_position(utf16), position);
+        }
+    }
+
+    #[test]
+    fn test_to_char_position_clamps_a_column_past_the_end_of_the_line() {
+        let model = TextModel::from_text("abc");
+        assert_eq!(
+            model.to_char_position(LspPosition { line: 0, character: 99 }),
+            LspPosition { line: 0, character: 3 }
+        );
+    }
+
+    #[test]
+    fn test_to_char_position_on_an_unknown_line_yields_column_zero() {
+        let model = TextModel::from_text("abc");
+        assert_eq!(
+            model.to_char_position(LspPosition { line: 9, character: 2 }),
+            LspPosition { line: 9, character: 0 }
+        );
+    }
 
     // -------------------------------------------------------------------------
 

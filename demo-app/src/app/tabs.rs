@@ -113,6 +113,10 @@ impl DemoApp {
                 ContextMenuItem::new("app.clear_log", "Clear Log"),
                 ContextMenuItem::new("app.toggle_settings", "Settings"),
                 ContextMenuItem::new("app.format_document", "Format Document"),
+                ContextMenuItem::new(
+                    "app.toggle_format_on_save",
+                    "Toggle Format On Save",
+                ),
             ])
     }
 
@@ -142,7 +146,23 @@ impl DemoApp {
             "app.clear_log" => Task::done(Message::ClearLog),
             "app.toggle_settings" => Task::done(Message::ToggleSettings),
             "app.format_document" => {
-                self.log("INFO", "Format document requested");
+                #[cfg(not(target_arch = "wasm32"))]
+                return Task::done(Message::FormatDocument(editor_id));
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.log("INFO", "Formatting needs a language server");
+                    Task::none()
+                }
+            }
+            "app.toggle_format_on_save" => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.format_on_save = !self.format_on_save;
+                    let state = if self.format_on_save { "on" } else { "off" };
+                    self.log("INFO", &format!("Format on save: {state}"));
+                }
+                #[cfg(target_arch = "wasm32")]
+                self.log("INFO", "Formatting needs a language server");
                 Task::none()
             }
             "app.rename_symbol" => {
@@ -431,6 +451,24 @@ impl DemoApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_toggle_format_on_save_action_flips_the_setting() {
+        let (mut app, _) = DemoApp::new();
+        let editor_id = app.active_tab_id;
+        assert!(app.format_on_save);
+
+        let _ = app.handle_app_action(editor_id, "app.toggle_format_on_save");
+        assert!(!app.format_on_save);
+        assert_eq!(
+            app.log_messages.last().map(String::as_str),
+            Some("[INFO] Format on save: off")
+        );
+
+        let _ = app.handle_app_action(editor_id, "app.toggle_format_on_save");
+        assert!(app.format_on_save);
+    }
 
     #[test]
     fn test_configured_editor_applies_font_size_theme_and_language() {

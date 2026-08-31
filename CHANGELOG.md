@@ -7,7 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- feat: **Document formatting** (`textDocument/formatting`), including format on
+  save.
+  - `CodeEditor::lsp_request_formatting` asks the attached server to reformat
+    the whole document, deriving LSP's `FormattingOptions` from the editor's own
+    `IndentStyle` (new `LspFormattingOptions`, with a `From<IndentStyle>`
+    conversion). Queued changes are flushed first, so the server formats the
+    text the editor actually holds.
+  - `CodeEditor::apply_lsp_text_edits` applies a `TextEdit[]` reply as a single
+    undo step. Edits are applied last-first — every range refers to the document
+    as it stands before any of them — positions past the end of the buffer fold
+    onto its end, the cursor keeps its place (clamped), and an overlapping batch
+    (which LSP forbids) is refused rather than applied.
+  - `LspClient::request_formatting`, with the usual no-op default, and
+    `LspEvent::Formatting { uri, edits }`. `LspEvent` is not `#[non_exhaustive]`,
+    so an exhaustive `match` over it in a host application needs a new arm.
+  - `LspProcessClient` sends the request, advertises the client capability at
+    `initialize`, and converts the reply's UTF-16 columns back to character
+    offsets against its document mirror — without which formatting a line
+    holding a non-ASCII character would land the edits in the wrong place.
+  - The demo app wires this to its existing **Format Document** context-menu and
+    command-palette entries, adds **Toggle Format On Save** (on by default), and
+    now sends `didSave` after a successful write. A save on a file-backed tab
+    with a server attached formats first and writes when the edits land; a
+    server that does not answer within two seconds no longer holds the save
+    hostage — the file is written unformatted.
+
 ### Fixed
+
+- fix: the demo app's WASM build no longer fails on three `EditorId`
+  "not found in this scope" errors: the import was gated to non-WASM targets
+  while the save handlers using it were not. (The build still fails on a
+  pre-existing missing-docs error in `main.rs`.)
 
 - fix: **Ctrl + Page Up/Down and Alt + Page Up/Down are no longer swallowed by
   the editor.** The two handlers read `modifiers.shift()` and nothing else,

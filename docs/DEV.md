@@ -41,6 +41,7 @@
    - [Layer 1 — `LspClient` trait (`canvas_editor/lsp/mod.rs`)](#layer-1--lspclient-trait-canvas_editorlspmodrs)
    - [Layer 2 — `LspProcessClient` (`canvas_editor/lsp/process/mod.rs`)](#layer-2--lspprocessclient-canvas_editorlspprocessmodrs)
    - [Layer 3 — `LspOverlayState` + `view_lsp_overlay` (`canvas_editor/lsp/process/overlay.rs`)](#layer-3--lspoverlaystate--view_lsp_overlay-canvas_editorlspprocessoverlayrs)
+   - [Applying server edits (`canvas_editor/lsp/edits.rs`)](#applying-server-edits-canvas_editorlspeditsrs)
    - [Event flow](#event-flow)
 6. [Performance Considerations](#performance-considerations)
    - [Canvas Caching](#1-canvas-caching)
@@ -180,6 +181,7 @@ iced-code-editor/
     │       └── update.rs
     └── lsp/                      # LSP integration
         ├── mod.rs                 # LspClient trait + LSP data types
+        ├── edits.rs               # Applying a server TextEdit[] reply
         ├── sync.rs                # Buffer <-> LSP document synchronization
         └── process/               # LSP subprocess client (feature: lsp-process)
             ├── mod.rs              # LspProcessClient (process lifecycle, LspClient impl)
@@ -1725,6 +1727,7 @@ pub trait LspClient {
     fn request_hover(&mut self, document: &LspDocument, position: LspPosition);
     fn request_completion(&mut self, document: &LspDocument, position: LspPosition);
     fn request_definition(&mut self, document: &LspDocument, position: LspPosition);
+    fn request_formatting(&mut self, document: &LspDocument, options: LspFormattingOptions);
 }
 ```
 
@@ -1747,6 +1750,7 @@ pub enum LspEvent {
     Hover { text: String },
     Completion { items: Vec<String> },
     Definition { uri: String, range: LspRange },
+    Formatting { uri: String, edits: Vec<LspTextChange> },
     Progress { token, server_key, title, message, percentage, done },
     Log { server_key, message },
 }
@@ -1754,7 +1758,7 @@ pub enum LspEvent {
 
 Server configurations (command, arguments, language IDs) live in `lsp/process/config.rs` and are keyed by a short string such as `"lua-language-server"` or `"rust-analyzer"`.
 
-**UTF-16 conversion:** LSP uses UTF-16 character offsets while the editor works in UTF-8. `TextModel` inside `LspProcessClient` mirrors the document content and converts positions before every request.
+**UTF-16 conversion:** LSP uses UTF-16 character offsets while the editor works in UTF-8. `TextModel` inside `LspProcessClient` mirrors the document content and converts positions before every request (`to_utf16_position`), and back again for replies whose payload is in document coordinates (`to_char_position`, used by the formatting response). A pending request therefore records the document URI alongside its kind: a JSON-RPC response carries only the request id, so the mirror to translate against can only be found through that.
 
 ### Layer 3 — `LspOverlayState` + `view_lsp_overlay` (`canvas_editor/lsp/process/overlay.rs`)
 
@@ -1779,6 +1783,17 @@ All display-related state is aggregated in `LspOverlayState`:
 
 Both overlays compute their position at render time from editor viewport measurements (`viewport_width`, `viewport_height`, `viewport_scroll`, `char_width`).
 
+### Applying server edits (`canvas_editor/lsp/edits.rs`)
+
+`CodeEditor::apply_lsp_text_edits` is where a `TextEdit[]` reply reaches the buffer — formatting today, code actions and rename later, which is why it takes a plain `&[LspTextChange]` rather than anything formatting-specific.
+
+The batch becomes one `CompositeCommand` (a `DeleteRangeCommand` plus an `InsertTextCommand` per edit) pushed as a **single undo step**, and:
+
+- edits are applied **last-first**, because every range refers to the document as it stands *before* any of them is applied;
+- positions are clamped onto the buffer, with a line past the last one folding onto the *end* of the last line — the shape a whole-document format reply uses;
+- the cursor keeps its `(line, column)`, clamped, and any selection is dropped;
+- an **overlapping** batch is refused outright (returns `false`, buffer untouched): LSP forbids it, and applying one would silently corrupt the text.
+
 ### Event flow
 
 ```
@@ -1796,6 +1811,14 @@ User types char   →  CodeEditor emits CharacterInput
                   →  Server replies → LspEvent::Completion { items }
                   →  App calls overlay.set_completions(items, cursor_pos)
                   →  view_lsp_overlay() renders the completion menu
+
+User saves file   →  App calls editor.lsp_request_formatting()
+                  →  LspProcessClient flushes didChange, sends formatting request
+                  →  Server replies → LspEvent::Formatting { uri, edits }
+                  →  App calls editor.apply_lsp_text_edits(&edits)
+                  →  App writes the formatted file to disk
+                  (a server that does not answer in time is given up on,
+                   and the file is written unformatted)
 ```
 
 ## Performance Considerations
