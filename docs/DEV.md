@@ -44,8 +44,11 @@
    - [Memory Usage](#4-memory-usage)
    - [CJK Character Width Calculation](#5-cjk-character-width-calculation)
 7. [Testing Strategy](#testing-strategy)
+   - [The three levels](#the-three-levels)
    - [Unit Tests](#unit-tests)
+   - [Interface Tests](#interface-tests-demo-appsrcui_tests)
    - [Integration Tests](#integration-tests)
+   - [Regression tests must be verified failing](#regression-tests-must-be-verified-failing)
    - [Running Tests](#running-tests)
    - [Benchmarks](#benchmarks)
 8. [Common Pitfalls](#common-pitfalls)
@@ -78,7 +81,15 @@ This document describes the architecture, design patterns, and implementation de
 
 ### High-Level Structure
 
-The widget follows a modular architecture with clear separation of concerns:
+The workspace has three members (`Cargo.toml`):
+
+- **`iced-code-editor/`** — the library (the only default member)
+- **`demo-app/`** — the full-featured demo, which also carries the widget-level
+  interface test suite (see [Testing Strategy](#testing-strategy))
+- **`simple-example/`** — a minimal embedding, kept small on purpose so the
+  smallest useful integration stays visible and compiling
+
+The library follows a modular architecture with clear separation of concerns:
 
 ```
 iced-code-editor/
@@ -86,24 +97,25 @@ iced-code-editor/
 ├── theme.rs                  # Styling and theming system
 ├── i18n.rs                   # Internationalization (rust-i18n)
 ├── buffer/                   # Text storage
-│   ├── mod.rs                 # Text buffer (line-based storage/manipulation)
+│   ├── mod.rs                 # Gap-buffer text storage + line-ending round-trip
 │   └── text_utils.rs          # UTF-8 char-offset <-> byte-offset helpers
 └── canvas_editor/            # Core editor implementation
     ├── mod.rs                # CodeEditor struct, Message enum, new()/reset()
     ├── metrics.rs             # Font/char/line/viewport dimension constants + methods
     ├── caches.rs              # Visual-line, highlight, bracket-depth, max-width caches
     ├── config.rs              # Builder-style set_*/with_*/getter configuration methods
-    ├── focus.rs                # Editor focus management
+    ├── bool_options.rs        # Macro generating the boolean options' getters/builders
+    ├── focus.rs               # Editor focus management
     ├── bench_support.rs       # Criterion benchmark harness (feature: bench)
     ├── editing/               # Cursor, selection, clipboard, undo/redo
     │   ├── mod.rs
-    │   ├── cursor.rs           # Cursor movement/positioning logic
+    │   ├── cursor.rs           # Cursor movement/positioning, paging, scroll-to-cursor
     │   ├── cursor_set.rs       # Multi-cursor collection (Cursor / CursorSet)
     │   ├── selection.rs        # Text selection logic
     │   ├── clipboard.rs        # Clipboard operations
     │   ├── history.rs          # Command history management
     │   └── command/            # Command pattern for undo/redo
-    │       ├── mod.rs
+    │       ├── mod.rs           # The Command trait
     │       ├── edit.rs          # Char/newline/range editing commands
     │       ├── composite.rs     # Composite/replace commands
     │       ├── lines.rs         # Move/duplicate line commands
@@ -111,28 +123,41 @@ iced-code-editor/
     ├── input/                 # Event routing and Message dispatch
     │   ├── mod.rs
     │   ├── events.rs           # Keyboard/mouse/IME event handling
+    │   ├── shortcuts.rs        # Key-combination recognition (command_pressed, ...)
     │   ├── ime_requester.rs    # IME bridge widget (CJK input)
-    │   └── update/             # Message handling (Elm Architecture), one file per group
-    │       ├── mod.rs           # Cursor-adjustment helpers + shared finish_* methods
-    │       └── dispatch.rs       # Top-level `pub fn update()` message match
+    │   └── update/            # Message handling (Elm Architecture), one file per group
+    │       ├── mod.rs           # Shared helpers: finish_*, adjust_other_cursors, grouping
+    │       ├── dispatch.rs      # Top-level `pub fn update()` message match
+    │       ├── text_input.rs    # Character input, Tab, auto-close/auto-indent
+    │       ├── deletion.rs      # Backspace, Delete, delete-selection
+    │       ├── navigation.rs    # Arrows, Home/End, Page Up/Down, goto position
+    │       ├── clipboard.rs     # Cut/copy/paste messages
+    │       ├── mouse.rs         # Click, drag, double/triple click, context menu
+    │       ├── multi_cursor.rs  # Alt+Click, add cursor above/below, next occurrence
+    │       ├── line_ops.rs      # Move/duplicate line, toggle comment
+    │       ├── history_ops.rs   # Undo/redo
+    │       ├── focus_ime.rs     # Focus gained/lost, IME preedit/commit
+    │       └── scroll_timer.rs  # Scroll messages and the blink/scroll tick
     ├── render/                 # Rendering
     │   ├── mod.rs
     │   ├── canvas.rs            # canvas::Program trait implementation
-    │   ├── text.rs              # Syntax highlighting, tab/whitespace expansion
+    │   ├── text.rs              # Glyph drawing, tab/whitespace expansion, guides
+    │   ├── highlighting.rs      # Syntax resolution, per-line highlight cache, palettes
     │   ├── gutter.rs            # Line numbers, wrap indicators, fold chevrons
     │   ├── overlays.rs          # Selection/cursor/search highlight drawing
-    │   ├── wrapping.rs          # Line wrapping (logical ↔ visual lines)
+    │   ├── wrapping.rs          # Line wrapping (logical <-> visual lines)
     │   └── view.rs              # Iced UI view construction
     ├── features/                # Optional editor features
     │   ├── mod.rs
-    │   ├── actions.rs            # Action availability snapshot + shortcut hint strings
+    │   ├── actions.rs            # SharedAction, ActionContext, shortcut hint strings
     │   ├── bracket_match.rs      # Matching bracket/quote detection + depth scanning
     │   ├── color_preview.rs      # Inline color-literal detection (pure logic)
+    │   ├── sticky_scroll.rs      # Pinned enclosing-block headers (pure logic)
+    │   ├── context_menu.rs       # Right-click context menu
     │   ├── command_palette/      # Command palette (Ctrl+Shift+P)
     │   │   ├── mod.rs             # State, command registry, subsequence filtering
     │   │   ├── dialog.rs          # Palette UI + arrow/Escape key listener
     │   │   └── update.rs
-    │   ├── context_menu.rs       # Right-click context menu
     │   ├── folding/              # Code folding
     │   │   ├── mod.rs             # Foldable-region detection (pure logic)
     │   │   └── ops.rs             # Fold/unfold operations on CodeEditor
@@ -205,20 +230,49 @@ pub struct CodeEditor {
 
 #### 2. **TextBuffer** (`buffer/mod.rs`)
 
-A line-based text storage optimized for editor operations:
+A line-based text storage optimized for editor operations. Lines are held
+around a **movable gap** rather than in a single flat vector:
 
 ```rust
 pub struct TextBuffer {
-    lines: Vec<String>,  // Lines without newline characters
+    lines_before: Vec<String>,  // lines before the gap, in document order
+    lines_after: Vec<String>,   // lines after the gap, in *reverse* order
+    line_ending: LineEnding,    // Lf | CrLf, detected on load
+    trailing_newline: bool,     // did the source end with a terminator?
 }
 ```
 
+**Why a gap.** Editing is local: consecutive keystrokes land on the same line
+or the one next to it. `move_gap_to(index)` walks the boundary to the edit
+site once, after which inserting or removing a nearby line is O(1) — it pushes
+or pops the top of one of the two vectors — instead of shifting the whole tail
+of a `Vec<String>`. This is the locality principle behind piece-table editors,
+kept compatible with the editor's existing borrowed `&str` line API.
+
 **Design decisions:**
 
-- **Line-based storage**: Fast random access for virtual scrolling
-- **No rope data structure**: Simple implementation, sufficient for typical code files
-- **UTF-8 aware**: Proper handling of multi-byte characters
-- **Trade-offs**: O(n) for large insertions, but O(1) for line access
+- **Line-based storage**: fast random access for virtual scrolling. `line(i)`
+  stays O(1): the index either falls in `lines_before` directly, or is mirrored
+  into `lines_after`, which is stored reversed precisely so its *front* (the
+  gap side) is the cheap `Vec` end.
+- **No rope**: the gap covers the editing pattern this editor actually has.
+  A rope would win on huge block insertions far from the cursor, which is not
+  the hot path.
+- **UTF-8 aware**: columns are character indices, converted through
+  `text_utils.rs` (see [UTF-8 Character Boundaries](#1-utf-8-character-boundaries)).
+
+**Line endings round-trip.** `str::lines()` discards the terminator and
+normalizes `\r\n` to `\n`, so a naive buffer silently converts a CRLF file to
+LF on save. Two fields prevent that:
+
+- `line_ending` is set by `LineEnding::detect()`, a majority vote — CRLF if at
+  least half the newlines are part of a `\r\n` pair, otherwise LF. Content with
+  no newline at all defaults to LF.
+- `trailing_newline` records whether the source ended with a terminator, so a
+  final newline is neither invented nor dropped.
+
+`to_string()` reproduces both, so load → save is byte-identical when nothing
+was edited.
 
 **Operations:**
 
@@ -226,6 +280,9 @@ pub struct TextBuffer {
 - `insert_newline()` - Split line at position
 - `delete_char()` - Delete before cursor (backspace)
 - `delete_forward()` - Delete at cursor (delete key)
+
+Every mutation goes through `line_mut()` or `move_gap_to()`, so the gap follows
+the edit; nothing else in the codebase touches the two vectors directly.
 
 #### 3. **Theme System** (`theme.rs`)
 
@@ -310,7 +367,7 @@ pub trait Command: Send + std::fmt::Debug {
 
 ```rust
 // Consecutive typing is grouped into one undo operation
-history.begin_group("Typing");
+history.begin_group();
 // ... multiple InsertCharCommand ...
 history.end_group();  // Now undoable as single operation
 ```
@@ -356,11 +413,29 @@ pub enum Message {
 
 Each module has a single, well-defined responsibility:
 
-- **`cursor.rs`** - Cursor movement, scrolling, page up/down
-- **`selection.rs`** - Text selection logic and range calculations
-- **`clipboard.rs`** - Copy/paste operations
-- **`canvas_impl.rs`** - Low-level Canvas drawing
-- **`update.rs`** - Message routing and state transitions
+- **`editing/cursor.rs`** - Cursor movement, paging, scroll-to-cursor
+- **`editing/selection.rs`** - Text selection logic and range calculations
+- **`editing/clipboard.rs`** - Copy/paste operations
+- **`render/canvas.rs`** - The `canvas::Program` impl and the draw entry point
+- **`render/text.rs`** / **`render/highlighting.rs`** - Drawing glyphs vs.
+  deciding their colors
+- **`input/events.rs`** / **`input/shortcuts.rs`** - Raw event routing vs.
+  recognizing a key combination as a command
+- **`input/update/`** - Message handling, split one file per message group
+
+Two splits are worth knowing about, because older notes and commit messages
+still refer to the pre-split names:
+
+- **`update.rs` no longer exists.** It became `input/update/`, where
+  `mod.rs` holds the *shared helpers* every handler calls
+  (`finish_edit_operation`, `adjust_other_cursors`, `min_active_line`, the
+  grouping pair) and each sibling file holds the *handlers* for one group of
+  messages — `text_input.rs`, `deletion.rs`, `navigation.rs`, `clipboard.rs`,
+  `mouse.rs`, `multi_cursor.rs`, `line_ops.rs`, `history_ops.rs`,
+  `focus_ime.rs`, `scroll_timer.rs`. `dispatch.rs` holds the top-level
+  `update()` match that routes to them.
+- **`canvas_impl.rs` is now `render/canvas.rs`**, and the highlighting logic it
+  used to carry moved again, into `render/highlighting.rs`.
 
 This follows the **Single Responsibility Principle** and makes the codebase maintainable.
 
@@ -457,7 +532,7 @@ parser/highlight state left *after* the line, so multi-line constructs (block
 comments, multi-line strings) resume correctly:
 
 ```rust
-// canvas_impl.rs — resumes from the cached state of line N-1
+// render/highlighting.rs — resumes from the cached state of line N-1
 let spans = self.highlighted_line_cached(logical_line, syntax, theme, syntax_set);
 ```
 
@@ -799,7 +874,8 @@ cursor move); the demo app exposes it as a toolbar checkbox next to "Show whites
 ### Bracket-Pair Colorization
 
 **Location:** `canvas_editor/features/bracket_match.rs` (depth logic), `canvas_editor/caches.rs`
-(`BracketDepthCache`), `canvas_editor/config.rs` (toggle), `canvas_editor/render/text.rs` (draw pass, palette)
+(`BracketDepthCache`), `canvas_editor/config.rs` (toggle), `canvas_editor/render/text.rs` (draw pass),
+`canvas_editor/render/highlighting.rs` (palettes, `bracket_pair_colors()`)
 
 Unlike [Matching Bracket/Quote Highlight](#matching-bracketquote-highlight), which
 only reacts to the cursor, this feature colors **every** `( ) [ ] { }` in the visible
@@ -853,14 +929,28 @@ computed by `calculate_segment_geometry()` — the same geometry helper selectio
 highlighting uses:
 
 ```rust
-const BRACKET_PAIR_COLORS: [Color; 3] = [
+// render/highlighting.rs — one cycle per background lightness
+const BRACKET_PAIR_COLORS_DARK: [Color; 3] = [
     /* gold */ Color { r: 1.0, g: 0.843, b: 0.0, a: 1.0 },
     /* orchid */ Color { r: 0.855, g: 0.439, b: 0.839, a: 1.0 },
     /* light sky blue */ Color { r: 0.529, g: 0.808, b: 0.980, a: 1.0 },
 ];
+
+const BRACKET_PAIR_COLORS_LIGHT: [Color; 3] = [
+    /* blue */ Color { r: 0.016, g: 0.192, b: 0.980, a: 1.0 },
+    /* green */ Color { r: 0.192, g: 0.576, b: 0.192, a: 1.0 },
+    /* brown */ Color { r: 0.482, g: 0.220, b: 0.078, a: 1.0 },
+];
 ```
 
-The palette matches VS Code's default rainbow-bracket colors. `set_bracket_pair_colorization_enabled()`
+**Two palettes, not one.** `bracket_pair_colors()` picks the cycle from the
+lightness of the style's background (`theme::is_dark_background`), exactly as
+`resolve_syntax` picks the syntect theme. The dark cycle is VS Code's Dark+
+rainbow (gold / orchid / light sky blue); reusing those bright, low-contrast
+hues on a white background leaves brackets barely visible, so the light cycle
+is its own saturated, dark-toned triple following VS Code Light+.
+
+`set_bracket_pair_colorization_enabled()`
 toggles the whole feature and clears `content_cache`; the demo app exposes it as a
 toolbar checkbox ("Rainbow brackets") next to "Highlight matching bracket".
 
@@ -1037,13 +1127,27 @@ pub fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
 
 **Auto-scrolling:** Cursor always stays visible
 
-```rust
-pub fn scroll_to_cursor(&self) -> Task<Message> {
-    let cursor_y = self.cursors.primary_position().0 as f32 * LINE_HEIGHT;
+**Scrolling is measured in visual rows, never logical lines.** With wrapping
+enabled a logical line occupies several rows, so multiplying the logical line
+index by the row height would scroll to the wrong place. `scroll_to_cursor()`
+maps the primary cursor through `logical_to_visual()` first, and multiplies by
+the `line_height` **field** (which follows the configured font size), not the
+`LINE_HEIGHT` constant:
 
-    if cursor_y < viewport_top + margin {
+```rust
+pub(crate) fn scroll_to_cursor(&self) -> Task<Message> {
+    let visual_lines = self.visual_lines_cached(self.viewport_width);
+    let pos = self.cursors.primary_position();
+
+    // Fall back to the logical line only if the position has no visual row
+    // (e.g. it sits inside a collapsed fold).
+    let cursor_y = WrappingCalculator::logical_to_visual(&visual_lines, pos.0, pos.1)
+        .map_or(pos.0, |visual_idx| visual_idx) as f32
+        * self.line_height;
+
+    if cursor_y < viewport_top + top_margin {
         // Scroll up
-    } else if cursor_y > viewport_bottom - margin {
+    } else if cursor_y + self.line_height > viewport_bottom - bottom_margin {
         // Scroll down
     }
 
@@ -1051,7 +1155,11 @@ pub fn scroll_to_cursor(&self) -> Task<Message> {
 }
 ```
 
-**Smart margins:** 2 lines of padding to prevent cursor at edge
+The same rule governs paging: `page_up()` / `page_down()` move by
+`viewport_height / line_height` **visual rows**, not logical lines
+(`editing/cursor.rs`). Any new viewport arithmetic belongs in visual-row space.
+
+**Smart margins:** 2 rows of padding to prevent cursor at edge
 
 ## Internationalization (i18n)
 
@@ -1480,26 +1588,33 @@ let spans = self.highlighted_line_cached(logical_line, syntax, theme, syntax_set
 
 ### 3. Text Buffer Performance
 
-**Current limitations:**
+Lines live around a movable gap (see [TextBuffer](#2-textbuffer-buffermodrs)).
 
-- O(n) for inserting text in middle of line (string operations)
-- O(1) for line access (vector indexing)
+**Costs:**
+
+- O(1) line access — index lookup into one of the two vectors.
+- O(1) line insert/remove **once the gap is at the edit site**: push/pop on a
+  `Vec` end, no tail shifting.
+- O(k) to move the gap `k` lines, paid only when the edit jumps to a different
+  part of the file. Consecutive typing does not pay it.
+- O(n) for inserting inside a line, where n is the *line* length — a `String`
+  splice, unaffected by file size.
 
 **Sufficient for:**
 
-- Files up to ~10,000 lines
-- Typical editing patterns (typing, deleting)
+- Files well past ~10,000 lines for the usual editing patterns
+- Typing, deleting, line moves, multi-cursor edits clustered together
 
 **Not optimal for:**
 
-- Inserting/deleting large blocks in huge files
+- Edits that alternate between distant regions, each dragging the gap across
+  the file
 - Real-time collaborative editing
 
 **Potential improvements:**
 
-- Rope data structure for O(log n) operations
-- Gap buffer for cursor-local edits
-- Piece table for large file handling
+- Rope data structure for O(log n) operations regardless of locality
+- Piece table for large-file handling with cheap undo of whole regions
 
 ### 4. Memory Usage
 
@@ -1546,9 +1661,23 @@ let text_width = measure_text_width(line_text, full_char_width, char_width);
 
 ## Testing Strategy
 
+### The three levels
+
+Testing is layered, and the layers answer different questions. A change is not
+covered because *some* test touches it — it is covered when the test that would
+notice the regression exists at the right level.
+
+| Level | Where | Count | Answers |
+|---|---|---|---|
+| Unit | `#[cfg(test)] mod tests` beside the code | 688 | Is this function correct? |
+| Doctest | `# Example` blocks on public items | 240 | Is the documented usage real and still compiling? |
+| Handler | `demo-app/src/{app,ui}` tests | 70 | Does `update()` do the right thing with this `Message`? |
+| Interface | `demo-app/src/ui_tests/` | 74 | Does any widget actually *emit* that `Message`? |
+| Integration | `iced-code-editor/tests/` | 13 | Does the public API work from outside the crate? |
+
 ### Unit Tests
 
-Each module has comprehensive unit tests:
+Each module carries its own tests:
 
 ```rust
 #[cfg(test)]
@@ -1562,27 +1691,70 @@ mod tests {
 
 **Coverage:**
 
-- `buffer/mod.rs`: All buffer operations
-- `editing/command/`: All command types and undo/redo
-- `editing/cursor.rs`: Cursor movement edge cases
-- `editing/selection.rs`: Selection normalization and extraction
-- `input/update/`: Message handling and state transitions
-- `theme.rs`: All Iced themes, color adaptation, helper functions
+- `buffer/mod.rs`: buffer operations, gap movement, line-ending round-trip
+- `editing/command/`: all command types and undo/redo
+- `editing/cursor.rs`: cursor movement and paging edge cases
+- `editing/selection.rs`: selection normalization and extraction
+- `input/update/`: message handling and state transitions
+- `theme.rs`: all Iced themes, color adaptation, helper functions
+
+Doctests are not decoration here: `bool_options.rs` generates each boolean
+option's example so that it **asserts** the documented default. A default that
+changes fails a doctest instead of quietly contradicting its own documentation.
+
+### Interface Tests (`demo-app/src/ui_tests/`)
+
+The handler-level tests call `DemoApp::update` with a hand-built `Message`.
+That proves the handler is correct, but says nothing about whether any widget
+actually emits that message — a shortcut removed from `input/events.rs` would
+leave every handler test green.
+
+`ui_tests/` closes that gap. It renders the real `ui::view` widget tree in
+Iced's headless [`Simulator`](https://docs.rs/iced_test) (`iced_test = "0.14"`),
+clicks and types on the actual widgets, feeds the resulting messages back into
+`update`, and asserts both on the state and on what the next render shows:
+
+- `chrome.rs` (11) — toolbar, status bar, tabs
+- `dialogs.rs` (23) — search, go-to-line, command palette, context menu
+- `editing.rs` (37) — typing, selection, clipboard, navigation keys
+- `sticky_scroll.rs` (3) — pinned headers and click-to-jump
+
+**Known scope limit:** the simulator sees the widget tree, never
+`DemoApp::subscription`. Shortcuts routed through the global event stream (the
+Escape handling in `app.rs`, for instance) are covered by `update`-level tests
+instead. This is also what makes the interface tests the right place to prove
+that a key is *not* captured — a combination the editor declines falls through
+uncaptured, which is exactly what the widget tree can observe.
 
 ### Integration Tests
 
-The demo application serves as an integration test, covering:
+`iced-code-editor/tests/` exercises the public API from outside the crate, so
+anything it touches is genuinely reachable by a host application:
 
-- File loading/saving
-- Theme switching
-- Clipboard operations
-- Full keyboard navigation
+- `vim_command_line.rs` (6), `vim_counted_commands.rs` (4),
+  `vim_toggle_shortcut.rs` (3)
+
+`simple-example/` is not a test, but it fails the build if the minimal
+embedding stops compiling, which serves a similar purpose.
+
+### Regression tests must be verified failing
+
+A test written alongside a bug fix proves nothing until it has been seen to
+**fail against the pre-fix code**. A regression test that passes both before
+and after the fix is testing something other than the bug.
+
+The practice: stash the fix (or check out the parent commit), run the new test,
+confirm it fails *and that it fails for the stated reason* — the assertion
+message should name the wrong value, not a panic from unrelated drift — then
+restore the fix and confirm it passes. Recent examples: paging landed on
+`(3, 0)` instead of `(0, 84)` before the wrap fix; `Ctrl+Page Down` moved the
+cursor to line 30 instead of leaving it at 0 before the host-passthrough fix.
 
 ### Running Tests
 
 ```bash
-# Run all tests
-cargo test
+# Run all tests: 688 unit + 144 demo-app + 13 integration + 240 doctests
+cargo test --workspace --all-features
 
 # Run with output
 cargo test -- --nocapture
@@ -1590,8 +1762,12 @@ cargo test -- --nocapture
 # Run specific test
 cargo test test_insert_char
 
-# Run tests with coverage (requires tarpaulin)
-cargo tarpaulin --out Html
+# Interface tests only
+cargo test -p demo-app ui_tests
+
+# Coverage (requires cargo-llvm-cov)
+cargo llvm-cov --workspace --all-features --summary-only
+cargo llvm-cov --workspace --all-features --html
 ```
 
 ### Benchmarks
@@ -1676,13 +1852,15 @@ self.overlay_cache.clear();
 
 **Problem:** Forgetting to end groups leaves consecutive operations merged into a single undo step (broken undo boundaries)
 
-**Solution:** Always pair the start and end of a group. The grouping logic is encapsulated in two helpers in `update.rs` that guard on the `is_grouping` flag:
+**Solution:** Always pair the start and end of a group. The grouping logic is
+encapsulated in two helpers in `input/update/mod.rs` that guard on the
+`is_grouping` flag:
 
 ```rust
 // Begin grouping on the first edit of a typing run
-fn ensure_grouping_started(&mut self, label: &str) {
+fn ensure_grouping_started(&mut self) {
     if !self.is_grouping {
-        self.history.begin_group(label);
+        self.history.begin_group();
         self.is_grouping = true;
     }
 }
@@ -1730,23 +1908,26 @@ wrong column (or the wrong line, after a newline/merge).
 
 **Solution:** Always apply multi-cursor edits in **descending document order**, so
 that edits at higher positions never invalidate positions still to be processed.
-Every edit handler in `update.rs` builds a sorted index list before iterating:
+Every edit handler asks the cursor set for that order before iterating. The
+sort is **not** rewritten per handler — `CursorSet::descending_order()`
+(`editing/cursor_set.rs`) is the single implementation:
 
 ```rust
-// update.rs — handle_character_input_msg, handle_tab, delete handlers, ...
-let mut order: Vec<usize> = (0..self.cursors.len()).collect();
-order.sort_by(|&a, &b| {
-    self.cursors.as_slice()[b]
-        .position
-        .cmp(&self.cursors.as_slice()[a].position)
-});
+// input/update/text_input.rs — handle_character_input_msg, handle_tab;
+// input/update/deletion.rs — the delete handlers; and so on.
+let order = self.cursors.descending_order();
 for &idx in &order {
     // apply edit at cursor `idx`, then fix the *other* cursors:
     adjust_other_cursors(self.cursors.as_mut_slice(), idx, line, col, edit_type);
 }
 ```
 
-`adjust_other_cursors()` (`update.rs`) shifts the remaining cursors' positions and
+`descending_order_by_key(filter, key)` is the general form, used when the order
+must follow something other than the cursor position — `surround_selections_with_pair()`
+sorts by *selection start* — and when cursors without a selection must be
+skipped entirely.
+
+`adjust_other_cursors()` (`input/update/mod.rs`) shifts the remaining cursors' positions and
 selection anchors for the edit just made, and `sort_and_merge()` collapses any
 cursors that end up overlapping. A new edit handler that iterates cursors in their
 natural order, or that forgets `adjust_other_cursors()`, will work with a single
@@ -1770,7 +1951,7 @@ concerns the two `canvas::Cache` rendering layers.
 bumps the revision (and clears the canvas caches and the highlight prefix):
 
 ```rust
-// update.rs — finish_edit_operation()
+// input/update/mod.rs — finish_edit_operation()
 self.buffer_revision = self.buffer_revision.wrapping_add(1);
 *self.visual_lines_cache.borrow_mut() = None;
 self.invalidate_highlight_from(self.pre_edit_line.saturating_sub(1));
@@ -1798,7 +1979,7 @@ changed.
 line, and reset it for edits not anchored to one line:
 
 ```rust
-// update.rs — captured at the top of update() before dispatching an edit
+// input/update/dispatch.rs — captured at the top of update() before dispatching
 self.pre_edit_line = self.min_active_line();
 
 // Operations whose effect is not local to one line reset the anchor to 0
@@ -1814,7 +1995,7 @@ actually mutates the buffer.
 
 ### 8. InsertTextCommand Cursor Override vs. Undo
 
-**Problem:** `InsertTextCommand::with_cursor_after()` (`command.rs`) lets a command
+**Problem:** `InsertTextCommand::with_cursor_after()` (`editing/command/edit.rs`) lets a command
 override where the cursor rests after `execute()` — used by auto-close bracket
 insertion to leave the cursor *between* the two inserted characters instead of after
 them. But `InsertTextCommand::undo()` assumes the opposite: it walks backward from
@@ -1827,12 +2008,12 @@ character and leave one of the pair behind.
 **Solution:** When the resting cursor must land inside the inserted text, don't use a
 single `InsertTextCommand` with an overridden cursor. Push one `InsertCharCommand` per
 character instead (as `insert_pair_at_cursor()` and `surround_selections_with_pair()`
-in `update.rs` do) — each command's own `cursor_before`/`cursor_after` stays consistent
+in `input/update/text_input.rs` do) — each command's own `cursor_before`/`cursor_after` stays consistent
 with what it actually inserted, so undoing them in reverse (via the history group)
 restores the exact prior state regardless of where the visible cursor ends up.
 
 ```rust
-// update.rs — insert_pair_at_cursor(): two independent commands, not one
+// input/update/text_input.rs — insert_pair_at_cursor(): two commands, not one
 // InsertTextCommand::with_cursor_after() spanning both chars.
 let mut open_cmd = InsertCharCommand::new(pos.0, pos.1, open, pos);
 open_cmd.execute(&mut self.buffer, &mut cursor_pos);
