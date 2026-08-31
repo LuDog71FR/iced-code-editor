@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     server that does not answer within two seconds no longer holds the save
     hostage — the file is written unformatted.
 
+### Documentation
+
+- docs: the README's LSP section gains a "Formatting the document" part (the
+  two halves of the round trip, and why the wait for the reply needs a
+  deadline), and `docs/DEV.md` documents the new `lsp/edits.rs` layer, the
+  formatting event flow, and the two-way UTF-16 conversion the reply now
+  depends on.
+
 ### Fixed
 
 - fix: the demo app's WASM build no longer fails on three `EditorId`
