@@ -42,3 +42,5 @@ command_palette:
   fold_at_cursor: "Alternar dobra no cursor"
   fold_all: "Dobrar tudo"
   unfold_all: "Desdobrar tudo"
+  status_on: "Ativado"
+  status_off: "Desativado"

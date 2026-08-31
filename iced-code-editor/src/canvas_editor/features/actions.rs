@@ -32,6 +32,8 @@ pub(crate) struct ActionContext {
     pub(crate) search_replace_enabled: bool,
     /// Whether code folding is available.
     pub(crate) folding_enabled: bool,
+    /// Whether Vim emulation is currently on, for the palette's On/Off badge.
+    pub(crate) vim_enabled: bool,
 }
 
 impl CodeEditor {
@@ -50,6 +52,7 @@ impl CodeEditor {
                 .reveal_in_file_manager_enabled(),
             search_replace_enabled: self.search_replace_enabled,
             folding_enabled: self.folding_enabled,
+            vim_enabled: self.vim_enabled,
         }
     }
 }

@@ -35,6 +35,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     server that does not answer within two seconds no longer holds the save
     hostage — the file is written unformatted.
 
+- feat: **the command palette lists the three commands most recently run at the
+  top**, above a separator line. They are the commands run *from the palette*,
+  kept per editor for the session, most recent first, and a command run again
+  moves back to the front instead of being listed twice. The block is filtered
+  like the rest of the list, so a recent command the query excludes is not
+  promoted, and a list that is only recent commands gets no separator. Commands
+  are remembered by identity rather than by label — a built-in by the message it
+  sends, a host command by the identifier it registered — so switching language
+  does not empty the history.
+
+- feat: **a toggle command shows its current state in the palette**, as a
+  localized On/Off badge between the label and the shortcut hint, so the user
+  can tell what running it will do without running it. Built-in: **Toggle Vim
+  Mode**. Host commands opt in with the new `ContextMenuItem::with_status`; the
+  value is a snapshot taken at registration, so the entries have to be
+  registered again when the setting changes. The context menu ignores the field.
+  The demo app wires it to **Toggle Format On Save**.
+
+- feat: `CodeEditor::is_dialog_open` reports whether any built-in dialog — the
+  search/replace dialog, the go-to-line dialog or the command palette — is
+  currently shown. A host that layers its own floating UI over `view` needs this
+  to step aside while one of them is up.
+
 ### Documentation
 
 - docs: the README's LSP section gains a "Formatting the document" part (the
@@ -44,6 +67,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   depends on.
 
 ### Fixed
+
+- fix: **the LSP hover tooltip and completion menu no longer cover the command
+  palette.** The editor's dialogs are drawn inside the editor's own widget
+  stack, which the host composes *below* the overlay layer, so every dialog sat
+  under every LSP layer whatever their order within the editor. It was not only
+  a paint problem: the completion layer puts a full-size transparent
+  click-catcher over the pane, which swallowed clicks meant for the palette rows
+  and closed the completion instead. `view_lsp_overlay` now yields the layer
+  entirely while `is_dialog_open` holds — search and go-to-line included, since
+  they are stacked the same way — so the fix reaches every host without a change
+  to its view code.
 
 - fix: the demo app's WASM build no longer fails on three `EditorId`
   "not found in this scope" errors: the import was gated to non-WASM targets

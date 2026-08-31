@@ -749,6 +749,35 @@ impl CodeEditor {
         self.buffer.to_string()
     }
 
+    /// Returns whether any built-in editor dialog is currently open.
+    ///
+    /// Covers the search/replace dialog, the go-to-line dialog and the command
+    /// palette. They are drawn inside the editor's own widget stack, so a host
+    /// that layers its own floating UI above [`Self::view`] needs this to step
+    /// aside while one of them is shown.
+    ///
+    /// # Returns
+    ///
+    /// `true` while at least one dialog is open, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert!(!editor.is_dialog_open());
+    ///
+    /// let _task = editor.open_command_palette();
+    /// assert!(editor.is_dialog_open());
+    /// ```
+    #[must_use]
+    pub fn is_dialog_open(&self) -> bool {
+        self.search_state.is_open
+            || self.goto_line_state.is_open
+            || self.command_palette_state.is_open
+    }
+
     /// Resets the editor with new content.
     ///
     /// This method replaces the buffer content and resets all editor state
@@ -807,5 +836,31 @@ impl CodeEditor {
     pub(crate) fn reset_cursor_blink(&mut self) {
         self.last_blink = Instant::now();
         self.cursor_visible = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_dialog_open_tracks_every_built_in_dialog() {
+        let mut editor = CodeEditor::new("one\ntwo", "rs");
+        assert!(!editor.is_dialog_open());
+
+        let _ = editor.open_search_dialog();
+        assert!(editor.is_dialog_open());
+        let _ = editor.close_search_dialog();
+        assert!(!editor.is_dialog_open());
+
+        let _ = editor.open_goto_line_dialog();
+        assert!(editor.is_dialog_open());
+        let _ = editor.close_goto_line_dialog();
+        assert!(!editor.is_dialog_open());
+
+        let _ = editor.open_command_palette();
+        assert!(editor.is_dialog_open());
+        let _ = editor.close_command_palette();
+        assert!(!editor.is_dialog_open());
     }
 }

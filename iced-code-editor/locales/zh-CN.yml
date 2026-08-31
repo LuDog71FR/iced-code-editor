@@ -41,3 +41,5 @@ command_palette:
   fold_at_cursor: "在光标处折叠/展开"
   fold_all: "全部折叠"
   unfold_all: "全部展开"
+  status_on: "开"
+  status_off: "关"

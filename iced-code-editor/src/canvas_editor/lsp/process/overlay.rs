@@ -437,6 +437,14 @@ pub fn view_lsp_overlay<'a, M: Clone + 'a>(
     line_height: f32,
     f: impl Fn(LspOverlayMessage) -> M + 'a,
 ) -> Element<'a, M> {
+    // The editor's dialogs are drawn inside its own stack, which the host
+    // composes below this overlay. Step aside while one is open, otherwise the
+    // hover card paints over the command palette and the completion layer's
+    // full-size click catcher swallows the clicks meant for its rows.
+    if editor.is_dialog_open() {
+        return empty_overlay();
+    }
+
     // Pre-compute messages so we can clone them freely
     let msg_hover_entered = f(LspOverlayMessage::HoverEntered);
     let msg_hover_exited = f(LspOverlayMessage::HoverExited);

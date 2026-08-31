@@ -42,3 +42,5 @@ command_palette:
   fold_at_cursor: "Toggle Fold at Cursor"
   fold_all: "Fold All"
   unfold_all: "Unfold All"
+  status_on: "On"
+  status_off: "Off"

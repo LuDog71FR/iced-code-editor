@@ -335,6 +335,12 @@ translations! {
     command_palette_unfold_all => "command_palette.unfold_all",
         "Returns the command-palette label for unfolding every block.",
         "Unfold All";
+    command_palette_status_on => "command_palette.status_on",
+        "Returns the command-palette badge shown on an enabled toggle command.",
+        "On";
+    command_palette_status_off => "command_palette.status_off",
+        "Returns the command-palette badge shown on a disabled toggle command.",
+        "Off";
 }
 
 #[cfg(test)]
@@ -805,6 +811,8 @@ mod tests {
                 t.command_palette_fold_at_cursor(),
                 t.command_palette_fold_all(),
                 t.command_palette_unfold_all(),
+                t.command_palette_status_on(),
+                t.command_palette_status_off(),
             ];
 
             for label in labels {

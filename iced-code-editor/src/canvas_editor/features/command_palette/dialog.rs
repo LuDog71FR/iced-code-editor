@@ -35,6 +35,15 @@ const ROW_PITCH: f32 = ROW_HEIGHT + ROW_SPACING;
 /// Number of command rows shown before the list starts scrolling.
 pub(crate) const MAX_VISIBLE_ROWS: usize = 10;
 
+/// Thickness of the line drawn under the recently-used block.
+const SEPARATOR_HEIGHT: f32 = 1.0;
+
+/// Distance the separator adds between the recent block and the row below it:
+/// its own thickness plus the extra [`ROW_SPACING`] the column inserts around
+/// it. Every scroll computation has to account for it, or the list would drift
+/// by two pixels as soon as a command has been run.
+const SEPARATOR_PITCH: f32 = SEPARATOR_HEIGHT + ROW_SPACING;
+
 /// Converts a row count into the pixel distance it spans.
 ///
 /// Used both for the list's fixed height and for the scroll offset, so the two
@@ -50,6 +59,47 @@ pub(crate) const MAX_VISIBLE_ROWS: usize = 10;
 /// saturating on a row count no list could ever reach
 pub(crate) fn rows_to_pixels(rows: usize) -> f32 {
     ROW_PITCH * f32::from(u16::try_from(rows).unwrap_or(u16::MAX))
+}
+
+/// Returns the number of rows the separator is drawn under, or `0` when the
+/// list has no separator.
+///
+/// The recently-used commands are the leading rows of `entries`, flagged by
+/// `promote_recent`. A list that is *only* recent commands gets no separator:
+/// there is nothing under it to separate them from.
+///
+/// # Arguments
+///
+/// * `entries` - The rows about to be displayed, in display order
+///
+/// # Returns
+///
+/// The index of the first non-recent row, or `0` when no line should be drawn
+pub(crate) fn separator_after(entries: &[PaletteEntry]) -> usize {
+    let recent = entries.iter().take_while(|entry| entry.is_recent).count();
+    if recent == entries.len() { 0 } else { recent }
+}
+
+/// Returns the vertical offset of the top of row `row`.
+///
+/// This is [`rows_to_pixels`] corrected for the separator: every row below it
+/// sits [`SEPARATOR_PITCH`] lower than its index alone would suggest.
+///
+/// # Arguments
+///
+/// * `row` - Index of the row to locate
+/// * `separator_after` - Result of [`separator_after`] for the same list
+///
+/// # Returns
+///
+/// The distance from the top of the list to the top of `row`
+pub(crate) fn row_top(row: usize, separator_after: usize) -> f32 {
+    let base = rows_to_pixels(row);
+    if separator_after > 0 && row >= separator_after {
+        base + SEPARATOR_PITCH
+    } else {
+        base
+    }
 }
 
 /// Width of the palette, in pixels.
@@ -138,19 +188,35 @@ pub(crate) fn view<'a>(
             .width(Length::Fill)
             .into()
     } else {
-        let rows = entries
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| {
-                command_row(entry, index, index == state.selected)
-            })
-            .collect::<Vec<_>>();
+        let separator_row = separator_after(entries);
+        let mut rows: Vec<Element<'a, Message>> =
+            Vec::with_capacity(entries.len() + 1);
+        for (index, entry) in entries.iter().enumerate() {
+            if separator_row > 0 && index == separator_row {
+                rows.push(recent_separator());
+            }
+            rows.push(command_row(
+                entry,
+                index,
+                index == state.selected,
+                translations,
+            ));
+        }
 
         // The last row of the window is not followed by a gap, so the window
         // is one spacing shorter than the pitch it is made of. Getting this
         // exactly right is what lets the scroll offset land on a row boundary.
+        // The separator only counts once it is strictly inside the window —
+        // a window ending exactly on it stops above the line.
         let visible_rows = entries.len().min(MAX_VISIBLE_ROWS);
-        let list_height = rows_to_pixels(visible_rows) - ROW_SPACING;
+        let separator_extra =
+            if separator_row > 0 && visible_rows > separator_row {
+                SEPARATOR_PITCH
+            } else {
+                0.0
+            };
+        let list_height =
+            rows_to_pixels(visible_rows) - ROW_SPACING + separator_extra;
 
         scrollable(column(rows).spacing(ROW_SPACING))
             .id(state.scrollable_id.clone())
@@ -213,17 +279,50 @@ pub(crate) fn view<'a>(
         .into()
 }
 
-/// Builds one command row: the label on the left, its shortcut hint right.
+/// Builds the line closing the recently-used block.
+fn recent_separator<'a>() -> Element<'a, Message> {
+    container(Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(SEPARATOR_HEIGHT))
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(Background::Color(
+                    palette.background.strong.color,
+                )),
+                ..container::Style::default()
+            }
+        })
+        .into()
+}
+
+/// Builds one command row: the label on the left, then the toggle badge and
+/// the shortcut hint on the right.
 fn command_row<'a>(
     entry: &PaletteEntry,
     index: usize,
     is_selected: bool,
+    translations: &Translations,
 ) -> Element<'a, Message> {
+    // A toggle shows what it is switching *from*, so the user knows what
+    // running it does without having to run it first.
+    let status: Element<'a, Message> = match entry.status {
+        Some(true) => {
+            text(translations.command_palette_status_on()).size(12).into()
+        }
+        Some(false) => {
+            text(translations.command_palette_status_off()).size(12).into()
+        }
+        None => Space::new().into(),
+    };
+
     let content = row![
         text(entry.label.clone()).size(13),
         Space::new().width(Length::Fill),
+        status,
         text(entry.shortcut.clone()).size(12),
     ]
+    .spacing(10)
     .align_y(iced::Alignment::Center);
 
     button(content)
@@ -258,4 +357,62 @@ fn command_row<'a>(
             }
         })
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::Ordering;
+
+    use super::super::PaletteAction;
+    use super::*;
+    use crate::canvas_editor::compare_floats;
+
+    /// Builds a row that is recent or not, with no other distinguishing state.
+    fn entry(is_recent: bool) -> PaletteEntry {
+        PaletteEntry {
+            label: String::new(),
+            shortcut: String::new(),
+            status: None,
+            is_recent,
+            action: PaletteAction::Custom(String::new()),
+        }
+    }
+
+    /// Asserts two offsets are equal, since `float_cmp` is denied crate-wide.
+    fn assert_same_offset(measured: f32, expected: f32) {
+        assert_eq!(
+            compare_floats(measured, expected),
+            Ordering::Equal,
+            "expected {expected}, measured {measured}"
+        );
+    }
+
+    #[test]
+    fn test_separator_sits_under_the_leading_recent_rows() {
+        assert_eq!(separator_after(&[]), 0);
+        assert_eq!(separator_after(&[entry(false), entry(false)]), 0);
+        assert_eq!(
+            separator_after(&[entry(true), entry(true), entry(false)]),
+            2
+        );
+    }
+
+    #[test]
+    fn test_a_list_of_only_recent_rows_gets_no_separator() {
+        assert_eq!(separator_after(&[entry(true), entry(true)]), 0);
+    }
+
+    #[test]
+    fn test_row_top_shifts_every_row_below_the_separator() {
+        // Without a separator the offset is the plain row pitch.
+        assert_same_offset(row_top(3, 0), rows_to_pixels(3));
+
+        // With one under row 2, the rows above it are unaffected...
+        assert_same_offset(row_top(0, 2), rows_to_pixels(0));
+        assert_same_offset(row_top(1, 2), rows_to_pixels(1));
+
+        // ...and the first row under it, like every row after, moves down.
+        assert_same_offset(row_top(2, 2), rows_to_pixels(2) + SEPARATOR_PITCH);
+        assert_same_offset(row_top(5, 2), rows_to_pixels(5) + SEPARATOR_PITCH);
+    }
 }

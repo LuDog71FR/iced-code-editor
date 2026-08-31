@@ -42,3 +42,5 @@ command_palette:
   fold_at_cursor: "Faltung an Cursorposition umschalten"
   fold_all: "Alles falten"
   unfold_all: "Alles entfalten"
+  status_on: "An"
+  status_off: "Aus"

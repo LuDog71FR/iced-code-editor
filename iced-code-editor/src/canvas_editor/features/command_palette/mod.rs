@@ -37,6 +37,20 @@ pub(crate) enum PaletteAction {
     Custom(String),
 }
 
+/// Identity of a palette command, stable across relabelling and filtering.
+///
+/// Used to remember which commands were run recently. A built-in is keyed by
+/// its message's discriminant rather than by its label, so switching language
+/// does not lose the history; a host command is keyed by the identifier it
+/// registered, which is already documented as stable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PaletteCommandKey {
+    /// A built-in action, keyed by the variant of the message it sends.
+    Builtin(std::mem::Discriminant<Message>),
+    /// A host-registered action, keyed by its identifier.
+    Custom(String),
+}
+
 /// One row of the palette: what is displayed, and what running it does.
 #[derive(Debug, Clone)]
 pub(crate) struct PaletteEntry {
@@ -44,6 +58,13 @@ pub(crate) struct PaletteEntry {
     pub(crate) label: String,
     /// Keyboard shortcut hint shown to the right, empty when unbound.
     pub(crate) shortcut: String,
+    /// Current state of a toggle command, `None` for every other command.
+    pub(crate) status: Option<bool>,
+    /// Whether this row belongs to the recently-used block at the top.
+    ///
+    /// Set by [`promote_recent`] rather than by the builders, since it depends
+    /// on the history and not on the command itself.
+    pub(crate) is_recent: bool,
     /// The action performed when the row is run.
     pub(crate) action: PaletteAction,
 }
@@ -71,7 +92,25 @@ impl PaletteEntry {
         Self {
             label,
             shortcut,
+            status: None,
+            is_recent: false,
             action: PaletteAction::Builtin(Box::new(message)),
+        }
+    }
+
+    /// Marks this row as a toggle currently in state `status`.
+    fn with_status(mut self, status: bool) -> Self {
+        self.status = Some(status);
+        self
+    }
+
+    /// Returns the identity used to remember this command in the history.
+    pub(crate) fn key(&self) -> PaletteCommandKey {
+        match &self.action {
+            PaletteAction::Builtin(message) => {
+                PaletteCommandKey::Builtin(std::mem::discriminant(&**message))
+            }
+            PaletteAction::Custom(id) => PaletteCommandKey::Custom(id.clone()),
         }
     }
 }
@@ -96,7 +135,13 @@ pub(crate) struct CommandPaletteState {
     /// moves when the highlight would otherwise leave the window — see
     /// [`window_origin`].
     pub(crate) first_visible_row: usize,
+    /// Commands run from the palette, most recent first, capped at
+    /// [`MAX_RECENT_COMMANDS`].
+    pub(crate) recent: Vec<PaletteCommandKey>,
 }
+
+/// Number of recently-run commands kept at the top of the list.
+pub(crate) const MAX_RECENT_COMMANDS: usize = 3;
 
 impl Default for CommandPaletteState {
     fn default() -> Self {
@@ -107,6 +152,7 @@ impl Default for CommandPaletteState {
             input_id: Id::unique(),
             scrollable_id: Id::unique(),
             first_visible_row: 0,
+            recent: Vec::new(),
         }
     }
 }
@@ -141,6 +187,16 @@ impl CommandPaletteState {
     /// clear.
     pub(crate) fn close(&mut self) {
         self.is_open = false;
+    }
+
+    /// Records `key` as the command that was just run.
+    ///
+    /// Any earlier occurrence is removed first, so running a command already
+    /// in the history moves it back to the front instead of listing it twice.
+    pub(crate) fn record_recent(&mut self, key: PaletteCommandKey) {
+        self.recent.retain(|known| known != &key);
+        self.recent.insert(0, key);
+        self.recent.truncate(MAX_RECENT_COMMANDS);
     }
 
     /// Moves the highlight by `delta` rows over a list of `len` entries,
@@ -229,9 +285,47 @@ fn custom_entries(entries: &[ContextMenuItem]) -> Vec<PaletteEntry> {
         .map(|item| PaletteEntry {
             label: item.label.clone(),
             shortcut: item.shortcut.clone().unwrap_or_default(),
+            status: item.status,
+            is_recent: false,
             action: PaletteAction::Custom(item.id.clone()),
         })
         .collect()
+}
+
+/// Moves the rows in `recent` to the front, in history order, and flags them.
+///
+/// Filtering runs first, so a recent command the query excludes is simply not
+/// there to promote; the block shrinks rather than showing a row the user
+/// filtered out. The commands left behind keep their registration order, which
+/// is what makes the rest of the list stable while the top three churn.
+///
+/// # Arguments
+///
+/// * `entries` - The filtered rows, in display order
+/// * `recent` - Command keys, most recent first
+///
+/// # Returns
+///
+/// The rows reordered, with `is_recent` set on the promoted ones
+fn promote_recent(
+    entries: Vec<PaletteEntry>,
+    recent: &[PaletteCommandKey],
+) -> Vec<PaletteEntry> {
+    let mut remaining = entries;
+    let mut promoted = Vec::with_capacity(recent.len());
+
+    for key in recent {
+        if let Some(index) =
+            remaining.iter().position(|entry| &entry.key() == key)
+        {
+            let mut entry = remaining.remove(index);
+            entry.is_recent = true;
+            promoted.push(entry);
+        }
+    }
+
+    promoted.extend(remaining);
+    promoted
 }
 
 /// Turns a shared action into a palette row.
@@ -310,7 +404,8 @@ fn default_entries(
             translations.command_palette_toggle_vim_mode(),
             TOGGLE_VIM_MODE_SHORTCUT,
             Message::ToggleVimMode,
-        ),
+        )
+        .with_status(context.vim_enabled),
     ];
 
     // Paste keeps its place among the always-available commands: it is the
@@ -392,7 +487,7 @@ fn build_entries(
 impl CodeEditor {
     /// Returns the palette rows matching the current query, in display order.
     pub(crate) fn command_palette_entries(&self) -> Vec<PaletteEntry> {
-        build_entries(
+        let entries: Vec<PaletteEntry> = build_entries(
             self.custom_command_palette_entries(),
             self.default_command_palette_enabled(),
             self.action_context(),
@@ -402,7 +497,9 @@ impl CodeEditor {
         .filter(|entry| {
             matches_query(&entry.label, self.command_palette_state.query.trim())
         })
-        .collect()
+        .collect();
+
+        promote_recent(entries, &self.command_palette_state.recent)
     }
 
     /// Opens the command palette programmatically.
@@ -493,6 +590,102 @@ mod tests {
     }
 
     #[test]
+    fn test_custom_entry_status_reaches_the_palette_row() {
+        let entries = custom_entries(&[
+            ContextMenuItem::new("app.format", "Format Document"),
+            ContextMenuItem::new("app.fos", "Toggle Format On Save")
+                .with_status(false),
+        ]);
+
+        assert_eq!(entries[0].status, None);
+        assert_eq!(entries[1].status, Some(false));
+    }
+
+    #[test]
+    fn test_toggle_vim_mode_reports_its_current_state() {
+        let off =
+            default_entries(ActionContext::default(), &Translations::default());
+        let on = default_entries(
+            ActionContext { vim_enabled: true, ..ActionContext::default() },
+            &Translations::default(),
+        );
+
+        let status = |entries: &[PaletteEntry]| {
+            entries
+                .iter()
+                .find(|entry| entry.label == "Toggle Vim Mode")
+                .and_then(|entry| entry.status)
+        };
+
+        assert_eq!(status(&off), Some(false));
+        assert_eq!(status(&on), Some(true));
+    }
+
+    #[test]
+    fn test_recent_commands_move_to_the_front_in_history_order() {
+        let entries =
+            default_entries(ActionContext::default(), &Translations::default());
+        let recent = vec![
+            PaletteCommandKey::Builtin(std::mem::discriminant(
+                &Message::ToggleVimMode,
+            )),
+            PaletteCommandKey::Builtin(std::mem::discriminant(
+                &Message::MoveLineDown,
+            )),
+        ];
+
+        let promoted = promote_recent(entries.clone(), &recent);
+
+        assert_eq!(
+            labels(&promoted)[..2],
+            ["Toggle Vim Mode", "Move Line Down"]
+        );
+        assert!(promoted[0].is_recent);
+        assert!(promoted[1].is_recent);
+        assert!(!promoted[2].is_recent);
+        // Promotion reorders, it never adds or drops a command.
+        assert_eq!(promoted.len(), entries.len());
+    }
+
+    #[test]
+    fn test_recent_commands_filtered_out_are_not_promoted() {
+        let entries = vec![PaletteEntry::builtin(
+            "Save".to_string(),
+            SAVE_SHORTCUT,
+            Message::WriteRequested,
+        )];
+        let recent = vec![PaletteCommandKey::Builtin(std::mem::discriminant(
+            &Message::MoveLineUp,
+        ))];
+
+        let promoted = promote_recent(entries, &recent);
+
+        assert!(!promoted[0].is_recent);
+    }
+
+    #[test]
+    fn test_history_keeps_the_last_three_without_duplicates() {
+        let mut state = CommandPaletteState::new();
+        let key = |id: &str| PaletteCommandKey::Custom(id.to_string());
+
+        for id in ["a", "b", "c", "d"] {
+            state.record_recent(key(id));
+        }
+        assert_eq!(
+            state.recent,
+            vec![key("d"), key("c"), key("b")],
+            "the oldest command falls off the end"
+        );
+
+        state.record_recent(key("b"));
+        assert_eq!(
+            state.recent,
+            vec![key("b"), key("d"), key("c")],
+            "re-running a known command moves it back to the front"
+        );
+    }
+
+    #[test]
     fn test_custom_entries_precede_built_in_entries() {
         let entries = build_entries(
             &[ContextMenuItem::new("app.format", "Format Document")],
@@ -538,6 +731,7 @@ mod tests {
                 reveal_in_file_manager_enabled: false,
                 search_replace_enabled: true,
                 folding_enabled: true,
+                vim_enabled: false,
             },
             &Translations::default(),
         );

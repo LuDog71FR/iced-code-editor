@@ -286,7 +286,7 @@ greet("World")
             #[cfg(not(target_arch = "wasm32"))]
             lsp_format_pending: None,
             #[cfg(not(target_arch = "wasm32"))]
-            format_on_save: true,
+            format_on_save: Self::DEFAULT_FORMAT_ON_SAVE,
             window_width: 1024.0,
             tabs_overflow: false,
             spinner_frame: 0,
