@@ -34,21 +34,21 @@
    - [Focus Management](#focus-management)
    - [Selection Rendering](#selection-rendering)
    - [Scroll-to-Cursor](#scroll-to-cursor)
-5. [Internationalization (i18n)](#internationalization-i18n)
+   - [Internationalization (i18n)](#internationalization-i18n)
    - [CJK and Asian Character Support](#cjk-and-asian-character-support)
-6. [Language Server Protocol (LSP) Support](#language-server-protocol-lsp-support)
+5. [Language Server Protocol (LSP) Support](#language-server-protocol-lsp-support)
    - [Architecture](#architecture-1)
    - [Layer 1 — `LspClient` trait (`canvas_editor/lsp/mod.rs`)](#layer-1--lspclient-trait-canvas_editorlspmodrs)
    - [Layer 2 — `LspProcessClient` (`canvas_editor/lsp/process/mod.rs`)](#layer-2--lspprocessclient-canvas_editorlspprocessmodrs)
    - [Layer 3 — `LspOverlayState` + `view_lsp_overlay` (`canvas_editor/lsp/process/overlay.rs`)](#layer-3--lspoverlaystate--view_lsp_overlay-canvas_editorlspprocessoverlayrs)
    - [Event flow](#event-flow)
-7. [Performance Considerations](#performance-considerations)
+6. [Performance Considerations](#performance-considerations)
    - [Canvas Caching](#1-canvas-caching)
    - [Syntax Highlighting Optimization](#2-syntax-highlighting-optimization)
    - [Text Buffer Performance](#3-text-buffer-performance)
    - [Memory Usage](#4-memory-usage)
    - [CJK Character Width Calculation](#5-cjk-character-width-calculation)
-8. [Testing Strategy](#testing-strategy)
+7. [Testing Strategy](#testing-strategy)
    - [The three levels](#the-three-levels)
    - [Unit Tests](#unit-tests)
    - [Interface Tests (`demo-app/src/ui_tests/`)](#interface-tests-demo-appsrcui_tests)
@@ -56,7 +56,7 @@
    - [Regression tests must be verified failing](#regression-tests-must-be-verified-failing)
    - [Running Tests](#running-tests)
    - [Benchmarks](#benchmarks)
-9. [Common Pitfalls](#common-pitfalls)
+8. [Common Pitfalls](#common-pitfalls)
    - [UTF-8 Character Boundaries](#1-utf-8-character-boundaries)
    - [Cache Invalidation](#2-cache-invalidation)
    - [Command History Grouping](#3-command-history-grouping)
@@ -65,18 +65,18 @@
    - [Buffer Revision Bumping](#6-buffer-revision-bumping)
    - [Highlight Cache Anchor (`pre_edit_line`)](#7-highlight-cache-anchor-pre_edit_line)
    - [InsertTextCommand Cursor Override vs. Undo](#8-inserttextcommand-cursor-override-vs-undo)
-10. [Future Enhancements](#future-enhancements)
-11. [Contributing Guidelines](#contributing-guidelines)
+9. [Future Enhancements](#future-enhancements)
+10. [Contributing Guidelines](#contributing-guidelines)
     - [Code Style](#code-style)
     - [Pull Request Process](#pull-request-process)
     - [Commit messages](#commit-messages)
     - [Documentation](#documentation)
-12. [Resources](#resources)
+11. [Resources](#resources)
     - [Iced Framework](#iced-framework)
     - [Syntax Highlighting](#syntax-highlighting-1)
     - [Design Patterns](#design-patterns-1)
     - [Text Editor Algorithms](#text-editor-algorithms)
-13. [License](#license)
+12. [License](#license)
 
 ## Overview
 
@@ -1417,7 +1417,7 @@ The same rule governs paging: `page_up()` / `page_down()` move by
 
 **Smart margins:** 2 rows of padding to prevent cursor at edge
 
-## Internationalization (i18n)
+### Internationalization (i18n)
 
 **Location:** `i18n.rs`, `locales/*.yml`
 
@@ -2291,11 +2291,32 @@ Check [TODO.md](https://github.com/LuDog71FR/iced-code-editor/blob/main/TODO.md)
 
 ### Code Style
 
-- Follow Rust 2024 edition conventions
-- Use `cargo fmt` before committing
-- Run `cargo clippy` and fix all warnings
-- Maintain existing documentation style
-- Add unit tests for new features
+The rules below are not style preferences — most are enforced by the compiler
+through `[workspace.lints]` in the root `Cargo.toml`, and every workspace
+member opts in with `[lints] workspace = true`.
+
+- **Rust 2024 edition.** No async runtime: concurrency goes through
+  `iced::Task`, and the LSP client uses plain `std::thread` +
+  `std::sync::mpsc`.
+- **`unsafe_code = "forbid"`** and **`missing_docs = "deny"`**. Every public
+  item needs a doc comment; the lint enforces the rule instead of review
+  catching it.
+- **28 clippy lints denied**, including `unwrap_used`, `expect_used`, `panic`,
+  `unreachable`, `float_cmp`, `print_stdout`, `print_stderr`, `dbg_macro`,
+  `needless_pass_by_value`, `missing_panics_doc` and `missing_errors_doc`.
+  A clippy warning is a build failure, not a suggestion.
+- **Never `#[allow(dead_code)]`.** If something is unused, either it is
+  reachable and needs a caller, or it should be deleted.
+- **Recover from mutex poisoning** with
+  `.lock().unwrap_or_else(|error| error.into_inner())`. A plain
+  `.lock().unwrap()` turns one panic into a permanently dead editor.
+- **`cargo fmt`** before committing.
+- **Every new function gets a unit test**, and modifying a function means
+  checking and updating the tests that cover it. Frontend display functions are
+  the one exception — they are covered at the
+  [interface level](#interface-tests-demo-appsrcui_tests) instead.
+- **Every public item gets an `# Example`** that actually runs. Doctests are
+  part of the suite, not decoration.
 
 ### Pull Request Process
 
@@ -2314,22 +2335,31 @@ Follow the [Conventional Commits](https://www.conventionalcommits.org/) specific
 
 **Format:** `<type>(<scope>): <description>`
 
-Where `<scope>` is optional and can be the affected module (e.g., `api`, `models`, `scheduler`).
+Where `<scope>` is optional and names the affected area (e.g., `cursor`,
+`render`, `lsp`, `deps`).
 
-**Types:**
+**Types**, with examples from this repository's own history:
 
-- `feat` - New feature (e.g., `feat(api): add endpoint for task scheduling`)
-- `fix` - Bug fix (e.g., `fix(models): correct timezone handling in timestamps`)
-- `docs` - Documentation only (e.g., `docs: update installation instructions`)
-- `style` - Code style/formatting (e.g., `style: apply rustfmt changes`)
-- `refactor` - Code refactoring (e.g., `refactor(tasks): extract common validation logic`)
-- `perf` - Performance improvement (e.g., `perf(db): optimize query with index`)
-- `test` - Add or modify tests (e.g., `test(models): add unit tests for User model`)
-- `build` - Build system changes (e.g., `build: update sqlx to 0.7`)
-- `ci` - CI configuration (e.g., `ci: add clippy check to workflow`)
-- `chore` - Maintenance tasks (e.g., `chore: update dependencies`)
+- `feat` - New feature (`feat: display syntax name of the highlighter`)
+- `fix` - Bug fix (`fix: page up/down move by one screenful when lines wrap`)
+- `docs` - Documentation only (`docs: give every publicly reachable function a running example`)
+- `style` - Code style/formatting (`style: apply rustfmt changes`)
+- `refactor` - Code refactoring (`refactor: split keyboard shortcut recognition out of input/events.rs`)
+- `perf` - Performance improvement (`perf: improve text buffer and search updates`)
+- `test` - Add or modify tests (`test: split ui_tests.rs into a module per interface area`)
+- `build` - Build system changes (`build(deps): bump bytes in the cargo group`)
+- `ci` - CI configuration (`ci: make the security audit fail on the class it was passing`)
+- `chore` - Maintenance tasks (`chore: update dependencies`)
 
-**Breaking changes:** Add `!` after type/scope (e.g., `feat!: rename API endpoint` or `feat(api)!: change response format`)
+**Breaking changes:** Add `!` after type/scope
+(`fix!: bound the LspEvent queue, dropping events instead of blocking the reader`).
+A breaking change must also be called out in `CHANGELOG.md` under a
+`**BREAKING**` entry, saying what the caller has to change.
+
+**Write the subject as a claim about behaviour, not a label for a diff.**
+`fix: navigation closes the undo group, Home/End included` says what is now
+true; `fix: update navigation.rs` does not. The body is where the reasoning
+goes: what was wrong, why the fix is the right shape, and what was verified.
 
 ### Documentation
 
