@@ -12,66 +12,71 @@
    - [Module Separation by Concern](#3-module-separation-by-concern)
    - [Canvas-Based Rendering](#4-canvas-based-rendering)
    - [Interior Mutability for History](#5-interior-mutability-for-history)
+   - [Generated Boilerplate for Boolean Options](#6-generated-boilerplate-for-boolean-options)
 4. [Key Implementation Details](#key-implementation-details)
    - [Syntax Highlighting](#syntax-highlighting)
    - [Virtual Scrolling](#virtual-scrolling)
    - [Multi-Cursor Editing](#multi-cursor-editing)
    - [Line Wrapping (Visual Lines)](#line-wrapping-visual-lines)
    - [Code Folding](#code-folding)
+   - [Sticky Scroll](#sticky-scroll)
    - [Search and Replace](#search-and-replace)
    - [Command Palette](#command-palette)
+   - [Context Menu and Shared Actions](#context-menu-and-shared-actions)
    - [Auto-Indentation](#auto-indentation)
    - [Auto-Closing Brackets/Quotes](#auto-closing-bracketsquotes)
    - [Matching Bracket/Quote Highlight](#matching-bracketquote-highlight)
    - [Bracket-Pair Colorization](#bracket-pair-colorization)
    - [Indentation Guides](#indentation-guides)
+   - [Color Preview Swatches](#color-preview-swatches)
+   - [Vim Emulation](#vim-emulation)
    - [Cursor Blinking](#cursor-blinking)
    - [Focus Management](#focus-management)
    - [Selection Rendering](#selection-rendering)
    - [Scroll-to-Cursor](#scroll-to-cursor)
-   - [Internationalization (i18n)](#internationalization-i18n)
+5. [Internationalization (i18n)](#internationalization-i18n)
    - [CJK and Asian Character Support](#cjk-and-asian-character-support)
-5. [Language Server Protocol (LSP) Support](#language-server-protocol-lsp-support)
+6. [Language Server Protocol (LSP) Support](#language-server-protocol-lsp-support)
    - [Architecture](#architecture-1)
-   - [Layer 1 — LspClient trait](#layer-1--lspclient-trait-canvas_editorlspmodrs)
-   - [Layer 2 — LspProcessClient](#layer-2--lspprocessclient-canvas_editorlspprocessmodrs)
-   - [Layer 3 — LspOverlayState + view_lsp_overlay](#layer-3--lspoverlaystate--view_lsp_overlay-canvas_editorlspprocessoverlayrs)
+   - [Layer 1 — `LspClient` trait (`canvas_editor/lsp/mod.rs`)](#layer-1--lspclient-trait-canvas_editorlspmodrs)
+   - [Layer 2 — `LspProcessClient` (`canvas_editor/lsp/process/mod.rs`)](#layer-2--lspprocessclient-canvas_editorlspprocessmodrs)
+   - [Layer 3 — `LspOverlayState` + `view_lsp_overlay` (`canvas_editor/lsp/process/overlay.rs`)](#layer-3--lspoverlaystate--view_lsp_overlay-canvas_editorlspprocessoverlayrs)
    - [Event flow](#event-flow)
-6. [Performance Considerations](#performance-considerations)
+7. [Performance Considerations](#performance-considerations)
    - [Canvas Caching](#1-canvas-caching)
    - [Syntax Highlighting Optimization](#2-syntax-highlighting-optimization)
    - [Text Buffer Performance](#3-text-buffer-performance)
    - [Memory Usage](#4-memory-usage)
    - [CJK Character Width Calculation](#5-cjk-character-width-calculation)
-7. [Testing Strategy](#testing-strategy)
+8. [Testing Strategy](#testing-strategy)
    - [The three levels](#the-three-levels)
    - [Unit Tests](#unit-tests)
-   - [Interface Tests](#interface-tests-demo-appsrcui_tests)
+   - [Interface Tests (`demo-app/src/ui_tests/`)](#interface-tests-demo-appsrcui_tests)
    - [Integration Tests](#integration-tests)
    - [Regression tests must be verified failing](#regression-tests-must-be-verified-failing)
    - [Running Tests](#running-tests)
    - [Benchmarks](#benchmarks)
-8. [Common Pitfalls](#common-pitfalls)
+9. [Common Pitfalls](#common-pitfalls)
    - [UTF-8 Character Boundaries](#1-utf-8-character-boundaries)
    - [Cache Invalidation](#2-cache-invalidation)
    - [Command History Grouping](#3-command-history-grouping)
    - [Selection Direction](#4-selection-direction)
    - [Multi-Cursor Edit Order](#5-multi-cursor-edit-order)
    - [Buffer Revision Bumping](#6-buffer-revision-bumping)
-   - [Highlight Cache Anchor (pre_edit_line)](#7-highlight-cache-anchor-pre_edit_line)
+   - [Highlight Cache Anchor (`pre_edit_line`)](#7-highlight-cache-anchor-pre_edit_line)
    - [InsertTextCommand Cursor Override vs. Undo](#8-inserttextcommand-cursor-override-vs-undo)
-9. [Future Enhancements](#future-enhancements)
-10. [Contributing Guidelines](#contributing-guidelines)
+10. [Future Enhancements](#future-enhancements)
+11. [Contributing Guidelines](#contributing-guidelines)
     - [Code Style](#code-style)
     - [Pull Request Process](#pull-request-process)
-    - [Commit Messages](#commit-messages)
+    - [Commit messages](#commit-messages)
     - [Documentation](#documentation)
-11. [Resources](#resources)
+12. [Resources](#resources)
     - [Iced Framework](#iced-framework)
     - [Syntax Highlighting](#syntax-highlighting-1)
     - [Design Patterns](#design-patterns-1)
     - [Text Editor Algorithms](#text-editor-algorithms)
-12. [License](#license)
+13. [License](#license)
 
 ## Overview
 
@@ -498,6 +503,50 @@ pub struct CommandHistory {
 
 **Note:** This is safe because Iced is single-threaded. The mutex provides interior mutability, not actual concurrency.
 
+### 6. Generated Boilerplate for Boolean Options
+
+**Location:** `canvas_editor/bool_options.rs` (the macro and its table),
+`canvas_editor/config.rs` (the hand-written setters)
+
+A boolean editor option is up to three methods — `set_x`, `x`, `with_x` — but
+only one of them carries information. The **setter** knows what the feature is
+and which cache toggling it must invalidate, so it stays hand-written in
+`config.rs`. The getter and the builder are pure boilerplate: about fifty lines
+apiece once the mandatory `# Returns` / `# Arguments` / `# Example` sections
+are written out. Those are generated from a table:
+
+```rust
+bool_options! {
+    auto_indent_enabled, set_auto_indent_enabled,
+        "Returns whether auto-indentation is enabled.",
+        "`true` if auto-indentation is enabled, `false` otherwise",
+        default: "Enabled by default.", "";
+    // ... one row per option, the builder clause optional
+}
+```
+
+**Two things this buys beyond the line count**, and they are the reason it
+exists rather than a preference for macros:
+
+- **It closed a real inconsistency.** The hand-written builders were split
+  between assigning the field directly and delegating to the setter, and the
+  difference was accidental. A builder that assigns silently skips whatever the
+  setter does besides assigning — which is a trap waiting for the next option
+  to grow a cache invalidation. Every generated builder delegates.
+- **The generated example *asserts* the default** rather than stating it in
+  prose the way the hand-written getters did. A default that changes now fails
+  a doctest instead of quietly contradicting its own documentation. That is a
+  meaningful share of the 240 doctests.
+
+The doc shape is stated once in the macro, so an option cannot arrive with a
+section missing — which matters under `missing_docs = "deny"` and the project's
+rule that every public item carries an example.
+
+**When *not* to add a row:** an option whose getter does more than return the
+field, or whose builder must do something the setter does not. The macro is for
+the mechanical half only; anything with behavior belongs in `config.rs` beside
+the setter.
+
 ## Key Implementation Details
 
 ### Syntax Highlighting
@@ -667,6 +716,65 @@ pub fn hidden_lines(regions: &[FoldRegion], collapsed: &HashSet<usize>) -> HashS
 - Trailing blank lines are trimmed from a region so a collapsed block does not swallow
   the gap before the next block; nested blocks each yield independent regions.
 
+### Sticky Scroll
+
+**Location:** `canvas_editor/features/sticky_scroll.rs` (which lines to pin, pure logic),
+`canvas_editor/render/view.rs` (`create_sticky_scroll_layer`, `create_sticky_header_row`),
+`canvas_editor/editing/cursor.rs` (`scroll_to_line`), `canvas_editor/config.rs` (toggle)
+
+While scrolling deep inside a long block, the header lines of the enclosing
+blocks stay pinned at the top of the viewport, outermost first — so the
+structural context (which `impl`, which function, which `match`) never leaves
+the screen. Enabled by default.
+
+```rust
+pub(crate) fn sticky_headers(
+    regions: &[FoldRegion],
+    top_line: usize,
+    max_lines: usize,
+) -> Vec<usize>; // header lines, outermost first
+```
+
+**Scope detection is shared with folding, the toggle is not.** The enclosing
+blocks are exactly the [`FoldRegion`]s containing the line, so detection is the
+same indentation-based scan (and carries the same trade-off: language-agnostic,
+but misleading on badly indented code). What sticky scroll reads is
+`block_regions()`, **not** `foldable_regions()`:
+
+```rust
+// folding/ops.rs
+block_regions()     // memoized by buffer_revision — ignores folding_enabled
+foldable_regions()  // returns empty when folding is disabled
+```
+
+The blocks a line sits in are a property of the buffer, not of whether the user
+may collapse them. Turning code folding off therefore removes the chevrons and
+leaves the pinned headers alone. Wiring sticky scroll to `foldable_regions()`
+was a real bug, fixed in `6889b08`.
+
+**A strict comparison decides what is pinned.** A region qualifies when
+`start_line < top_line <= end_line`. The strictness on `start_line` matters:
+when the header *is* the topmost visible line it is already on screen, and
+pinning it would show the same line twice.
+
+`DEFAULT_MAX_STICKY_LINES` (5, matching VS Code) bounds the count — without it
+a deeply nested block would bury the code the reader is looking at.
+
+**Rendering** is a widget layer, not canvas geometry: `create_sticky_scroll_layer`
+stacks a `Column` of header rows over the editor, each row a `MouseArea`
+publishing `Message::StickyScrollJump(line)`. Each header reuses
+`highlighted_line_cached()` and the same tab expansion as the canvas text
+layer, so a pinned header is visually identical to the line it mirrors. The
+fold margin is deliberately left empty — a chevron there would invite a click
+that does nothing.
+
+**Clicking a header must account for the layer itself.** The sticky layer is
+drawn *over* the top rows, so scrolling a line to row 0 does not make it
+visible — it arrives underneath the headers that are still pinned. That is what
+`sticky_headroom(line)` answers, and it is passed as `scroll_to_line`'s
+`rows_above` argument. Getting this wrong lands the jump target behind the
+headers, which is the bug `3b2084c` fixed.
+
 ### Search and Replace
 
 **Location:** `canvas_editor/features/search/mod.rs` (state/matching), `canvas_editor/features/search/dialog.rs` (UI)
@@ -767,6 +875,74 @@ before scrolling.
 platform-dependent shortcut hint string. Both surfaces read from it, so a
 rebinding updates one place and the two can never disagree on how an action is
 spelled.
+
+### Context Menu and Shared Actions
+
+**Location:** `canvas_editor/features/context_menu.rs` (the menu and its public types),
+`canvas_editor/features/actions.rs` (`SharedAction`, `ActionContext`, shortcut hint strings)
+
+Right-click opens a menu of editor actions. The host extends it with its own
+entries, and the same entries can appear in the
+[Command Palette](#command-palette) — which is what makes the binding between
+the two surfaces worth stating explicitly.
+
+**Public types.** Both surfaces describe the same shape, so there is one type
+for it rather than two parallel ones:
+
+```rust
+pub struct ContextMenuItem {
+    pub id: String,             // stable identifier sent to the host
+    pub label: String,          // display text
+    pub shortcut: Option<String>,
+    pub enabled: bool,
+}
+
+pub enum ContextMenuEntry {
+    Item(ContextMenuItem),
+    Separator,
+}
+```
+
+`id` is what the host receives, deliberately separate from `label`: renaming or
+translating the label then never breaks the action. The menu accepts
+`ContextMenuEntry` (it can draw separators); the palette accepts
+`ContextMenuItem` (a search result list has nothing to separate).
+
+**One binding, two surfaces.** Undo, Redo, Cut, Copy, Paste, Select All and
+Reveal in File Manager appear in both. They are declared once, as
+`SharedAction`:
+
+```rust
+pub(crate) enum SharedAction { Undo, Redo, Cut, Copy, Paste, SelectAll, RevealInFileManager }
+
+impl SharedAction {
+    fn label(self, translations: &Translations) -> String;
+    fn shortcut(self) -> &'static str;
+    fn message(self) -> Message;
+    fn is_available(self, ctx: &ActionContext) -> bool;
+}
+```
+
+Each surface still spells out its **own display order**, and each keeps its own
+policy for an unavailable action — the menu dims the row, the palette omits it
+(see [Command Palette](#command-palette) for why they differ). What they must
+not disagree on is the binding: which label goes with which shortcut hint,
+which `Message` it sends, and what makes it available. Before `c196ddf` that
+was written out twice, so an action could be spelled one way in the menu and
+another in the palette.
+
+**Exhaustiveness is enforced by the compiler.** `SharedAction::ALL` is
+`#[cfg(test)]` — nothing in the rendering path iterates the whole set, since
+each surface has its own order. It exists so that
+`context_menu::tests::test_both_surfaces_render_every_shared_action_from_the_same_binding`
+is exhaustive by construction: a new variant that is not added to the array
+fails to compile against its declared length `[Self; 7]`. Adding a shared
+action therefore cannot silently skip one surface.
+
+**Availability** is read from `ActionContext`, a snapshot built by
+`CodeEditor::action_context()` (has a selection, history is non-empty, folding
+is on, …). The platform-dependent shortcut hint strings live in the same file,
+`#[cfg]`-selected between `⌘Z` and `Ctrl+Z`, so a rebinding updates one place.
 
 ### Auto-Indentation
 
@@ -1016,6 +1192,86 @@ so changing the indent style moves the guides with it. `unit == 0` draws nothing
 `set_show_indent_guides()` toggles the feature and clears `content_cache`; the demo app
 exposes it as `EditorToggle::IndentGuides` ("Show indentation guides") in the editor
 options panel.
+
+### Color Preview Swatches
+
+**Location:** `canvas_editor/features/color_preview.rs` (detection, pure logic),
+`canvas_editor/render/text.rs` (swatch drawing), `canvas_editor/config.rs` (toggle)
+
+A small colored square is drawn next to a color literal — `#1e1e2e`,
+`0xFF6B6B`, `rgb(58, 123, 213)`, `rgba(…)` — so the color can be read at a
+glance instead of decoded mentally.
+
+```rust
+pub(crate) struct ColorLiteral {
+    pub start_col: usize,
+    pub end_col: usize,
+    pub color: Color,
+}
+
+pub(crate) fn color_literals(line: &str) -> Vec<ColorLiteral>;
+```
+
+**Detection is purely lexical.** No syntax awareness is involved, so a literal
+inside a comment or a string is reported like one in real code — which is what
+a reader scanning for colors expects, and keeps the scan independent of the
+highlight cache. `starts_new_token()` guards the left edge so the `#1e1e2e`
+inside a longer identifier is not matched, and the functional forms are bounded
+by a maximum scan length rather than running to end of line.
+
+Short hex is expanded (`#abc` → `#aabbcc`), and both `#`- and `0x`-prefixed
+forms are accepted, with optional alpha. Channels parse as either `0-255` or a
+percentage; alpha as a ratio.
+
+**Rendering** happens in the `content_cache` layer alongside the other
+content-derived decorations, since the swatch depends on buffer text, not on
+cursor state. The swatch is sized as a fraction of the line height, so it
+follows the font size, and framed with a thin border so a swatch matching the
+editor background stays visible.
+
+### Vim Emulation
+
+**Location:** `canvas_editor/features/vim/mod.rs` (modal state and the key-sequence
+parser), `canvas_editor/features/vim/update.rs` (applying the parsed commands),
+`canvas_editor/tests/` (three integration suites)
+
+Opt-in Vim-style modal editing, off by default. `CodeEditor::vim_mode()` returns
+`Option<VimMode>` — `None` while Vim is disabled — so a status bar can
+distinguish "Vim is off" from "Vim is in Normal mode".
+
+```rust
+pub enum VimMode { Normal, Insert, Visual, VisualLine }
+```
+
+**The parser is a small state machine, not a key map.** A Vim command is a
+sequence, so recognizing one needs state between keystrokes. `VimState` holds
+exactly what a partially typed command needs:
+
+```rust
+pub(crate) struct VimState {
+    mode: VimMode,
+    count: Option<usize>,             // the `3` of `3dw`
+    g_prefix: bool,                   // `g` typed, waiting for `g`/`e`/...
+    pending_operator: Option<VimOperator>,   // `d` typed, waiting for a motion
+    pending_operator_count: usize,
+    visual_anchor: Option<(usize, usize)>,   // where visual mode started
+    visual_active: Option<(usize, usize)>,
+    command_line: Option<VimCommandLine>,    // `:` / `/` line being typed
+    last_search: Option<String>,             // for `n` / `N`
+    register: VimRegister,                   // yank/delete register
+}
+```
+
+Keys are parsed into three vocabularies — `VimMotion` (`h j k l w b e 0 ^ $ gg
+G` …), `VimOperator` (`d c y` …) and `VimAction` (everything that is neither) —
+which is what lets an operator compose with any motion instead of enumerating
+every pair.
+
+**Integration with the editor's own undo grouping** is the subtle part:
+`keep_vim_insert_group()` (`input/update/mod.rs`) keeps a typing group open
+while Vim is in Insert mode, so a whole insert session undoes as one step —
+the Vim expectation — rather than following the editor's normal navigation
+boundaries. See [Command History Grouping](#3-command-history-grouping).
 
 ### Cursor Blinking
 
