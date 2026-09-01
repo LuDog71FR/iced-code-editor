@@ -687,6 +687,33 @@ mod tests {
     }
 
     #[test]
+    fn test_max_content_width_ignores_blank_lines() {
+        // Regression test for issue #26: a blank line measures to `-0.0`
+        // (see `measure_text_width`'s doc note), and `MaxContentWidthCache`
+        // orders widths by `f32::to_bits`. Before the fix, that sign bit made
+        // any blank line sort above every real line's width, so a file with
+        // both a blank line and a long line reported the blank line's width
+        // (0) as the max instead of the long line's — hiding the horizontal
+        // scrollbar even though the long line clearly overflowed.
+        let with_blank_line = CodeEditor::new(
+            "short\n\nabcdefghijklmnopqrstuvwxyz0123456789\n\n",
+            "rs",
+        );
+        let without_blank_line = CodeEditor::new(
+            "short\nabcdefghijklmnopqrstuvwxyz0123456789",
+            "rs",
+        );
+
+        assert!(
+            (with_blank_line.max_content_width()
+                - without_blank_line.max_content_width())
+            .abs()
+                < f32::EPSILON,
+            "blank lines must not affect the reported max content width"
+        );
+    }
+
+    #[test]
     fn test_max_content_width_cached_by_revision() {
         let mut editor = CodeEditor::new("hello", "rs");
         let w1 = editor.max_content_width();

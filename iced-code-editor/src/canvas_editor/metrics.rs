@@ -93,15 +93,33 @@ pub(crate) fn indent_width(line: &str) -> Option<usize> {
 ///
 /// # Returns
 ///
-/// The total calculated width of the text as a `f32`
+/// The total calculated width of the text as a `f32`, never negative zero
+/// (see the empty-line note below).
+///
+/// # Note
+///
+/// `Iterator::sum` over an empty `f32` sequence — a blank line — yields
+/// `-0.0`, not `0.0` (`[0f32; 0].iter().sum::<f32>().is_sign_negative()` is
+/// `true`). Left as-is, that bit pattern corrupts callers that order widths
+/// by `f32::to_bits` (as [`MaxContentWidthCache`](super::caches::MaxContentWidthCache)
+/// does): `-0.0`'s sign bit makes it sort *above* every positive width as an
+/// unsigned integer, so a single blank line — found in virtually every real
+/// file — silently became the reported "widest line" (issue #26). Normalizing
+/// the result here keeps `measure_text_width` a sound building block for any
+/// such bit-based comparison.
 pub(crate) fn measure_text_width(
     text: &str,
     full_char_width: f32,
     char_width: f32,
 ) -> f32 {
-    text.chars()
+    let width: f32 = text
+        .chars()
         .map(|c| measure_char_width(c, full_char_width, char_width))
-        .sum()
+        .sum();
+    // Every term above is non-negative, so a negative sum is only reachable
+    // as `-0.0` (an empty sum). `.abs()` canonicalizes that one case to
+    // `0.0` without a lossy or lint-unfriendly float equality comparison.
+    if width.is_sign_negative() { width.abs() } else { width }
 }
 
 /// Epsilon value for floating-point comparisons in text layout.
@@ -620,6 +638,16 @@ mod tests {
         assert!(
             (width - 0.0).abs() < f32::EPSILON,
             "Width should be 0 for empty string"
+        );
+        // Regression test for issue #26: `Iterator::sum` over zero `f32`
+        // terms yields `-0.0`, not `0.0`. Left uncorrected, that sign bit
+        // makes an empty line's width sort *above* every real line's width
+        // in code that orders by `f32::to_bits` (as `MaxContentWidthCache`
+        // does), so a single blank line silently won the "widest line"
+        // comparison and hid the horizontal scrollbar entirely.
+        assert!(
+            !width.is_sign_negative(),
+            "an empty line's width must be positive zero, not -0.0"
         );
     }
 

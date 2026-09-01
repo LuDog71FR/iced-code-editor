@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Its visibility used to depend on `viewport_width`, a value only corrected via
   vertical-scroll notifications that never fire for content which doesn't overflow
   vertically. It now uses the real canvas width observed on every `draw()` call instead.
+- fix: the horizontal scrollbar could stay hidden for **any** file containing a blank
+  line, however wide its longest line, once wrap was disabled
+  ([#26](https://github.com/LuDog71FR/iced-code-editor/issues/26)). `Iterator::sum`
+  over zero `f32` terms — a blank line's measured width — yields `-0.0`, and
+  `MaxContentWidthCache` ordered line widths by `f32::to_bits`, under which `-0.0`'s
+  sign bit sorts above every positive width. A single blank line — present in almost
+  every real file — therefore won the "widest line" comparison and reported a near-zero
+  content width. `measure_text_width` now canonicalizes `-0.0` to `0.0`.
 
 ## [0.5.1] - 2026-08-31
 
