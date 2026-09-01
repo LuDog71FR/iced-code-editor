@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.5.2] - 2026-09-01
+
 ### Fixed
 
 - fix: the horizontal scrollbar no longer stays hidden after `CodeEditor::reset` loads
