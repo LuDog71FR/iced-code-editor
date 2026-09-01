@@ -147,6 +147,11 @@ pub struct CodeEditor {
     pub(crate) viewport_height: f32,
     /// Viewport width (visible area)
     pub(crate) viewport_width: f32,
+    /// Real canvas width last observed in `draw()`, used to decide whether the
+    /// horizontal scrollbar is needed without depending on vertical-scroll
+    /// notifications (which never fire for content that doesn't overflow
+    /// vertically — see issue #26).
+    pub(crate) last_canvas_width: Cell<f32>,
     /// Command history for undo/redo
     pub(crate) history: CommandHistory,
     /// Whether we're currently grouping commands (for smart undo)
@@ -647,6 +652,7 @@ impl CodeEditor {
             viewport_scroll: 0.0,
             viewport_height: 600.0, // Default, will be updated
             viewport_width: 800.0,  // Default, will be updated
+            last_canvas_width: Cell::new(800.0),
             history: CommandHistory::new(100),
             is_grouping: false,
             wrap_enabled: true,

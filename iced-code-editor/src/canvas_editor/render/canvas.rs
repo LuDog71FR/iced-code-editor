@@ -35,6 +35,11 @@ impl canvas::Program<Message> for CodeEditor {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
+        // Track the real, live canvas width every frame, independent of the
+        // vertical-scroll-driven `viewport_width` (which never gets corrected
+        // for content that doesn't overflow vertically — see issue #26).
+        self.last_canvas_width.set(bounds.width);
+
         let visual_lines: Rc<Vec<VisualLine>> =
             self.visual_lines_cached(bounds.width);
 

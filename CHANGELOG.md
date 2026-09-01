@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- fix: the horizontal scrollbar no longer stays hidden after `CodeEditor::reset` loads
+  short-but-wide content ([#26](https://github.com/LuDog71FR/iced-code-editor/issues/26)).
+  Its visibility used to depend on `viewport_width`, a value only corrected via
+  vertical-scroll notifications that never fire for content which doesn't overflow
+  vertically. It now uses the real canvas width observed on every `draw()` call instead.
 
 ## [0.5.1] - 2026-08-31
 

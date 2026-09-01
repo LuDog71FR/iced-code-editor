@@ -112,6 +112,29 @@ impl CodeEditor {
             .style(self.create_scrollable_style())
     }
 
+    /// Decides whether the horizontal scrollbar should be shown: wrap must be
+    /// disabled, and the widest line must not fit in the real, last-observed
+    /// canvas width (`last_canvas_width`, refreshed every `draw()` call).
+    ///
+    /// This intentionally does not use `viewport_width`, which is only
+    /// corrected via vertical-scroll notifications and can stay stuck at its
+    /// default for content that never overflows vertically — e.g. right after
+    /// [`CodeEditor::reset`] loads a short file with a very wide line (issue #26).
+    ///
+    /// # Arguments
+    ///
+    /// * `max_content_width` - The total pixel width of the widest line
+    ///
+    /// # Returns
+    ///
+    /// `true` if a horizontal scrollbar is needed, `false` otherwise
+    pub(crate) fn should_show_horizontal_scrollbar(
+        &self,
+        max_content_width: f32,
+    ) -> bool {
+        !self.wrap_enabled && max_content_width > self.last_canvas_width.get()
+    }
+
     /// Creates the horizontal scrollbar element when wrap is disabled and content overflows.
     ///
     /// # Arguments
@@ -125,7 +148,7 @@ impl CodeEditor {
         &self,
         max_content_width: f32,
     ) -> Option<Element<'_, Message>> {
-        if self.wrap_enabled || max_content_width <= self.viewport_width {
+        if !self.should_show_horizontal_scrollbar(max_content_width) {
             return None;
         }
 
@@ -690,6 +713,56 @@ pub(crate) fn scrollable_rail(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_should_show_horizontal_scrollbar_after_reset_with_known_canvas_width()
+     {
+        // Regression test for issue #26: a prior real `draw()` call already
+        // recorded the true (narrow) canvas width before `reset()` swaps in
+        // wide content that never overflows vertically. The decision must use
+        // that observed width, not the stale `viewport_width` default.
+        let mut editor = CodeEditor::new("short\n", "rs");
+        editor.wrap_enabled = false;
+        editor.last_canvas_width.set(200.0);
+
+        let _ = editor
+            .reset("a very very very long single line that clearly exceeds two hundred pixels of rendered width");
+
+        let max_content_width = editor.max_content_width();
+        assert!(
+            editor.should_show_horizontal_scrollbar(max_content_width),
+            "wide content narrower canvas should require a horizontal scrollbar after reset()"
+        );
+    }
+
+    #[test]
+    fn test_should_show_horizontal_scrollbar_false_when_content_fits() {
+        let mut editor = CodeEditor::new("short", "rs");
+        editor.wrap_enabled = false;
+        editor.last_canvas_width.set(800.0);
+
+        let max_content_width = editor.max_content_width();
+        assert!(
+            !editor.should_show_horizontal_scrollbar(max_content_width),
+            "content narrower than the canvas should not need a horizontal scrollbar"
+        );
+    }
+
+    #[test]
+    fn test_should_show_horizontal_scrollbar_false_when_wrap_enabled() {
+        let mut editor = CodeEditor::new(
+            "a very very very long single line that clearly exceeds two hundred pixels of rendered width",
+            "rs",
+        );
+        editor.wrap_enabled = true;
+        editor.last_canvas_width.set(50.0);
+
+        let max_content_width = editor.max_content_width();
+        assert!(
+            !editor.should_show_horizontal_scrollbar(max_content_width),
+            "wrapped content never needs a horizontal scrollbar regardless of width"
+        );
+    }
 
     #[test]
     fn test_scrollable_rail_sets_background_scroller_and_radius() {
