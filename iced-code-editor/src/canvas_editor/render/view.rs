@@ -547,13 +547,14 @@ impl CodeEditor {
         let mut editor_stack =
             iced::widget::Stack::new().push(background_row).push(scrollable);
 
-        // Pin the enclosing block headers above the viewport. This goes right
-        // above the scrollable so the dialogs pushed below stay on top of it.
-        if let Some(sticky_layer) =
+        // Keep a slot for sticky headers even when there are none. Stack diffs
+        // children by position: inserting/removing this layer would recreate
+        // the dialogs above it, losing their text input focus and selection
+        // whenever a search result scrolls across a block boundary.
+        editor_stack = editor_stack.push(
             self.create_sticky_scroll_layer(visual_lines.as_ref())
-        {
-            editor_stack = editor_stack.push(sticky_layer);
-        }
+                .unwrap_or_else(|| Space::new().into()),
+        );
 
         // Add IME layer for input method support.
         // The IME requester needs the cursor rect in viewport coordinates, which
@@ -713,6 +714,134 @@ pub(crate) fn scrollable_rail(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type InputState = iced::widget::text_input::State<
+        <iced::Renderer as iced::advanced::text::Renderer>::Paragraph,
+    >;
+
+    fn input_states(
+        tree: &mut iced::advanced::widget::Tree,
+    ) -> Vec<&mut InputState> {
+        if tree.tag == iced::advanced::widget::tree::Tag::of::<InputState>() {
+            vec![tree.state.downcast_mut::<InputState>()]
+        } else {
+            tree.children.iter_mut().flat_map(input_states).collect()
+        }
+    }
+
+    #[test]
+    fn search_input_focus_survives_sticky_header_transitions()
+    -> Result<(), &'static str> {
+        assert_dialog_focus_survives_sticky_header_transitions(false, 0)
+    }
+
+    #[test]
+    fn replace_input_focus_survives_sticky_header_transitions()
+    -> Result<(), &'static str> {
+        assert_dialog_focus_survives_sticky_header_transitions(true, 1)
+    }
+
+    fn assert_dialog_focus_survives_sticky_header_transitions(
+        replace: bool,
+        focused_input: usize,
+    ) -> Result<(), &'static str> {
+        use iced::advanced::{Layout, Shell, layout, renderer::Headless};
+        use iced::keyboard::{self, Key, key::Named};
+
+        let renderer = iced::futures::executor::block_on(iced::Renderer::new(
+            iced::Font::DEFAULT,
+            iced::Pixels(13.0),
+            Some("tiny-skia"),
+        ))
+        .ok_or("headless software renderer unavailable")?;
+        let mut editor = CodeEditor::new(
+            "fn main() {\n    let needle = 1;\n    let value = needle;\n}",
+            "rs",
+        );
+        let _ = editor.handle_open_search(replace);
+        editor.search_state.set_query("needle".into(), &editor.buffer);
+        editor.search_state.set_replace_with("replacement".into());
+        let mut tree = iced::advanced::widget::Tree::new(editor.view());
+        let mut inputs = input_states(&mut tree);
+        inputs[focused_input].focus();
+        inputs[focused_input].select_range(1, 3);
+        let selection = inputs[focused_input].cursor();
+
+        // Searching/navigating to a match scrolls across block boundaries.
+        // The sticky header appears and disappears ahead of the dialog.
+        for (scroll, key, text) in [
+            (editor.line_height(), Key::Named(Named::Backspace), None),
+            (0.0, Key::Named(Named::Enter), None),
+            (
+                editor.line_height(),
+                Key::Character("x".into()),
+                Some("x".into()),
+            ),
+        ] {
+            editor.viewport_scroll = scroll;
+            let visual_lines =
+                editor.visual_lines_cached(editor.viewport_width);
+            assert_eq!(
+                editor.create_sticky_scroll_layer(&visual_lines).is_some(),
+                scroll > 0.0,
+            );
+            let mut view = editor.view();
+            tree.diff(&view);
+            let inputs = input_states(&mut tree);
+            assert!(
+                inputs[focused_input].is_focused(),
+                "dialog lost focus after scroll"
+            );
+            assert_eq!(inputs[focused_input].cursor(), selection);
+
+            let node = view.as_widget_mut().layout(
+                &mut tree,
+                &renderer,
+                &layout::Limits::new(Size::ZERO, Size::new(800.0, 400.0)),
+            );
+            let event = iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: key.clone(),
+                modified_key: key.clone(),
+                physical_key: keyboard::key::Physical::Unidentified(
+                    keyboard::key::NativeCode::Unidentified,
+                ),
+                location: keyboard::Location::Standard,
+                modifiers: keyboard::Modifiers::empty(),
+                text,
+                repeat: false,
+            });
+            let mut messages = Vec::new();
+            let mut shell = Shell::new(&mut messages);
+            view.as_widget_mut().update(
+                &mut tree,
+                &event,
+                Layout::new(&node),
+                mouse::Cursor::Unavailable,
+                &renderer,
+                &mut iced::advanced::clipboard::Null,
+                &mut shell,
+                &node.bounds(),
+            );
+            assert!(shell.is_event_captured());
+            assert_eq!(messages.len(), 1);
+            assert!(
+                matches!(
+                    (&messages[0], replace, key),
+                    (Message::FindNext, false, Key::Named(Named::Enter))
+                        | (
+                            Message::ReplaceNext,
+                            true,
+                            Key::Named(Named::Enter)
+                        )
+                        | (Message::SearchQueryChanged(_), false, _)
+                        | (Message::ReplaceQueryChanged(_), true, _)
+                ),
+                "key escaped the dialog: {messages:?}"
+            );
+            input_states(&mut tree)[focused_input].select_range(1, 3);
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_should_show_horizontal_scrollbar_after_reset_with_known_canvas_width()
