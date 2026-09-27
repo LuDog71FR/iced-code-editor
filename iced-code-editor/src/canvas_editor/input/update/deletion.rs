@@ -18,6 +18,10 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible if selection was deleted
     pub(crate) fn handle_backspace(&mut self) -> Task<Message> {
+        // Guard clause: only process backspace input if editor has focus and is not locked
+        if !self.has_focus() {
+            return Task::none();
+        }
         // End grouping on backspace (separate from typing)
         if !self.keep_vim_insert_group() {
             self.end_grouping_if_active();
@@ -79,6 +83,10 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` that scrolls to keep the cursor visible if selection was deleted
     pub(crate) fn handle_delete(&mut self) -> Task<Message> {
+        // Guard clause: only process delete input if editor has focus and is not locked
+        if !self.has_focus() {
+            return Task::none();
+        }
         // End grouping on delete
         if !self.keep_vim_insert_group() {
             self.end_grouping_if_active();
