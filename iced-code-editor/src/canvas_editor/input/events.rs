@@ -122,17 +122,13 @@ impl CodeEditor {
                 if !self.vim_enabled
                     || self.vim_state.mode() == VimMode::Insert =>
             {
-                // Handle Tab for focus navigation or text insertion
-                // This implements focus event propagation and focus chain management
-                if modifiers.shift() {
-                    // Shift+Tab: focus navigation backward through widget hierarchy
-                    Some(Message::FocusNavigationShiftTab)
+                // Regular Tab: check if search dialog is open
+                if self.search_state.is_open {
+                    Some(Message::SearchDialogTab)
                 } else {
-                    // Regular Tab: check if search dialog is open
-                    if self.search_state.is_open {
-                        Some(Message::SearchDialogTab)
+                    if modifiers.shift() {
+                        Some(Message::Backtab)
                     } else {
-                        // Insert 4 spaces for Tab when not in search dialog
                         Some(Message::Tab)
                     }
                 }

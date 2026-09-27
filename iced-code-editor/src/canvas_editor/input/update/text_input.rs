@@ -4,7 +4,7 @@ use iced::Task;
 
 use super::{EditType, adjust_other_cursors};
 use crate::canvas_editor::editing::command::{
-    Command, InsertCharCommand, InsertNewlineCommand,
+    Command, DeleteCharCommand, InsertCharCommand, InsertNewlineCommand,
 };
 use crate::canvas_editor::{CodeEditor, IndentStyle, Message};
 
@@ -345,23 +345,88 @@ impl CodeEditor {
         self.scroll_to_cursor()
     }
 
-    /// Handles Shift+Tab key presses for focus navigation (when the search
-    /// dialog is not open).
+    /// Handles Shift+Tab (removes one indentation unit).
     ///
-    /// Relinquishes this editor's own focus; the `FocusNavigationShiftTab`
-    /// message is also published to the host application (see
-    /// `canvas_impl.rs`), which owns moving focus to another widget.
+    /// Removes up to one indentation level immediately before each cursor.
     ///
     /// # Returns
     ///
-    /// Always `Task::none()`
-    pub(crate) fn handle_focus_navigation(&mut self) -> Task<Message> {
-        if !self.search_state.is_open {
-            self.has_canvas_focus = false;
-            self.show_cursor = false;
+    /// A `Task<Message>` that scrolls to keep the cursor visible.
+    pub(crate) fn handle_backtab(&mut self) -> Task<Message> {
+        self.ensure_grouping_started();
+
+        // A plain click leaves a zero-length anchor behind.
+        self.clear_selection();
+
+        // Process cursors from bottom/right to top/left so edits do not
+        // invalidate positions of cursors that still need processing.
+        let order = self.cursors.descending_order();
+
+        for &idx in &order {
+            let pos = self.cursors.as_slice()[idx].position;
+
+            if pos.1 == 0 {
+                continue;
+            }
+
+            let remove_count = match self.indent_style {
+                IndentStyle::Spaces(n) => {
+                    let line = self.buffer.line(pos.0);
+                    let bytes = line.as_bytes();
+
+                    // Remove up to `n` spaces immediately before the cursor.
+                    let mut count = 0;
+                    while count < n as usize
+                        && pos.1 > count
+                        && bytes
+                            .get(pos.1 - count - 1)
+                            .is_some_and(|&b| b == b' ')
+                    {
+                        count += 1;
+                    }
+                    count
+                }
+                IndentStyle::Tab => {
+                    let line = self.buffer.line(pos.0);
+
+                    if line.chars().nth(pos.1 - 1) == Some('\t') {
+                        1
+                    } else {
+                        0
+                    }
+                }
+            };
+
+            let mut cursor_pos = pos;
+
+            for _ in 0..remove_count {
+                let delete_pos = cursor_pos;
+
+                let mut cmd = DeleteCharCommand::new(
+                    &self.buffer,
+                    delete_pos.0,
+                    delete_pos.1,
+                    delete_pos,
+                );
+
+                cmd.execute(&mut self.buffer, &mut cursor_pos);
+
+                adjust_other_cursors(
+                    self.cursors.as_mut_slice(),
+                    idx,
+                    delete_pos.0,
+                    delete_pos.1,
+                    EditType::DeleteCharBack,
+                );
+
+                self.history.push(Box::new(cmd));
+            }
+
+            self.cursors.as_mut_slice()[idx].position = cursor_pos;
         }
 
-        Task::none()
+        self.finish_edit_operation();
+        self.scroll_to_cursor()
     }
 
     /// Handles Enter key press (inserts newline).
@@ -746,14 +811,13 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_focus_navigation_shift_tab_loses_focus_when_search_closed() {
+    fn test_focus_navigation_shift_tab_keeps_focus_when_search_closed() {
         let mut editor = CodeEditor::new("hello", "txt");
         focus_editor(&mut editor);
         assert!(editor.has_canvas_focus);
 
-        let _ = editor.update(&Message::FocusNavigationShiftTab);
-        assert!(!editor.has_canvas_focus);
-        assert!(!editor.show_cursor);
+        let _ = editor.update(&Message::Backtab);
+        assert!(editor.has_canvas_focus);
     }
 
     #[test]
@@ -762,7 +826,7 @@ mod tests {
         focus_editor(&mut editor);
         editor.search_state.open_search();
 
-        let _ = editor.update(&Message::FocusNavigationShiftTab);
+        let _ = editor.update(&Message::Backtab);
         assert!(editor.has_canvas_focus);
     }
 }

@@ -49,10 +49,13 @@ impl CodeEditor {
             Message::Tab if self.vim_accepts_insert_input() => {
                 self.handle_tab()
             }
+            Message::Backtab if self.vim_accepts_insert_input() => {
+                self.handle_backtab()
+            }
             Message::Enter if self.vim_accepts_insert_input() => {
                 self.handle_enter()
             }
-            Message::Tab | Message::Enter => Task::none(),
+            Message::Tab | Message::Backtab | Message::Enter => Task::none(),
 
             // Deletion operations
             Message::Backspace if self.vim_accepts_insert_input() => {
@@ -148,7 +151,6 @@ impl CodeEditor {
             Message::SearchDialogShiftTab => {
                 self.handle_search_dialog_tab(false)
             }
-            Message::FocusNavigationShiftTab => self.handle_focus_navigation(),
 
             // Focus and IME operations
             Message::CanvasFocusGained => self.handle_canvas_focus_gained_msg(),
