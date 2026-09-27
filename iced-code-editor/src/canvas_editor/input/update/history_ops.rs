@@ -105,6 +105,10 @@ mod tests {
     #[test]
     fn test_undo_backspace() {
         let mut editor = CodeEditor::new("hello", "py");
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+
         editor.cursors.primary_mut().position = (0, 5);
 
         // Backspace
@@ -123,6 +127,10 @@ mod tests {
         // Backspace at column 0 merges two lines; undo must restore both
         // without duplicating the merged line.
         let mut editor = CodeEditor::new("hello\nworld", "py");
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+
         editor.cursors.set_single((1, 0));
 
         let _ = editor.update(&Message::Backspace);

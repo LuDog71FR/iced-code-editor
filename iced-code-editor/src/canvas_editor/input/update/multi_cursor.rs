@@ -262,6 +262,10 @@ mod tests {
     #[test]
     fn test_multi_cursor_backspace() {
         let mut editor = CodeEditor::new("abc\ndef", "rs");
+        editor.request_focus();
+        editor.has_canvas_focus = true;
+        editor.focus_locked = false;
+
         editor.cursors.primary_mut().position = (0, 2);
         editor.cursors.add_cursor((1, 2));
 
