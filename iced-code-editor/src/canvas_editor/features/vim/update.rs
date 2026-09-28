@@ -637,12 +637,6 @@ mod tests {
         }
     }
 
-    fn focus_editor(editor: &mut CodeEditor) {
-        editor.request_focus();
-        editor.has_canvas_focus = true;
-        editor.focus_locked = false;
-    }
-
     fn assert_vim_delete(
         content: &str,
         cursor: (usize, usize),
@@ -682,7 +676,7 @@ mod tests {
         assert_eq!(editor.cursors.primary_position(), (0, 1));
 
         let mut standard = CodeEditor::new("abc", "txt");
-        focus_editor(&mut standard);
+        standard.focus_for_test();
         let _ = standard.update(&Message::CharacterInput('l'));
         assert_eq!(standard.content(), "labc");
     }
@@ -690,7 +684,7 @@ mod tests {
     #[test]
     fn test_vim_navigation_insert_and_escape_round_trip() {
         let mut editor = CodeEditor::new("abc", "txt").with_vim_enabled(true);
-        focus_editor(&mut editor);
+        editor.focus_for_test();
 
         vim_keys(&mut editor, "i");
         assert_eq!(editor.vim_mode(), Some(VimMode::Insert));
@@ -852,7 +846,7 @@ mod tests {
 
         let mut changed =
             CodeEditor::new("one two", "txt").with_vim_enabled(true);
-        focus_editor(&mut changed);
+        changed.focus_for_test();
         vim_keys(&mut changed, "ce");
         assert_eq!(changed.content(), " two");
         assert_eq!(changed.vim_state.register.text, "one");
@@ -955,7 +949,7 @@ mod tests {
         assert_eq!(yanked.vim_mode(), Some(VimMode::Normal));
 
         let mut changed = CodeEditor::new("abcd", "txt").with_vim_enabled(true);
-        focus_editor(&mut changed);
+        changed.focus_for_test();
         changed.cursors.set_single((0, 1));
         vim_keys(&mut changed, "vlc");
         let _ = changed.update(&Message::CharacterInput('X'));
@@ -1038,7 +1032,7 @@ mod tests {
         let original = "one two three";
         let mut editor =
             CodeEditor::new(original, "txt").with_vim_enabled(true);
-        focus_editor(&mut editor);
+        editor.focus_for_test();
 
         vim_keys(&mut editor, "cw");
         let _ = editor.update(&Message::CharacterInput('X'));
@@ -1056,7 +1050,7 @@ mod tests {
         assert_eq!(editor.history.undo_count(), 1);
 
         let mut opened = CodeEditor::new("one", "txt").with_vim_enabled(true);
-        focus_editor(&mut opened);
+        opened.focus_for_test();
         vim_keys(&mut opened, "o");
         let _ = opened.update(&Message::CharacterInput('X'));
         vim_keys(&mut opened, "\u{1b}");

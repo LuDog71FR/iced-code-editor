@@ -439,12 +439,6 @@ impl CodeEditor {
 mod tests {
     use super::*;
 
-    fn focus_editor(editor: &mut CodeEditor) {
-        editor.request_focus();
-        editor.has_canvas_focus = true;
-        editor.focus_locked = false;
-    }
-
     #[test]
     fn test_typing_with_selection() {
         let mut editor = CodeEditor::new("hello world", "py");
@@ -518,7 +512,7 @@ mod tests {
             &[('(', ')'), ('[', ']'), ('{', '}'), ('"', '"'), ('\'', '\'')]
         {
             let mut editor = CodeEditor::new("", "py");
-            focus_editor(&mut editor);
+            editor.focus_for_test();
 
             let _ = editor.update(&Message::CharacterInput(open));
             assert_eq!(
@@ -538,7 +532,7 @@ mod tests {
     #[test]
     fn test_auto_close_types_through_existing_closer() {
         let mut editor = CodeEditor::new("()", "py");
-        focus_editor(&mut editor);
+        editor.focus_for_test();
         editor.cursors.primary_mut().position = (0, 1);
 
         let _ = editor.update(&Message::CharacterInput(')'));
@@ -549,7 +543,7 @@ mod tests {
     #[test]
     fn test_auto_close_suppressed_before_word_char() {
         let mut editor = CodeEditor::new("snake", "py");
-        focus_editor(&mut editor);
+        editor.focus_for_test();
         editor.cursors.primary_mut().position = (0, 2); // sn|ake
 
         let _ = editor.update(&Message::CharacterInput('\''));
@@ -560,7 +554,7 @@ mod tests {
     #[test]
     fn test_auto_close_undo_removes_pair_in_one_step() {
         let mut editor = CodeEditor::new("", "py");
-        focus_editor(&mut editor);
+        editor.focus_for_test();
 
         let _ = editor.update(&Message::CharacterInput('('));
         assert_eq!(editor.buffer.line(0), "()");
@@ -571,7 +565,7 @@ mod tests {
     #[test]
     fn test_auto_close_multi_cursor_shifts_other_cursors() {
         let mut editor = CodeEditor::new("a b", "py");
-        focus_editor(&mut editor);
+        editor.focus_for_test();
         editor.cursors.set_single((0, 1));
         editor.cursors.add_cursor((0, 3));
 
@@ -584,7 +578,7 @@ mod tests {
     #[test]
     fn test_auto_close_brackets_disabled_inserts_plain_char() {
         let mut editor = CodeEditor::new("", "py");
-        focus_editor(&mut editor);
+        editor.focus_for_test();
         editor.set_auto_close_brackets(false);
 
         let _ = editor.update(&Message::CharacterInput('('));
@@ -595,7 +589,7 @@ mod tests {
     #[test]
     fn test_surround_selection_wraps_forward_selection() {
         let mut editor = CodeEditor::new("hello world", "py");
-        focus_editor(&mut editor);
+        editor.focus_for_test();
         editor.cursors.primary_mut().anchor = Some((0, 0));
         editor.cursors.primary_mut().position = (0, 5);
 
@@ -609,7 +603,7 @@ mod tests {
     #[test]
     fn test_surround_selection_wraps_reversed_selection() {
         let mut editor = CodeEditor::new("hello world", "py");
-        focus_editor(&mut editor);
+        editor.focus_for_test();
         editor.cursors.primary_mut().anchor = Some((0, 5));
         editor.cursors.primary_mut().position = (0, 0);
 
@@ -622,7 +616,7 @@ mod tests {
     #[test]
     fn test_surround_selection_wraps_multiline_selection() {
         let mut editor = CodeEditor::new("foo\nbar", "py");
-        focus_editor(&mut editor);
+        editor.focus_for_test();
         editor.cursors.primary_mut().anchor = Some((0, 1));
         editor.cursors.primary_mut().position = (1, 2);
 
@@ -636,7 +630,7 @@ mod tests {
     #[test]
     fn test_surround_selection_undoes_as_single_group() {
         let mut editor = CodeEditor::new("hello world", "py");
-        focus_editor(&mut editor);
+        editor.focus_for_test();
         editor.cursors.primary_mut().anchor = Some((0, 0));
         editor.cursors.primary_mut().position = (0, 5);
 
@@ -649,7 +643,7 @@ mod tests {
     #[test]
     fn test_surround_selection_disabled_replaces_selection_instead() {
         let mut editor = CodeEditor::new("hello world", "py");
-        focus_editor(&mut editor);
+        editor.focus_for_test();
         editor.set_auto_close_brackets(false);
         editor.cursors.primary_mut().anchor = Some((0, 0));
         editor.cursors.primary_mut().position = (0, 5);
@@ -748,7 +742,7 @@ mod tests {
     #[test]
     fn test_focus_navigation_shift_tab_loses_focus_when_search_closed() {
         let mut editor = CodeEditor::new("hello", "txt");
-        focus_editor(&mut editor);
+        editor.focus_for_test();
         assert!(editor.has_canvas_focus);
 
         let _ = editor.update(&Message::FocusNavigationShiftTab);
@@ -759,7 +753,7 @@ mod tests {
     #[test]
     fn test_focus_navigation_shift_tab_keeps_focus_when_search_open() {
         let mut editor = CodeEditor::new("hello", "txt");
-        focus_editor(&mut editor);
+        editor.focus_for_test();
         editor.search_state.open_search();
 
         let _ = editor.update(&Message::FocusNavigationShiftTab);

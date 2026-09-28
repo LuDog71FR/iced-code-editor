@@ -93,4 +93,33 @@ impl CodeEditor {
     pub fn reset_focus_lock(&mut self) {
         self.focus_locked = false;
     }
+
+    /// Gives this editor full keyboard focus, for tests only.
+    ///
+    /// Sets the process-global focused editor ID, the canvas focus flag and
+    /// clears the focus lock, so `has_focus()` returns `true` and
+    /// focus-gated messages (`CharacterInput`, `Backspace`, `Delete`, ...)
+    /// are processed.
+    #[cfg(test)]
+    pub(crate) fn focus_for_test(&mut self) {
+        self.request_focus();
+        self.has_canvas_focus = true;
+        self.focus_locked = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::canvas_editor::CodeEditor;
+
+    #[test]
+    fn test_focus_for_test_grants_focus() {
+        let mut editor = CodeEditor::new("", "rs");
+        editor.focus_locked = true;
+
+        editor.focus_for_test();
+
+        assert!(editor.has_canvas_focus);
+        assert!(!editor.focus_locked);
+    }
 }

@@ -25,8 +25,8 @@ use iced::widget::Id;
 use iced::widget::operation::scroll_to;
 use iced::widget::scrollable;
 use iced_code_editor::{
-    LspDocument, LspEvent, LspLanguage, LspPosition, LspProcessClient,
-    Message as EditorMessage, lsp_language_for_extension,
+    ArrowDirection, LspDocument, LspEvent, LspLanguage, LspPosition,
+    LspProcessClient, Message as EditorMessage, lsp_language_for_extension,
     lsp_language_for_path,
 };
 use std::path::{Path, PathBuf};
@@ -132,16 +132,24 @@ impl DemoApp {
             let line_content = content.lines().nth(line).unwrap_or("");
             let word_start_col = Self::find_word_start(line_content, col);
 
-            // Calculate how many characters to delete
-            let chars_to_delete = col - word_start_col;
+            // Calculate how many characters to replace
+            let chars_to_replace = col - word_start_col;
 
-            // Delete the current word being typed and insert the completion
-            // as a single `Paste`, which inserts the text verbatim: unlike
-            // `CharacterInput`, it neither runs it through auto-close
-            // (spurious `)`/`"` for labels containing `(`/quotes) nor
-            // re-triggers LSP completion requests mid-insertion.
-            for _ in 0..chars_to_delete {
-                let _ = tab.editor.update(&EditorMessage::Backspace);
+            // Select the current word being typed, then replace it with the
+            // completion as a single `Paste`, which inserts the text
+            // verbatim: unlike `CharacterInput`, it neither runs it through
+            // auto-close (spurious `)`/`"` for labels containing `(`/quotes)
+            // nor re-triggers LSP completion requests mid-insertion.
+            //
+            // Shift+Left selection is used instead of `Backspace` because
+            // `Backspace` is ignored while the editor lacks canvas focus
+            // (e.g. after a mouse click in the completion menu), which would
+            // leave the typed prefix in place ahead of the completion.
+            for _ in 0..chars_to_replace {
+                let _ = tab.editor.update(&EditorMessage::ArrowKey(
+                    ArrowDirection::Left,
+                    true,
+                ));
             }
             let _ = tab
                 .editor

@@ -199,6 +199,7 @@ mod tests {
     #[test]
     fn test_delete_key_with_selection() {
         let mut editor = CodeEditor::new("hello world", "py");
+        editor.focus_for_test();
         editor.cursors.primary_mut().anchor = Some((0, 0));
         editor.cursors.primary_mut().position = (0, 5);
         editor.cursors.primary_mut().position = (0, 5);
@@ -214,6 +215,7 @@ mod tests {
     #[test]
     fn test_delete_key_without_selection() {
         let mut editor = CodeEditor::new("hello", "py");
+        editor.focus_for_test();
         editor.cursors.primary_mut().position = (0, 0);
 
         let _ = editor.update(&Message::Delete);
@@ -226,6 +228,7 @@ mod tests {
     #[test]
     fn test_backspace_with_selection() {
         let mut editor = CodeEditor::new("hello world", "py");
+        editor.focus_for_test();
         editor.cursors.primary_mut().anchor = Some((0, 6));
         editor.cursors.primary_mut().position = (0, 11);
         editor.cursors.primary_mut().position = (0, 11);
@@ -241,6 +244,7 @@ mod tests {
     #[test]
     fn test_backspace_without_selection() {
         let mut editor = CodeEditor::new("hello", "py");
+        editor.focus_for_test();
         editor.cursors.primary_mut().position = (0, 5);
 
         let _ = editor.update(&Message::Backspace);
@@ -253,6 +257,7 @@ mod tests {
     #[test]
     fn test_delete_multiline_selection() {
         let mut editor = CodeEditor::new("line1\nline2\nline3", "py");
+        editor.focus_for_test();
         editor.cursors.primary_mut().anchor = Some((0, 2));
         editor.cursors.primary_mut().position = (2, 2);
         editor.cursors.primary_mut().position = (2, 2);

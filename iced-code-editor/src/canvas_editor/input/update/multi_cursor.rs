@@ -262,6 +262,7 @@ mod tests {
     #[test]
     fn test_multi_cursor_backspace() {
         let mut editor = CodeEditor::new("abc\ndef", "rs");
+        editor.focus_for_test();
         editor.cursors.primary_mut().position = (0, 2);
         editor.cursors.add_cursor((1, 2));
 
