@@ -362,6 +362,8 @@ pub enum Message {
     Enter,
     /// Tab pressed (inserts 4 spaces)
     Tab,
+    /// Shift + Tab pressed (removes 4 spaces)
+    Backtab,
     /// Arrow key pressed (direction, shift_pressed)
     ArrowKey(ArrowDirection, bool),
     /// Mouse clicked at position
@@ -464,8 +466,6 @@ pub enum Message {
     SearchDialogTab,
     /// Shift+Tab pressed in search dialog (cycle backward)
     SearchDialogShiftTab,
-    /// Shift+Tab pressed for focus navigation (when search dialog is not open)
-    FocusNavigationShiftTab,
     /// Canvas gained focus (mouse click)
     CanvasFocusGained,
     /// Canvas lost focus (external widget interaction)

@@ -315,9 +315,7 @@ impl CodeEditor {
             && modifiers.shift()
             && !self.search_state.is_open
         {
-            return Some(
-                Action::publish(Message::FocusNavigationShiftTab).and_capture(),
-            );
+            return Some(Action::publish(Message::Backtab).and_capture());
         }
         None
     }
@@ -910,7 +908,7 @@ mod tests {
         assert!(!editor.search_state.is_open);
         assert!(matches!(
             shortcut(&editor, &tab, shift),
-            Some(Message::FocusNavigationShiftTab)
+            Some(Message::Backtab)
         ));
 
         // With the dialog open, Tab/Shift+Tab cycle its fields instead of
