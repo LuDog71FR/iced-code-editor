@@ -28,7 +28,7 @@ fn routed_message(editor: &mut CodeEditor, event: &Event) -> Option<Message> {
     let _ = editor.update(&Message::CanvasFocusGained);
     canvas::Program::<Message>::update(
         editor,
-        &mut (),
+        &mut Default::default(),
         event,
         Rectangle::new(Point::ORIGIN, Size::new(800.0, 600.0)),
         mouse::Cursor::Unavailable,

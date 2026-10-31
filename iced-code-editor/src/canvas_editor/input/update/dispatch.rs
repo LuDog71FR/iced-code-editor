@@ -109,6 +109,9 @@ impl CodeEditor {
             Message::MouseClick(point) => self.handle_mouse_click_msg(*point),
             Message::MouseDrag(point) => self.handle_mouse_drag_msg(*point),
             Message::MouseHover(point) => self.handle_mouse_drag_msg(*point),
+            Message::SelectionAutoScroll(seconds) => {
+                self.handle_selection_auto_scroll(*seconds)
+            }
             Message::MouseRelease => self.handle_mouse_release_msg(),
             Message::DoubleClick(point) => self.handle_double_click_msg(*point),
             Message::TripleClick(point) => self.handle_triple_click_msg(*point),

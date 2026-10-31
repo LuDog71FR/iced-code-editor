@@ -54,6 +54,7 @@ impl CodeEditor {
         // Clear selection on click, then set anchor for potential drag selection
         self.clear_selection();
         self.is_dragging = true;
+        self.drag_viewport_point = None;
         self.cursors.primary_mut().set_anchor();
         self.sync_search_match_from_primary_cursor();
 
@@ -77,8 +78,10 @@ impl CodeEditor {
         point: iced::Point,
     ) -> Task<Message> {
         if self.is_dragging {
+            self.drag_viewport_point =
+                Some(iced::Point::new(point.x, point.y - self.viewport_scroll));
             let before_pos = self.cursors.primary_position();
-            self.handle_mouse_drag(point);
+            self.extend_drag_selection();
             if self.cursors.primary_position() != before_pos {
                 // Mouse move events can be very frequent. Only invalidate the
                 // overlay cache if the drag actually changed selection/cursor.
@@ -88,6 +91,81 @@ impl CodeEditor {
         Task::none()
     }
 
+    /// Vertical edge-scroll speed in pixels per second.
+    pub(crate) fn selection_scroll_speed(&self) -> f32 {
+        if !self.is_dragging || !self.has_focus() || self.viewport_height <= 0.0
+        {
+            return 0.0;
+        }
+        let Some(point) = self.drag_viewport_point else {
+            return 0.0;
+        };
+        let edge = (self.line_height * 0.5).min(self.viewport_height / 4.0);
+        let distance = if point.y < edge {
+            point.y - edge
+        } else if point.y > self.viewport_height - edge {
+            point.y - (self.viewport_height - edge)
+        } else {
+            return 0.0;
+        };
+        let height = self.visual_lines_cached(self.viewport_width).len() as f32
+            * self.line_height;
+        let max_scroll = (height - self.viewport_height).max(0.0);
+        if (distance < 0.0 && self.viewport_scroll <= 0.0)
+            || (distance > 0.0 && self.viewport_scroll >= max_scroll)
+        {
+            return 0.0;
+        }
+        // Ease into scrolling in the narrow edge zone; accelerate continuously
+        // outside it, scaled to viewport height for short and tall editors.
+        let outside_lines = distance.abs() / self.line_height;
+        let ramp = (outside_lines / 0.5).min(1.0);
+        let viewport_lines = self.viewport_height / self.line_height;
+        let lines_per_second = (viewport_lines.max(30.0)
+            * (1.0 + outside_lines + outside_lines * outside_lines * 0.25))
+            .min(300.0);
+        distance.signum() * ramp * ramp * lines_per_second * self.line_height
+    }
+
+    pub(crate) fn handle_selection_auto_scroll(
+        &mut self,
+        seconds: f32,
+    ) -> Task<Message> {
+        let speed = self.selection_scroll_speed();
+        if speed.abs() < f32::EPSILON {
+            return Task::none();
+        }
+        let height = self.visual_lines_cached(self.viewport_width).len() as f32
+            * self.line_height;
+        let offset = (self.viewport_scroll + speed * seconds.clamp(0.0, 0.05))
+            .clamp(0.0, (height - self.viewport_height).max(0.0));
+        self.update_drag_viewport(
+            offset,
+            self.viewport_height,
+            self.viewport_width,
+        );
+        iced::widget::operation::scroll_to(
+            self.scrollable_id.clone(),
+            iced::widget::scrollable::AbsoluteOffset { x: 0.0, y: offset },
+        )
+    }
+
+    pub(crate) fn extend_drag_selection(&mut self) {
+        if self.is_dragging
+            && let Some(point) = self.drag_viewport_point
+        {
+            let before = self.cursors.primary_position();
+            self.handle_mouse_drag(iced::Point::new(
+                point.x.max(self.gutter_width() + 5.0),
+                self.viewport_scroll
+                    + point.y.clamp(0.0, (self.viewport_height - 1.0).max(0.0)),
+            ));
+            if self.cursors.primary_position() != before {
+                self.overlay_cache.clear();
+            }
+        }
+    }
+
     /// Handles mouse release operations.
     ///
     /// # Returns
@@ -95,6 +173,7 @@ impl CodeEditor {
     /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
     pub(crate) fn handle_mouse_release_msg(&mut self) -> Task<Message> {
         self.is_dragging = false;
+        self.drag_viewport_point = None;
         if self.vim_enabled {
             if self.cursors.primary().has_selection() {
                 let anchor = self.cursors.primary().anchor.unwrap_or_default();
@@ -146,6 +225,7 @@ impl CodeEditor {
             }
         }
         self.is_dragging = false;
+        self.drag_viewport_point = None;
         self.show_cursor = true;
         self.reset_cursor_blink();
         self.overlay_cache.clear();
@@ -169,6 +249,7 @@ impl CodeEditor {
             cursor.position = (line, line_len);
         }
         self.is_dragging = false;
+        self.drag_viewport_point = None;
         self.show_cursor = true;
         self.reset_cursor_blink();
         self.overlay_cache.clear();
@@ -190,6 +271,7 @@ impl CodeEditor {
         self.focus_locked = false;
         self.show_cursor = true;
         self.is_dragging = false;
+        self.drag_viewport_point = None;
         self.end_grouping_if_active();
 
         if let Some(position) = self.calculate_cursor_from_point(point) {
@@ -214,6 +296,85 @@ impl CodeEditor {
 mod tests {
     use super::*;
     use crate::canvas_editor::ArrowDirection;
+
+    #[test]
+    fn drag_speed_ramps_and_stops_inside_or_at_document_end() {
+        let content = "hello world\n".repeat(200);
+        let mut editor = CodeEditor::new(&content, "txt");
+        editor.viewport_height = editor.line_height * 10.0;
+        editor.viewport_width = 800.0;
+        let x = editor.gutter_width() + 10.0;
+        let _ = editor.handle_mouse_click_msg(iced::Point::new(x, 5.0));
+        let bottom = editor.viewport_height;
+        let _ = editor.handle_mouse_drag_msg(iced::Point::new(
+            x,
+            bottom - editor.line_height * 0.4,
+        ));
+        let slow = editor.selection_scroll_speed();
+        let _ = editor.handle_mouse_drag_msg(iced::Point::new(
+            x,
+            bottom + editor.line_height,
+        ));
+        let fast = editor.selection_scroll_speed();
+        assert!(slow > 0.0 && fast > slow);
+        assert!(editor.cursors.primary_position().0 <= 10);
+        let _ = editor.handle_mouse_drag_msg(iced::Point::new(x, bottom / 2.0));
+        assert!(editor.selection_scroll_speed().abs() < f32::EPSILON);
+        editor.viewport_scroll =
+            (editor.visual_lines_cached(editor.viewport_width).len() as f32
+                * editor.line_height
+                - editor.viewport_height)
+                .max(0.0);
+        editor.drag_viewport_point = Some(iced::Point::new(x, bottom + 100.0));
+        assert!(editor.selection_scroll_speed().abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn drag_scroll_distance_is_independent_of_frame_rate() {
+        let content = "hello world\n".repeat(200);
+        let run = |step: f32, frames: usize| {
+            let mut editor = CodeEditor::new(&content, "txt");
+            editor.viewport_height = editor.line_height * 10.0;
+            editor.viewport_width = 800.0;
+            let x = editor.gutter_width() + 10.0;
+            let _ = editor.handle_mouse_click_msg(iced::Point::new(x, 5.0));
+            let _ = editor.handle_mouse_drag_msg(iced::Point::new(
+                x,
+                editor.viewport_height + 5.0,
+            ));
+            for _ in 0..frames {
+                let _ = editor.handle_selection_auto_scroll(step);
+            }
+            editor.viewport_scroll
+        };
+        assert!((run(0.008, 120) - run(0.016, 60)).abs() < 0.1);
+    }
+
+    #[test]
+    fn drag_edge_scroll_extends_selection_and_stops_on_release() {
+        let content = (0..100).map(|_| "hello world\n").collect::<String>();
+        let mut editor = CodeEditor::new(&content, "txt");
+        editor.viewport_height = editor.line_height * 5.0;
+        editor.viewport_width = 800.0;
+        let x = editor.gutter_width() + 10.0;
+        let _ = editor.handle_mouse_click_msg(iced::Point::new(x, 5.0));
+        let anchor = editor.cursors.primary().anchor;
+        let _ = editor.handle_mouse_drag_msg(iced::Point::new(
+            x,
+            editor.viewport_height + 20.0,
+        ));
+        let before = editor.cursors.primary_position();
+        for _ in 0..10 {
+            let _ = editor.handle_selection_auto_scroll(0.016);
+        }
+        assert!(editor.viewport_scroll > 0.0);
+        assert!(editor.cursors.primary_position().0 > before.0);
+        assert_eq!(editor.cursors.primary().anchor, anchor);
+        let _ = editor.handle_mouse_release_msg();
+        let offset = editor.viewport_scroll;
+        let _ = editor.handle_selection_auto_scroll(0.016);
+        assert!((editor.viewport_scroll - offset).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn test_manual_search_match_selection_updates_current_index() {

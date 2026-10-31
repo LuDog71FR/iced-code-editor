@@ -11,7 +11,7 @@ use crate::canvas_editor::features::color_preview;
 use crate::canvas_editor::{CodeEditor, HIGHLIGHT_LINES_PER_FRAME, Message};
 
 impl canvas::Program<Message> for CodeEditor {
-    type State = ();
+    type State = Option<iced::time::Instant>;
 
     /// Renders the code editor's visual elements on the canvas, including text layout, syntax highlighting,
     /// cursor positioning, and other graphical aspects.
@@ -217,11 +217,27 @@ impl canvas::Program<Message> for CodeEditor {
     /// An optional `Action<Message>` to perform, such as sending a message or redrawing the canvas
     fn update(
         &self,
-        _state: &mut Self::State,
+        state: &mut Self::State,
         event: &Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<Action<Message>> {
+        if let Event::Window(iced::window::Event::RedrawRequested(now)) = event
+        {
+            if self.selection_scroll_speed().abs() > f32::EPSILON {
+                let previous = state.get_or_insert(*now);
+                let elapsed = now.duration_since(*previous);
+                let interval = std::time::Duration::from_millis(8);
+                if elapsed >= interval {
+                    *previous = *now;
+                    return Some(Action::publish(
+                        Message::SelectionAutoScroll(elapsed.as_secs_f32()),
+                    ));
+                }
+                return Some(Action::request_redraw_at(*previous + interval));
+            }
+            *state = None;
+        }
         match event {
             Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
                 self.modifiers.set(*modifiers);
@@ -297,10 +313,7 @@ mod tests {
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
         canvas::Program::<Message>::mouse_interaction(
-            editor,
-            &(),
-            bounds,
-            cursor,
+            editor, &None, bounds, cursor,
         )
     }
 
