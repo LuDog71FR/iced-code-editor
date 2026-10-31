@@ -1,8 +1,8 @@
 # Configuration for `cargo audit`, run in CI by the `Security Audit` job.
 #
 # Advisories listed under `ignore` are ones this project cannot act on: they
-# affect transitive dependencies whose versions are pinned by `syntect` or
-# `iced`, not by anything in `Cargo.toml`. Each entry records *why* it is
+# affect transitive dependencies whose versions are pinned by upstream crates,
+# not by anything in `Cargo.toml`. Each entry records *why* it is
 # ignored and what would let it be removed, so an ignore that has outlived its
 # reason is visible rather than inherited.
 #
@@ -44,10 +44,10 @@ ignore = [
     # it up -- neither version is selectable from this workspace.
     "RUSTSEC-2026-0253",
 
-    # The four `unmaintained` advisories below are not defects. Each says its
+    # The `unmaintained` advisories below are not defects. Each says its
     # crate has no active maintainer, which is a supply-chain risk to weigh
     # rather than a bug to route around, and none is a dependency this
-    # workspace chooses: all four arrive through `syntect` or `iced`. They are
+    # workspace chooses: they arrive through upstream dependencies. They are
     # listed so `--deny warnings` can stay on and the *next* advisory is the
     # one that fails the build.
 
@@ -76,4 +76,22 @@ ignore = [
     # macOS. A proc-macro crate, so it runs at build time and ships no code.
     # Removable when wgpu-hal's Metal backend drops it.
     "RUSTSEC-2024-0436",
+
+    # zbus_names, zvariant, and zvariant_derive are no longer maintained as
+    # standalone crates: their functionality moved into zbus 6. These are
+    # maintenance notices, not reports of a specific vulnerability.
+    #
+    # Linux paths (including the demo):
+    # - iced -> iced_winit -> mundy -> zbus 5
+    # - demo-app -> opener -> zbus 5
+    # zbus and zbus_macros bring in all three crates. mundy 0.2.3 still
+    # requires zbus ^5.0.0; opener 0.8.5 requires zbus ^5. Updating individual
+    # subcrates cannot resolve notices that apply to every standalone version.
+    #
+    # Accept the maintenance risk while retaining Linux system-theme and file
+    # reveal integration. This is not a claim that D-Bus input is trusted.
+    # Remove these exceptions once both upstream paths migrate to zbus >= 6.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]
