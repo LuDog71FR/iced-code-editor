@@ -51,6 +51,21 @@ impl CodeEditor {
         &mut self,
         viewport: iced::widget::scrollable::Viewport,
     ) -> Task<Message> {
+        self.update_drag_viewport(
+            viewport.absolute_offset().y,
+            viewport.bounds().height,
+            viewport.bounds().width,
+        );
+        Task::none()
+    }
+
+    /// Shares viewport/cache bookkeeping between wheel and drag scrolling.
+    pub(crate) fn update_drag_viewport(
+        &mut self,
+        new_scroll: f32,
+        new_height: f32,
+        new_width: f32,
+    ) {
         // Virtual-scrolling cache window:
         // Instead of clearing the canvas cache for every small scroll,
         // we maintain a larger "render window" of visual lines around
@@ -59,9 +74,6 @@ impl CodeEditor {
         // size changes significantly. This prevents frequent re-highlighting
         // and layout recomputation for very large files while ensuring
         // the first scroll renders correctly without requiring a click.
-        let new_scroll = viewport.absolute_offset().y;
-        let new_height = viewport.bounds().height;
-        let new_width = viewport.bounds().width;
         let scroll_changed = (self.viewport_scroll - new_scroll).abs() > 0.1;
         let visible_lines_count =
             (new_height / self.line_height).ceil() as usize + 2;
@@ -105,7 +117,7 @@ impl CodeEditor {
         self.viewport_scroll = new_scroll;
         self.viewport_height = new_height;
         self.viewport_width = new_width;
-        Task::none()
+        self.extend_drag_selection();
     }
 
     /// Handles horizontal scrollbar scrolled event (only active when wrap is disabled).

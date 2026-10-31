@@ -114,6 +114,7 @@ pub struct CodeEditor {
     pub(crate) cursor_visible: bool,
     /// Mouse is currently dragging for selection
     pub(crate) is_dragging: bool,
+    pub(crate) drag_viewport_point: Option<iced::Point>,
     /// Cached geometry for the "content" layer.
     ///
     /// This layer includes expensive-to-build, mostly static visuals such as:
@@ -374,6 +375,8 @@ pub enum Message {
     MouseHover(iced::Point),
     /// Mouse released
     MouseRelease,
+    /// Advances edge scrolling during an active selection drag.
+    SelectionAutoScroll(f32),
     /// Double-click: select the word under the cursor
     DoubleClick(iced::Point),
     /// Triple-click: select the whole line under the cursor
@@ -644,6 +647,7 @@ impl CodeEditor {
             last_blink: Instant::now(),
             cursor_visible: true,
             is_dragging: false,
+            drag_viewport_point: None,
             content_cache: canvas::Cache::default(),
             overlay_cache: canvas::Cache::default(),
             scrollable_id: Id::unique(),

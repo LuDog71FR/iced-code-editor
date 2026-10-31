@@ -342,21 +342,22 @@ impl CodeEditor {
                 })
             }
             mouse::Event::CursorMoved { .. } => {
-                cursor.position_in(bounds).map(|position| {
-                    if self.is_dragging {
-                        // Handle mouse drag for selection only when cursor is within bounds
-                        Action::publish(Message::MouseDrag(position))
-                            .and_capture()
-                    } else {
-                        // Forward hover events when not dragging to enable LSP hover.
+                if self.is_dragging {
+                    cursor.land().position().map(|position| {
+                        Action::publish(Message::MouseDrag(iced::Point::new(
+                            position.x - bounds.x,
+                            position.y - bounds.y,
+                        )))
+                        .and_capture()
+                    })
+                } else {
+                    cursor.position_in(bounds).map(|position| {
                         Action::publish(Message::MouseHover(position))
-                    }
-                })
+                    })
+                }
             }
             mouse::Event::ButtonReleased(mouse::Button::Left) => {
-                // Only handle mouse release when cursor is within bounds
-                // This prevents capturing events meant for other widgets
-                if cursor.is_over(bounds) {
+                if self.is_dragging || cursor.is_over(bounds) {
                     Some(Action::publish(Message::MouseRelease).and_capture())
                 } else {
                     None
@@ -431,6 +432,29 @@ mod tests {
     use crate::canvas_editor::metrics::compare_floats;
     use iced::event;
     use std::cmp::Ordering;
+
+    #[test]
+    fn active_drag_tracks_and_releases_outside_canvas() {
+        let mut editor = CodeEditor::new("one\ntwo", "txt");
+        editor.is_dragging = true;
+        let outside = cursor_at(-20.0, -20.0).levitate();
+        assert!(matches!(
+            mouse_message(
+                &editor,
+                &mouse::Event::CursorMoved { position: Point::ORIGIN },
+                &outside
+            ),
+            Some(Message::MouseDrag(_))
+        ));
+        assert!(matches!(
+            mouse_message(
+                &editor,
+                &mouse::Event::ButtonReleased(mouse::Button::Left),
+                &outside
+            ),
+            Some(Message::MouseRelease)
+        ));
+    }
 
     #[test]
     fn test_vim_navigation_keyboard_route_uses_dedicated_message() {
