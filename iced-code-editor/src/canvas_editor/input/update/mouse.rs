@@ -93,8 +93,7 @@ impl CodeEditor {
 
     /// Vertical edge-scroll speed in pixels per second.
     pub(crate) fn selection_scroll_speed(&self) -> f32 {
-        if !self.is_dragging || !self.has_focus() || self.viewport_height <= 0.0
-        {
+        if !self.is_dragging || self.viewport_height <= 0.0 {
             return 0.0;
         }
         let Some(point) = self.drag_viewport_point else {
@@ -131,6 +130,14 @@ impl CodeEditor {
         &mut self,
         seconds: f32,
     ) -> Task<Message> {
+        if !self.has_focus() {
+            return Task::none();
+        }
+        self.advance_selection_auto_scroll(seconds)
+    }
+
+    /// Advances drag geometry independently of application-wide focus routing.
+    fn advance_selection_auto_scroll(&mut self, seconds: f32) -> Task<Message> {
         let speed = self.selection_scroll_speed();
         if speed.abs() < f32::EPSILON {
             return Task::none();
@@ -330,8 +337,27 @@ mod tests {
     }
 
     #[test]
+    fn focus_locked_editor_does_not_auto_scroll() {
+        let mut editor = CodeEditor::new(&"hello world\n".repeat(200), "txt");
+        editor.viewport_height = editor.line_height * 10.0;
+        editor.viewport_width = 800.0;
+        let x = editor.gutter_width() + 10.0;
+        let _ = editor.handle_mouse_click_msg(iced::Point::new(x, 5.0));
+        let _ = editor.handle_mouse_drag_msg(iced::Point::new(
+            x,
+            editor.viewport_height + 5.0,
+        ));
+        assert!(editor.selection_scroll_speed() > 0.0);
+        editor.focus_locked = true;
+        let _ = editor.handle_selection_auto_scroll(0.016);
+        assert!(editor.viewport_scroll.abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn drag_scroll_distance_is_independent_of_frame_rate() {
         let content = "hello world\n".repeat(200);
+        // Exercise scroll geometry without the global focus ID, which other
+        // parallel editor tests legitimately change while this test is running.
         let run = |step: f32, frames: usize| {
             let mut editor = CodeEditor::new(&content, "txt");
             editor.viewport_height = editor.line_height * 10.0;
@@ -343,7 +369,7 @@ mod tests {
                 editor.viewport_height + 5.0,
             ));
             for _ in 0..frames {
-                let _ = editor.handle_selection_auto_scroll(step);
+                let _ = editor.advance_selection_auto_scroll(step);
             }
             editor.viewport_scroll
         };
@@ -365,14 +391,14 @@ mod tests {
         ));
         let before = editor.cursors.primary_position();
         for _ in 0..10 {
-            let _ = editor.handle_selection_auto_scroll(0.016);
+            let _ = editor.advance_selection_auto_scroll(0.016);
         }
         assert!(editor.viewport_scroll > 0.0);
         assert!(editor.cursors.primary_position().0 > before.0);
         assert_eq!(editor.cursors.primary().anchor, anchor);
         let _ = editor.handle_mouse_release_msg();
         let offset = editor.viewport_scroll;
-        let _ = editor.handle_selection_auto_scroll(0.016);
+        let _ = editor.advance_selection_auto_scroll(0.016);
         assert!((editor.viewport_scroll - offset).abs() < f32::EPSILON);
     }
 

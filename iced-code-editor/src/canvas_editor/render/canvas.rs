@@ -224,7 +224,9 @@ impl canvas::Program<Message> for CodeEditor {
     ) -> Option<Action<Message>> {
         if let Event::Window(iced::window::Event::RedrawRequested(now)) = event
         {
-            if self.selection_scroll_speed().abs() > f32::EPSILON {
+            if self.has_focus()
+                && self.selection_scroll_speed().abs() > f32::EPSILON
+            {
                 let previous = state.get_or_insert(*now);
                 let elapsed = now.duration_since(*previous);
                 let interval = std::time::Duration::from_millis(8);
