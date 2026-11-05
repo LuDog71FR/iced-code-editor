@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- feat: `CodeEditor::selection_range` and `CodeEditor::selected_text` expose the
+  primary cursor's selection (normalized `(line, column)` range, and its text),
+  `None` when nothing is selected
+  ([#34](https://github.com/LuDog71FR/iced-code-editor/issues/34)).
 
 ## [0.5.2] - 2026-09-01
 
