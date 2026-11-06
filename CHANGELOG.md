@@ -209,6 +209,14 @@ Several of these changes port fixes and ideas first made in the
 - fix(deps): drop the unmaintained `pin-utils` (RUSTSEC-2026-0441) by updating
   `futures-util` to 0.3.34 and `wasmtimer` to 0.4.5, so `cargo audit --deny warnings`
   passes without a new ignore entry.
+### Added
+
+- feat: `register_syntaxes` adds `.sublime-syntax` definitions to the set every editor highlights with,
+  for languages syntect and `two-face` do not ship. Call it at startup, before the first editor highlights
+  text (the set is built once per process); later calls return `SyntaxRegistrationError::AlreadyBuilt`,
+  and an invalid definition returns `SyntaxRegistrationError::Parse` without registering any. Registered
+  syntaxes are chosen by `file_extensions`, can include bundled ones by scope, and win over a bundled
+  syntax that claims the same extension. With nothing registered, the set is built exactly as before.
 
 ## [0.5.2] - 2026-09-01
 

@@ -94,6 +94,7 @@ mod render;
 
 pub use features::context_menu::{ContextMenuEntry, ContextMenuItem};
 pub use features::vim::VimMode;
+pub use render::highlighting::{SyntaxRegistrationError, register_syntaxes};
 #[derive(Debug, Clone)]
 pub(crate) struct ImePreedit {
     pub(crate) content: String,

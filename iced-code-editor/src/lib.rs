@@ -262,6 +262,7 @@ pub use canvas_editor::{
     ArrowDirection, CodeEditor, CommandHistory, ContextMenuEntry,
     ContextMenuItem, IndentStyle, Message, VimMode,
 };
+pub use canvas_editor::{SyntaxRegistrationError, register_syntaxes};
 pub use i18n::{Language, Translations};
 pub use theme::{Catalog, Style, StyleFn, TokenColors, from_iced_theme};
 
