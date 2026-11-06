@@ -64,7 +64,16 @@ impl CodeEditor {
             Message::Delete if self.vim_accepts_insert_input() => {
                 self.handle_delete()
             }
-            Message::Backspace | Message::Delete => Task::none(),
+            Message::DeleteWordBack if self.vim_accepts_insert_input() => {
+                self.handle_delete_word(false)
+            }
+            Message::DeleteWordForward if self.vim_accepts_insert_input() => {
+                self.handle_delete_word(true)
+            }
+            Message::Backspace
+            | Message::Delete
+            | Message::DeleteWordBack
+            | Message::DeleteWordForward => Task::none(),
             Message::DeleteSelection => self.handle_delete_selection(),
 
             // Navigation operations
@@ -75,6 +84,8 @@ impl CodeEditor {
             Message::End(shift) => self.handle_end(*shift),
             Message::CtrlHome => self.handle_ctrl_home(),
             Message::CtrlEnd => self.handle_ctrl_end(),
+            Message::WordLeft(shift) => self.handle_word_move(false, *shift),
+            Message::WordRight(shift) => self.handle_word_move(true, *shift),
             Message::GotoPosition(line, col) => {
                 self.handle_goto_position(*line, *col)
             }
