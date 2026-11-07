@@ -27,6 +27,10 @@ Several of these changes port fixes and ideas first made in the
   literals, comments and punctuation by TextMate scope, across grammars.
 - feat: `Style::syntax_theme_name` selects any syntect bundled theme for the
   code tokens instead of the automatic `base16-ocean` dark/light pick.
+- feat: diagnostic underlines with `CodeEditor::set_diagnostics` /
+  `diagnostics`. The new `Diagnostic` and `DiagnosticSeverity` types describe LSP
+  ranges and their severity; error, warning, information and hint colors come
+  from the active theme. Underlines follow visual lines when wrapping is on.
 
 ### Changed
 
@@ -36,6 +40,10 @@ Several of these changes port fixes and ideas first made in the
 - A press outside the editor now releases its keyboard focus, and clicking back
   into it restores focus, so the host no longer has to call `lose_focus()`
   when another widget is clicked.
+- **Breaking:** `Style` has four new public fields for the underline colors
+  (`diagnostic_error_color`, `diagnostic_warning_color`,
+  `diagnostic_information_color`, `diagnostic_hint_color`); styles built with
+  `theme::from_iced_theme` take them from the iced palette.
 
 ### Fixed
 

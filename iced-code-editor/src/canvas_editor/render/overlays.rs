@@ -334,6 +334,73 @@ impl CodeEditor {
         }
     }
 
+    /// Draws wavy underlines for diagnostics on the visible visual lines.
+    pub(super) fn draw_diagnostics(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext,
+        start_visual_idx: usize,
+        end_visual_idx: usize,
+    ) {
+        use crate::canvas_editor::diagnostics::diagnostic_segment;
+        use crate::canvas_editor::lsp::DiagnosticSeverity;
+
+        for diagnostic in &self.diagnostics {
+            let color = match diagnostic.severity {
+                DiagnosticSeverity::Error => self.style.diagnostic_error_color,
+                DiagnosticSeverity::Warning => {
+                    self.style.diagnostic_warning_color
+                }
+                DiagnosticSeverity::Information => {
+                    self.style.diagnostic_information_color
+                }
+                DiagnosticSeverity::Hint => self.style.diagnostic_hint_color,
+            };
+
+            for (idx, visual_line) in ctx
+                .visual_lines
+                .iter()
+                .enumerate()
+                .skip(start_visual_idx)
+                .take(end_visual_idx.saturating_sub(start_visual_idx))
+            {
+                let Some((start_col, end_col)) =
+                    diagnostic_segment(visual_line, diagnostic)
+                else {
+                    continue;
+                };
+                let line_content = self.buffer.line(visual_line.logical_line);
+                let (x, width) = calculate_segment_geometry(
+                    line_content,
+                    visual_line.start_col,
+                    start_col,
+                    end_col,
+                    ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset,
+                    ctx.full_char_width,
+                    ctx.char_width,
+                );
+                let width = width.max(ctx.char_width);
+                let baseline =
+                    idx as f32 * ctx.line_height + ctx.line_height - 2.0;
+                let steps = (width / 2.0).ceil() as usize;
+                let path = canvas::Path::new(|builder| {
+                    builder.move_to(Point::new(x, baseline));
+                    for step in 1..=steps {
+                        let px = x + width * step as f32 / steps as f32;
+                        let py = baseline
+                            + (step as f32 * std::f32::consts::FRAC_PI_2).sin()
+                                * 1.25;
+                        builder.line_to(Point::new(px, py));
+                    }
+                });
+                frame.stroke(
+                    &path,
+                    canvas::Stroke::default().with_color(color).with_width(1.0),
+                );
+            }
+        }
+    }
+
     /// Draws the cursor (normal caret or IME preedit cursor).
     ///
     /// # Arguments

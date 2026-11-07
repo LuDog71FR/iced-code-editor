@@ -38,6 +38,7 @@ Screenshot of the demo application:
 - **Search and replace** text
 - **Command palette** (`Ctrl+Shift+P`) listing every editor action, extensible with the host application's own commands
 - **Language Server Protocol** (LSP) support
+- **Diagnostic underlines** with severity colors, including wrapped lines
 - **Auto indentation** with custom indent style
 - **Auto-closing brackets/quotes** with surround selection
 - **Matching bracket/quote highlight** — highlights the paired bracket or quote next to the cursor
