@@ -10,7 +10,9 @@ use crate::file_ops;
 use crate::types::EditorId;
 use iced::Task;
 use iced_code_editor::theme;
-use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
+use std::path::PathBuf;
 
 impl DemoApp {
     #[cfg(not(target_arch = "wasm32"))]
