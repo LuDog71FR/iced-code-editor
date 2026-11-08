@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- feat: word-wise navigation and deletion, as in VS Code, JetBrains and Sublime Text.
+  `Ctrl+Left`/`Ctrl+Right` move one word (`Shift` extends the selection),
+  `Ctrl+Backspace`/`Ctrl+Delete` delete one word (or the selection, if any). On macOS
+  the modifier is `Alt`. A word is a run of identifier characters or of punctuation;
+  whitespace before it is skipped, and at a line boundary the move crosses into the
+  neighbouring line. New messages: `WordLeft(bool)`, `WordRight(bool)`,
+  `DeleteWordBack`, `DeleteWordForward`.
+
+### Changed
+
+- `Home` now jumps to the first non-blank character of the line, and to column 0 when
+  the cursor is already there ("smart Home"), as in most code editors.
 
 ## [0.5.2] - 2026-09-01
 

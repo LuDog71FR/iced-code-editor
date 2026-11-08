@@ -226,7 +226,10 @@ The editor supports a comprehensive set of keyboard shortcuts:
 | -------------------------------------- | ----------------------------- |
 | **Arrow Keys** (Up, Down, Left, Right) | Move cursor                   |
 | **Shift + Arrows**                     | Move cursor with selection    |
-| **Home** / **End**                     | Jump to start/end of line     |
+| **Ctrl + Left** / **Ctrl + Right**     | Move one word left/right (**Alt** on macOS) |
+| **Shift + Ctrl + Left/Right**          | Select one word left/right (**Shift + Alt** on macOS) |
+| **Home**                               | Jump to the first non-blank character of the line; press again for column 0 |
+| **End**                                | Jump to end of line           |
 | **Shift + Home** / **Shift + End**     | Select to start/end of line   |
 | **Ctrl + Home** / **Ctrl + End**       | Jump to start/end of document |
 | **Page Up** / **Page Down**            | Move cursor one page up/down  |
@@ -240,6 +243,8 @@ The editor supports a comprehensive set of keyboard shortcuts:
 | ------------------ | ------------------------------------------------------------------------ |
 | **Backspace**      | Delete character before cursor (or delete selection if text is selected) |
 | **Delete**         | Delete character after cursor (or delete selection if text is selected)  |
+| **Ctrl + Backspace** | Delete the word before the cursor (**Alt + Backspace** on macOS)       |
+| **Ctrl + Delete**  | Delete the word after the cursor (**Alt + Delete** on macOS)             |
 | **Shift + Delete** | Delete selected text (same as Delete when selection exists)              |
 | **Enter**          | Insert new line                                                          |
 | **Tab**            | Insert indent                                                            |

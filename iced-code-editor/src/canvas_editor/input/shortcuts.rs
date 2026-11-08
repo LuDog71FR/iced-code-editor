@@ -236,6 +236,43 @@ fn line_move_shortcut(
     None
 }
 
+/// Whether the modifiers ask for a word-wise move or deletion: `Alt` on
+/// macOS (where `Cmd+Left` is the start of the line), `Ctrl` elsewhere.
+/// Shift is allowed (it extends the selection); other modifiers are not, so
+/// `Ctrl+Alt+Arrow` stays free for the multi-cursor shortcuts.
+fn word_modifier(modifiers: &keyboard::Modifiers) -> bool {
+    if cfg!(target_os = "macos") {
+        modifiers.alt() && !modifiers.control() && !modifiers.logo()
+    } else {
+        modifiers.control() && !modifiers.alt() && !modifiers.logo()
+    }
+}
+
+/// Handles word-wise moves and deletions: `Ctrl+Left`/`Right` (with Shift to
+/// select), `Ctrl+Backspace` and `Ctrl+Delete`; `Alt` instead of `Ctrl` on
+/// macOS (see [`word_modifier`]).
+fn word_shortcut(
+    key: &keyboard::Key,
+    modifiers: &keyboard::Modifiers,
+) -> Option<Action<Message>> {
+    use keyboard::key::Named;
+
+    if !word_modifier(modifiers) {
+        return None;
+    }
+    let keyboard::Key::Named(named) = key else {
+        return None;
+    };
+    let message = match named {
+        Named::ArrowLeft => Message::WordLeft(modifiers.shift()),
+        Named::ArrowRight => Message::WordRight(modifiers.shift()),
+        Named::Backspace if !modifiers.shift() => Message::DeleteWordBack,
+        Named::Delete if !modifiers.shift() => Message::DeleteWordForward,
+        _ => return None,
+    };
+    Some(Action::publish(message).and_capture())
+}
+
 /// Handles `Ctrl/Cmd+Home` (jump to the start of the document) and
 /// `Ctrl/Cmd+End` (jump to the end).
 fn navigation_shortcut(
@@ -297,6 +334,7 @@ impl CodeEditor {
             .or_else(|| multi_cursor_shortcut(key, modified_key, modifiers))
             .or_else(|| editing_shortcut(key, modified_key, modifiers))
             .or_else(|| line_move_shortcut(key, modifiers))
+            .or_else(|| word_shortcut(key, modifiers))
             .or_else(|| navigation_shortcut(key, modifiers))
             .or_else(|| self.folding_shortcut(key, modified_key, modifiers))
     }
@@ -1084,5 +1122,61 @@ mod tests {
         assert!(shortcut(&editor, &character("."), ctrl).is_none());
         assert!(shortcut(&editor, &character("k"), ctrl).is_none());
         assert!(shortcut(&editor, &character("j"), ctrl).is_none());
+    }
+
+    #[test]
+    fn test_word_shortcuts() {
+        use keyboard::key::Named;
+        let editor = CodeEditor::new("one", "rs");
+        let word = if cfg!(target_os = "macos") {
+            keyboard::Modifiers::ALT
+        } else {
+            keyboard::Modifiers::CTRL
+        };
+        let word_shift = word | keyboard::Modifiers::SHIFT;
+
+        assert!(matches!(
+            shortcut(&editor, &named(Named::ArrowLeft), word),
+            Some(Message::WordLeft(false))
+        ));
+        assert!(matches!(
+            shortcut(&editor, &named(Named::ArrowRight), word_shift),
+            Some(Message::WordRight(true))
+        ));
+        assert!(matches!(
+            shortcut(&editor, &named(Named::Backspace), word),
+            Some(Message::DeleteWordBack)
+        ));
+        assert!(matches!(
+            shortcut(&editor, &named(Named::Delete), word),
+            Some(Message::DeleteWordForward)
+        ));
+
+        // Plain arrows stay character moves; Ctrl+Alt+Up/Down stay
+        // multi-cursor; Shift+Delete stays "delete selection".
+        assert!(
+            shortcut(
+                &editor,
+                &named(Named::ArrowLeft),
+                keyboard::Modifiers::empty()
+            )
+            .is_none()
+        );
+        assert!(
+            shortcut(
+                &editor,
+                &named(Named::ArrowLeft),
+                keyboard::Modifiers::CTRL | keyboard::Modifiers::ALT
+            )
+            .is_none()
+        );
+        assert!(matches!(
+            shortcut(
+                &editor,
+                &named(Named::Delete),
+                keyboard::Modifiers::SHIFT
+            ),
+            Some(Message::DeleteSelection)
+        ));
     }
 }

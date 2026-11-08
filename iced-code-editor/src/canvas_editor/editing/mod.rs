@@ -7,3 +7,4 @@ mod cursor;
 pub(crate) mod cursor_set;
 pub mod history;
 mod selection;
+pub(crate) mod word;

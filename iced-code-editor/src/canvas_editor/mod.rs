@@ -403,7 +403,8 @@ pub enum Message {
     PageUp(bool),
     /// Page Down pressed (move down one page, shift_pressed)
     PageDown(bool),
-    /// Home key pressed (move to start of line, shift_pressed)
+    /// Home key pressed (shift_pressed): move to the first non-blank
+    /// character of the line, or to column 0 when already there
     Home(bool),
     /// End key pressed (move to end of line, shift_pressed)
     End(bool),
@@ -411,6 +412,16 @@ pub enum Message {
     CtrlHome,
     /// Ctrl+End pressed (move to end of document)
     CtrlEnd,
+    /// Ctrl+Left (Alt+Left on macOS): move one word left (shift_pressed)
+    WordLeft(bool),
+    /// Ctrl+Right (Alt+Right on macOS): move one word right (shift_pressed)
+    WordRight(bool),
+    /// Ctrl+Backspace (Alt+Backspace on macOS): delete the word before the
+    /// cursor (or the selection, if there is one)
+    DeleteWordBack,
+    /// Ctrl+Delete (Alt+Delete on macOS): delete the word after the cursor
+    /// (or the selection, if there is one)
+    DeleteWordForward,
     /// Go to an explicit logical position (line, column), both 0-based.
     GotoPosition(usize, usize),
     /// Open the go-to-line dialog (Cmd/Ctrl+G).
