@@ -13,7 +13,9 @@
 //! `application` builder needs one `fn(&mut DemoApp, Message) ->
 //! Task<Message>` regardless of how the handlers behind it are organized.
 
-use crate::types::{EditorId, EditorToggle, FontOption, Template};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::types::EditorToggle;
+use crate::types::{EditorId, FontOption, Template};
 #[cfg(not(target_arch = "wasm32"))]
 use iced::mouse;
 #[cfg(not(target_arch = "wasm32"))]

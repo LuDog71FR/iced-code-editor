@@ -50,6 +50,14 @@ use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
+/// WASM entry point, called by `wasm-bindgen` when the module loads.
+///
+/// Runs the demo application.
+///
+/// # Errors
+///
+/// Returns the startup error from `run_app`, converted into a JavaScript
+/// exception value.
 pub fn start() -> Result<(), JsValue> {
     run_app().map_err(|e| JsValue::from_str(&e.to_string()))
 }

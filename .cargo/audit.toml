@@ -85,7 +85,7 @@ ignore = [
     # - iced -> iced_winit -> mundy -> zbus 5
     # - demo-app -> opener -> zbus 5
     # zbus and zbus_macros bring in all three crates. mundy 0.2.3 still
-    # requires zbus ^5.0.0; opener 0.8.5 requires zbus ^5. Updating individual
+    # requires zbus ^5.0.0; opener 0.9.0 requires zbus ^5. Updating individual
     # subcrates cannot resolve notices that apply to every standalone version.
     #
     # Accept the maintenance risk while retaining Linux system-theme and file
