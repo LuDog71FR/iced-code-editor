@@ -7,12 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+
+## [0.5.3] - 2026-11-08
+
 ### Added
 
 - feat: `CodeEditor::selection_range` and `CodeEditor::selected_text` expose the
   primary cursor's selection (normalized `(line, column)` range, and its text),
   `None` when nothing is selected
   ([#34](https://github.com/LuDog71FR/iced-code-editor/issues/34)).
+- feat: word-wise navigation and deletion, as in VS Code, JetBrains and Sublime Text
+  ([#37](https://github.com/LuDog71FR/iced-code-editor/pull/37)).
+  `Ctrl+Left`/`Ctrl+Right` move one word (`Shift` extends the selection),
+  `Ctrl+Backspace`/`Ctrl+Delete` delete one word (or the selection, if any). On macOS
+  the modifier is `Alt`. A word is a run of identifier characters or of punctuation;
+  whitespace before it is skipped, and at a line boundary the move crosses into the
+  neighbouring line. Every cursor moves, and a word deletion is undone in one step.
+  `Ctrl+Alt+Arrow` (multi-cursor) and `Shift+Delete` keep their meaning. New
+  messages: `WordLeft(bool)`, `WordRight(bool)`, `DeleteWordBack`,
+  `DeleteWordForward`.
+
+### Changed
+
+- `Home` now jumps to the first non-blank character of the line, and to column 0 when
+  the cursor is already there ("smart Home"), as in most code editors.
+- chore(deps): `iced_aw` upgraded from 0.13 to 0.14 (still on `iced` 0.14).
+- chore(deps): demo app: `opener` upgraded from 0.8 to 0.9 (still on `zbus` 5, so
+  the `zbus` audit exceptions stay).
+- chore(deps): demo app: `rfd` upgraded from 0.17 to 0.18.
+- chore(deps): dev: `criterion` upgraded from 0.5 to 0.8 (benchmarks only).
+
+### Security
+
+- fix(deps): resolve `cargo audit` warnings. `rust-i18n` upgraded to 4.2.4, which
+  drops `unsafe-libyaml`; `clipboard-win` moved to the non-yanked 5.4.3 release.
+  The three standalone `zbus` crates are documented as maintenance-risk exceptions
+  in `.cargo/audit.toml` until `mundy` and `opener` migrate to `zbus` 6; strict
+  warning enforcement stays enabled.
+- fix(deps): drop the unmaintained `pin-utils` (RUSTSEC-2026-0441) by updating
+  `futures-util` to 0.3.34 and `wasmtimer` to 0.4.5, so `cargo audit --deny warnings`
+  passes without a new ignore entry.
 
 ## [0.5.2] - 2026-09-01
 
