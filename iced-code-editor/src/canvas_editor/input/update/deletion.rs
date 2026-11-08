@@ -6,6 +6,7 @@ use super::{EditType, adjust_other_cursors};
 use crate::canvas_editor::editing::command::{
     Command, DeleteCharCommand, DeleteForwardCommand,
 };
+use crate::canvas_editor::editing::word;
 use crate::canvas_editor::{CodeEditor, Message};
 
 impl CodeEditor {
@@ -133,6 +134,47 @@ impl CodeEditor {
 
         self.finish_edit_operation();
         Task::none()
+    }
+
+    /// Handles `Ctrl+Backspace`/`Ctrl+Delete` (`Alt` on macOS).
+    ///
+    /// With a selection, deletes the selection, like Backspace and Delete.
+    /// Otherwise each cursor deletes up to the word boundary before it
+    /// (`forward == false`) or after it (`forward == true`), see
+    /// [`word`]. At a line boundary that joins the two lines.
+    pub(crate) fn handle_delete_word(
+        &mut self,
+        forward: bool,
+    ) -> Task<Message> {
+        if !self.has_focus() {
+            return Task::none();
+        }
+        if !self.keep_vim_insert_group() {
+            self.end_grouping_if_active();
+        }
+
+        if self.delete_selection_if_present() {
+            return self.scroll_to_cursor();
+        }
+
+        // Turn each word into a selection, then reuse the selection delete,
+        // which already handles several cursors and the undo history.
+        for cursor in self.cursors.as_mut_slice() {
+            let start = cursor.position;
+            cursor.position = if forward {
+                word::word_right(&self.buffer, start)
+            } else {
+                word::word_left(&self.buffer, start)
+            };
+            cursor.anchor = (cursor.position != start).then_some(start);
+        }
+        self.cursors.sort_and_merge();
+
+        if self.delete_selection_if_present() {
+            self.scroll_to_cursor()
+        } else {
+            Task::none()
+        }
     }
 
     /// Handles explicit selection deletion (Shift+Delete).
@@ -267,5 +309,74 @@ mod tests {
         assert_eq!(editor.buffer.line(0), "line3");
         assert_eq!(editor.cursors.primary_position(), (0, 2));
         assert!(editor.cursors.primary().anchor.is_none());
+    }
+
+    #[test]
+    fn test_delete_word_back_and_forward() {
+        let mut editor = CodeEditor::new("let foo_bar = 1;", "rs");
+        editor.focus_for_test();
+        editor.cursors.primary_mut().position = (0, 11);
+
+        let _ = editor.update(&Message::DeleteWordBack);
+        assert_eq!(editor.buffer.line(0), "let  = 1;");
+        assert_eq!(editor.cursors.primary_position(), (0, 4));
+
+        let _ = editor.update(&Message::DeleteWordForward);
+        assert_eq!(editor.buffer.line(0), "let  1;");
+        assert_eq!(editor.cursors.primary_position(), (0, 4));
+        assert!(!editor.cursors.primary().has_selection());
+    }
+
+    #[test]
+    fn test_delete_word_joins_lines_at_a_boundary() {
+        let mut editor = CodeEditor::new("ab\ncd", "rs");
+        editor.focus_for_test();
+        editor.cursors.primary_mut().position = (1, 0);
+
+        let _ = editor.update(&Message::DeleteWordBack);
+        assert_eq!(editor.buffer.line(0), "abcd");
+        assert_eq!(editor.cursors.primary_position(), (0, 2));
+
+        let _ = editor.update(&Message::End(false));
+        let _ = editor.update(&Message::DeleteWordForward);
+        assert_eq!(editor.buffer.line(0), "abcd");
+
+        let _ = editor.update(&Message::CtrlHome);
+        let _ = editor.update(&Message::DeleteWordBack);
+        assert_eq!(editor.buffer.line(0), "abcd");
+    }
+
+    #[test]
+    fn test_delete_word_with_selection_deletes_only_the_selection() {
+        let mut editor = CodeEditor::new("hello world", "rs");
+        editor.focus_for_test();
+        editor.cursors.primary_mut().anchor = Some((0, 1));
+        editor.cursors.primary_mut().position = (0, 3);
+
+        let _ = editor.update(&Message::DeleteWordBack);
+        assert_eq!(editor.buffer.line(0), "hlo world");
+        assert_eq!(editor.cursors.primary_position(), (0, 1));
+    }
+
+    #[test]
+    fn test_delete_word_is_undone_in_one_step() {
+        let mut editor = CodeEditor::new("alpha beta", "rs");
+        editor.focus_for_test();
+        editor.cursors.primary_mut().position = (0, 10);
+
+        let _ = editor.update(&Message::DeleteWordBack);
+        assert_eq!(editor.buffer.line(0), "alpha ");
+
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.buffer.line(0), "alpha beta");
+    }
+
+    #[test]
+    fn test_delete_word_needs_focus() {
+        let mut editor = CodeEditor::new("alpha beta", "rs");
+        editor.cursors.primary_mut().position = (0, 10);
+
+        let _ = editor.update(&Message::DeleteWordBack);
+        assert_eq!(editor.buffer.line(0), "alpha beta");
     }
 }

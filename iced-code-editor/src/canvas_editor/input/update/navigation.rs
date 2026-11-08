@@ -2,6 +2,7 @@
 
 use iced::Task;
 
+use crate::canvas_editor::editing::word;
 use crate::canvas_editor::{ArrowDirection, CodeEditor, Message, VimMode};
 
 impl CodeEditor {
@@ -66,7 +67,8 @@ impl CodeEditor {
 
     /// Handles Home key press.
     ///
-    /// Moves the cursor to the start of the current line.
+    /// Moves the cursor to the first non-blank character of the line, or to
+    /// column 0 when it is already there (as in VS Code and JetBrains).
     ///
     /// # Arguments
     ///
@@ -79,7 +81,37 @@ impl CodeEditor {
     pub(crate) fn handle_home(&mut self, shift_pressed: bool) -> Task<Message> {
         self.begin_navigation(shift_pressed);
         for cursor in self.cursors.as_mut_slice() {
-            cursor.position.1 = 0;
+            let first =
+                word::first_non_blank(self.buffer.line(cursor.position.0));
+            cursor.position.1 =
+                if cursor.position.1 == first { 0 } else { first };
+        }
+        self.cursors.sort_and_merge();
+        self.finish_navigation_operation();
+        self.scroll_to_cursor()
+    }
+
+    /// Handles `Ctrl+Left`/`Ctrl+Right` (`Alt` on macOS).
+    ///
+    /// Moves every cursor one word left or right (see [`word`]), crossing
+    /// into the neighbouring line at a line boundary.
+    ///
+    /// # Arguments
+    ///
+    /// * `forward` - `true` for right, `false` for left
+    /// * `shift_pressed` - Whether Shift is held (for selection)
+    pub(crate) fn handle_word_move(
+        &mut self,
+        forward: bool,
+        shift_pressed: bool,
+    ) -> Task<Message> {
+        self.begin_navigation(shift_pressed);
+        for cursor in self.cursors.as_mut_slice() {
+            cursor.position = if forward {
+                word::word_right(&self.buffer, cursor.position)
+            } else {
+                word::word_left(&self.buffer, cursor.position)
+            };
         }
         self.cursors.sort_and_merge();
         self.finish_navigation_operation();
@@ -569,5 +601,87 @@ mod tests {
 
         let _ = editor.update(&Message::Undo);
         assert_eq!(editor.buffer.line(0), "hello");
+    }
+
+    #[test]
+    fn test_home_goes_to_first_non_blank_then_to_column_zero() {
+        let mut editor = CodeEditor::new("    let x = 1;", "rs");
+        editor.cursors.primary_mut().position = (0, 10);
+
+        let _ = editor.update(&Message::Home(false));
+        assert_eq!(editor.cursors.primary_position(), (0, 4));
+
+        let _ = editor.update(&Message::Home(false));
+        assert_eq!(editor.cursors.primary_position(), (0, 0));
+
+        let _ = editor.update(&Message::Home(false));
+        assert_eq!(editor.cursors.primary_position(), (0, 4));
+    }
+
+    #[test]
+    fn test_shift_home_selects_to_first_non_blank() {
+        let mut editor = CodeEditor::new("  foo", "rs");
+        editor.cursors.primary_mut().position = (0, 5);
+
+        let _ = editor.update(&Message::Home(true));
+        assert_eq!(editor.cursors.primary_position(), (0, 2));
+        assert_eq!(editor.cursors.primary().anchor, Some((0, 5)));
+    }
+
+    #[test]
+    fn test_word_moves_skip_one_run_and_cross_lines() {
+        let mut editor = CodeEditor::new(
+            "foo.bar baz
+qux",
+            "rs",
+        );
+        editor.cursors.primary_mut().position = (0, 0);
+
+        let mut stops = Vec::new();
+        for _ in 0..6 {
+            let _ = editor.update(&Message::WordRight(false));
+            stops.push(editor.cursors.primary_position());
+        }
+        assert_eq!(stops, [(0, 3), (0, 4), (0, 7), (0, 11), (1, 0), (1, 3)]);
+
+        let mut stops = Vec::new();
+        for _ in 0..6 {
+            let _ = editor.update(&Message::WordLeft(false));
+            stops.push(editor.cursors.primary_position());
+        }
+        assert_eq!(stops, [(1, 0), (0, 11), (0, 8), (0, 4), (0, 3), (0, 0)]);
+    }
+
+    #[test]
+    fn test_shift_word_move_extends_the_selection() {
+        let mut editor = CodeEditor::new("alpha beta gamma", "rs");
+        editor.cursors.primary_mut().position = (0, 0);
+
+        let _ = editor.update(&Message::WordRight(true));
+        let _ = editor.update(&Message::WordRight(true));
+        assert_eq!(editor.cursors.primary().anchor, Some((0, 0)));
+        assert_eq!(editor.cursors.primary_position(), (0, 10));
+        assert_eq!(editor.get_selected_text().as_deref(), Some("alpha beta"));
+
+        // A plain word move drops the selection.
+        let _ = editor.update(&Message::WordLeft(false));
+        assert!(!editor.cursors.primary().has_selection());
+        assert_eq!(editor.cursors.primary_position(), (0, 6));
+    }
+
+    #[test]
+    fn test_word_move_moves_every_cursor() {
+        let mut editor = CodeEditor::new(
+            "one two
+three four",
+            "rs",
+        );
+        editor.cursors.primary_mut().position = (0, 0);
+        editor.cursors.add_cursor((1, 0));
+
+        let _ = editor.update(&Message::WordRight(false));
+        let positions: Vec<_> =
+            editor.cursors.iter().map(|cursor| cursor.position).collect();
+        assert_eq!(positions, [(0, 3), (1, 5)]);
     }
 }

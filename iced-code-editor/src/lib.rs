@@ -122,7 +122,10 @@
 //! |----------|--------|
 //! | **Arrow Keys** (Up, Down, Left, Right) | Move cursor |
 //! | **Shift + Arrows** | Move cursor with selection |
-//! | **Home** / **End** | Jump to start/end of line |
+//! | **Ctrl + Left** / **Ctrl + Right** | Move one word left/right (**Alt** on macOS) |
+//! | **Shift + Ctrl + Left/Right** | Select one word left/right |
+//! | **Home** | Jump to the first non-blank character; press again for column 0 |
+//! | **End** | Jump to end of line |
 //! | **Shift + Home** / **Shift + End** | Select to start/end of line |
 //! | **Ctrl + Home** / **Ctrl + End** | Jump to start/end of document |
 //! | **Page Up** / **Page Down** | Scroll one page up/down |
@@ -133,6 +136,8 @@
 //! |----------|--------|
 //! | **Backspace** | Delete character before cursor (or delete selection if text is selected) |
 //! | **Delete** | Delete character after cursor (or delete selection if text is selected) |
+//! | **Ctrl + Backspace** | Delete the word before the cursor (**Alt** on macOS) |
+//! | **Ctrl + Delete** | Delete the word after the cursor (**Alt** on macOS) |
 //! | **Shift + Delete** | Delete selected text (same as Delete when selection exists) |
 //! | **Enter** | Insert new line |
 //!
