@@ -12,6 +12,49 @@ impl CodeEditor {
         self.overlay_cache.clear();
     }
 
+    /// Returns the primary cursor's selection as `(start, end)` positions.
+    ///
+    /// Positions are `(line, column)`, 0-indexed, with the column counted in
+    /// characters (like [`CodeEditor::cursor_position`]). The range is
+    /// normalized: `start` comes before `end`, whichever way the selection
+    /// was made. Returns `None` when nothing is selected. With several
+    /// cursors, only the primary one is considered.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// let mut editor = CodeEditor::new("one\ntwo", "txt");
+    /// assert_eq!(editor.selection_range(), None);
+    ///
+    /// let _ = editor.update(&Message::SelectAll);
+    /// assert_eq!(editor.selection_range(), Some(((0, 0), (1, 3))));
+    /// ```
+    pub fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
+        self.get_selection_range().filter(|(start, end)| start != end)
+    }
+
+    /// Returns the text selected by the primary cursor.
+    ///
+    /// Lines are joined with `\n`. Returns `None` when nothing is selected.
+    /// With several cursors, only the primary one is considered.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, Message};
+    ///
+    /// let mut editor = CodeEditor::new("one\ntwo", "txt");
+    /// assert_eq!(editor.selected_text(), None);
+    ///
+    /// let _ = editor.update(&Message::SelectAll);
+    /// assert_eq!(editor.selected_text().as_deref(), Some("one\ntwo"));
+    /// ```
+    pub fn selected_text(&self) -> Option<String> {
+        self.get_selected_text()
+    }
+
     /// Returns the primary cursor's selected text range in normalized order (start before end).
     pub(crate) fn get_selection_range(
         &self,
