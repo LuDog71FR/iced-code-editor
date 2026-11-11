@@ -28,19 +28,63 @@ const CODE_TEXT_LEFT_PADDING: f32 = 5.0;
 /// Thickness in pixels of the separator drawn under the sticky-scroll headers.
 const STICKY_SEPARATOR_WIDTH: f32 = 1.0;
 
+/// Rail width in pixels of the canvas editor's scrollbars (the area that takes
+/// the mouse).
+const SCROLLBAR_WIDTH: f32 = 8.0;
+/// Width in pixels of the scroller (thumb) inside the rail.
+const SCROLLER_WIDTH: f32 = 6.0;
+/// Space in pixels between the scrollbar and the editor's edge.
+const SCROLLBAR_MARGIN: f32 = 2.0;
+
+/// The canvas editor's scrollbar: a thin pill, away from the edge.
+fn canvas_scrollbar() -> scrollable::Scrollbar {
+    scrollable::Scrollbar::new()
+        .width(SCROLLBAR_WIDTH)
+        .scroller_width(SCROLLER_WIDTH)
+        .margin(SCROLLBAR_MARGIN)
+}
+
+/// How opaque the scroller is: faint with the mouse away from the editor,
+/// plain over it, solid over the scrollbar or while dragging it. Returns the
+/// (vertical, horizontal) factors.
+fn scroller_alpha(status: scrollable::Status) -> (f32, f32) {
+    let pick = |on_bar: bool| if on_bar { 1.0 / 0.6 } else { 1.0 };
+    match status {
+        scrollable::Status::Active { .. } => (0.6, 0.6),
+        scrollable::Status::Hovered {
+            is_vertical_scrollbar_hovered: v,
+            is_horizontal_scrollbar_hovered: h,
+            ..
+        } => (pick(v), pick(h)),
+        scrollable::Status::Dragged {
+            is_vertical_scrollbar_dragged: v,
+            is_horizontal_scrollbar_dragged: h,
+            ..
+        } => (pick(v), pick(h)),
+    }
+}
+
 /// Builds the transparent-container scrollable style shared by the canvas
-/// editor's vertical and horizontal scrollbars.
+/// editor's vertical and horizontal scrollbars: pill-shaped scrollers whose
+/// opacity follows the mouse (see [`scroller_alpha`]).
 fn canvas_scrollbar_style(
     scrollbar_bg: Color,
     scroller_color: Color,
+    status: scrollable::Status,
 ) -> scrollable::Style {
+    let (v, h) = scroller_alpha(status);
+    let scale =
+        |a: f32| Color { a: (scroller_color.a * a).min(1.0), ..scroller_color };
+    // A radius larger than the scroller: the renderer caps it at half the
+    // side, so the ends are round.
+    let pill = SCROLLBAR_WIDTH * 10.0;
     scrollable::Style {
         container: container::Style {
             background: Some(Background::Color(Color::TRANSPARENT)),
             ..container::Style::default()
         },
-        vertical_rail: scrollable_rail(scrollbar_bg, scroller_color, 4.0),
-        horizontal_rail: scrollable_rail(scrollbar_bg, scroller_color, 4.0),
+        vertical_rail: scrollable_rail(scrollbar_bg, scale(v), pill),
+        horizontal_rail: scrollable_rail(scrollbar_bg, scale(h), pill),
         gap: None,
         auto_scroll: scrollable::AutoScroll {
             background: Color::TRANSPARENT.into(),
@@ -81,8 +125,8 @@ impl CodeEditor {
         let scrollbar_bg = self.style.scrollbar_background;
         let scroller_color = self.style.scroller_color;
 
-        move |_theme, _status| {
-            canvas_scrollbar_style(scrollbar_bg, scroller_color)
+        move |_theme, status| {
+            canvas_scrollbar_style(scrollbar_bg, scroller_color, status)
         }
     }
 
@@ -107,6 +151,7 @@ impl CodeEditor {
             .id(self.scrollable_id.clone())
             .width(Length::Fill)
             .height(Length::Fill)
+            .direction(scrollable::Direction::Vertical(canvas_scrollbar()))
             .on_scroll(Message::Scrolled)
             .style(self.create_scrollable_style())
     }
@@ -160,12 +205,10 @@ impl CodeEditor {
         .id(self.horizontal_scrollable_id.clone())
         .width(Length::Fill)
         .height(Length::Fixed(12.0))
-        .direction(scrollable::Direction::Horizontal(
-            scrollable::Scrollbar::new(),
-        ))
+        .direction(scrollable::Direction::Horizontal(canvas_scrollbar()))
         .on_scroll(Message::HorizontalScrolled)
-        .style(move |_theme, _status| {
-            canvas_scrollbar_style(scrollbar_bg, scroller_color)
+        .style(move |_theme, status| {
+            canvas_scrollbar_style(scrollbar_bg, scroller_color, status)
         });
 
         Some(h_scrollable.into())
@@ -1095,7 +1138,11 @@ mod tests {
     fn test_canvas_scrollbar_style_uses_transparent_container() {
         let bg = Color::from_rgb(0.1, 0.2, 0.3);
         let scroller = Color::from_rgb(0.4, 0.5, 0.6);
-        let style = canvas_scrollbar_style(bg, scroller);
+        let active = scrollable::Status::Active {
+            is_horizontal_scrollbar_disabled: false,
+            is_vertical_scrollbar_disabled: false,
+        };
+        let style = canvas_scrollbar_style(bg, scroller, active);
 
         assert_eq!(
             style.container.background,
@@ -1104,6 +1151,39 @@ mod tests {
         let expected_rail = scrollable_rail(bg, scroller, 4.0);
         assert_eq!(style.vertical_rail.background, expected_rail.background);
         assert_eq!(style.horizontal_rail.background, expected_rail.background);
+    }
+
+    #[test]
+    fn test_canvas_scroller_is_faint_away_and_solid_on_the_bar() {
+        let bg = Color::TRANSPARENT;
+        let scroller = Color::from_rgba(0.4, 0.5, 0.6, 0.6);
+        let alpha = |status| match canvas_scrollbar_style(bg, scroller, status)
+            .vertical_rail
+            .scroller
+            .background
+        {
+            Background::Color(c) => c.a,
+            // Not a solid color: NaN makes every comparison below fail.
+            _ => f32::NAN,
+        };
+        let away = alpha(scrollable::Status::Active {
+            is_horizontal_scrollbar_disabled: false,
+            is_vertical_scrollbar_disabled: false,
+        });
+        let over = alpha(scrollable::Status::Hovered {
+            is_horizontal_scrollbar_hovered: false,
+            is_vertical_scrollbar_hovered: false,
+            is_horizontal_scrollbar_disabled: false,
+            is_vertical_scrollbar_disabled: false,
+        });
+        let on_bar = alpha(scrollable::Status::Dragged {
+            is_horizontal_scrollbar_dragged: false,
+            is_vertical_scrollbar_dragged: true,
+            is_horizontal_scrollbar_disabled: false,
+            is_vertical_scrollbar_disabled: false,
+        });
+        assert!(away < over && over < on_bar, "{away} {over} {on_bar}");
+        assert!((on_bar - 1.0).abs() < 1e-6);
     }
 }
 
