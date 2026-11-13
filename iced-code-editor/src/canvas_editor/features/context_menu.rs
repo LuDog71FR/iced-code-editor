@@ -491,16 +491,35 @@ fn menu_item(
             } else {
                 palette.background.weak.text.scale_alpha(0.35)
             };
-            let background = matches!(
-                status,
-                button::Status::Hovered | button::Status::Pressed
-            )
-            .then_some(Background::Color(palette.background.strong.color));
+            // A translucent accent keeps the menu surface visible while
+            // giving hover and press distinct, softer feedback in both themes.
+            let highlight_alpha = match status {
+                button::Status::Hovered => {
+                    if palette.is_dark {
+                        0.18
+                    } else {
+                        0.10
+                    }
+                }
+                button::Status::Pressed => {
+                    if palette.is_dark {
+                        0.28
+                    } else {
+                        0.18
+                    }
+                }
+                button::Status::Active | button::Status::Disabled => 0.0,
+            };
+            let background = (enabled && highlight_alpha > 0.0).then_some(
+                Background::Color(
+                    palette.primary.base.color.scale_alpha(highlight_alpha),
+                ),
+            );
 
             button::Style {
                 background,
                 text_color,
-                border: Border { radius: 4.0.into(), ..Border::default() },
+                border: Border { radius: 6.0.into(), ..Border::default() },
                 ..button::Style::default()
             }
         })
