@@ -1,5 +1,10 @@
 # Traducciones en español
 search:
+  select_all_matches_tooltip: "Seleccionar todas las coincidencias"
+  whole_word_tooltip: "Palabras completas"
+  regex_tooltip: "Usar expresiones regulares"
+  multiline_tooltip: "Expandir / Contraer entrada multilínea"
+  toggle_replace_tooltip: "Mostrar / Ocultar reemplazo"
   placeholder: "Buscar..."
   close_tooltip: "Cerrar búsqueda (Esc)"
   previous_match_tooltip: "Coincidencia anterior (Mayús+F3)"

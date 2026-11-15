@@ -164,6 +164,20 @@ impl CursorSet {
         self.sort_and_merge();
     }
 
+    /// Installs non-overlapping cursors already ordered by document position.
+    /// Adjacent search selections stay separate. An empty list is a no-op.
+    pub(crate) fn replace_sorted(
+        &mut self,
+        cursors: Vec<Cursor>,
+        primary: usize,
+    ) {
+        if cursors.is_empty() {
+            return;
+        }
+        self.primary_idx = primary.min(cursors.len() - 1);
+        self.cursors = cursors;
+    }
+
     /// Removes all cursors except the primary one.
     pub fn remove_all_but_primary(&mut self) {
         let primary = self.cursors[self.primary_idx].clone();
@@ -532,5 +546,38 @@ mod tests {
         let shorthand = cs.descending_order();
         let explicit = cs.descending_order_by_key(|_| true, |c| c.position);
         assert_eq!(shorthand, explicit);
+    }
+}
+
+#[cfg(test)]
+mod bulk_selection_tests {
+    use super::*;
+
+    #[test]
+    fn installing_adjacent_selections_keeps_their_ranges_and_primary_cursor() {
+        let selections = vec![
+            Cursor { anchor: Some((0, 0)), position: (0, 2) },
+            Cursor { anchor: Some((0, 2)), position: (0, 4) },
+            Cursor { anchor: Some((1, 0)), position: (1, 2) },
+        ];
+        let mut cursors = CursorSet::new((3, 5));
+        cursors.replace_sorted(selections.clone(), 1);
+        assert_eq!(cursors.as_slice(), selections);
+        assert_eq!(cursors.primary().selection_range(), Some(((0, 2), (0, 4))));
+    }
+
+    #[test]
+    fn empty_bulk_selection_preserves_existing_state_and_primary_is_clamped() {
+        let mut cursors = CursorSet::new((1, 2));
+        cursors.add_cursor((2, 3));
+        let original = cursors.as_slice().to_vec();
+        cursors.replace_sorted(Vec::new(), 0);
+        assert_eq!(cursors.as_slice(), original);
+        assert_eq!(cursors.primary_position(), (2, 3));
+        cursors.replace_sorted(
+            vec![Cursor::new((0, 0)), Cursor::new((0, 2))],
+            usize::MAX,
+        );
+        assert_eq!(cursors.primary_position(), (0, 2));
     }
 }

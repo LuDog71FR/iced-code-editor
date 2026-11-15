@@ -157,6 +157,41 @@ impl CodeEditor {
             Message::ToggleCaseSensitive => {
                 self.handle_toggle_case_sensitive_msg()
             }
+            Message::ToggleWholeWord | Message::ToggleSearchRegex => {
+                if matches!(message, Message::ToggleWholeWord) {
+                    self.search_state.whole_word =
+                        !self.search_state.whole_word;
+                } else {
+                    self.search_state.use_regex = !self.search_state.use_regex;
+                }
+                self.search_state.update_matches(&self.buffer);
+                self.overlay_cache.clear();
+                Task::none()
+            }
+            Message::ToggleSearchMultiline => {
+                self.search_state.multiline = !self.search_state.multiline;
+                iced::widget::operation::focus(
+                    self.search_state.search_input_id.clone(),
+                )
+            }
+            Message::ToggleSearchReplace => {
+                self.search_state.is_replace_mode =
+                    !self.search_state.is_replace_mode;
+                Task::none()
+            }
+            Message::SearchInputAction(action) => {
+                self.search_state.search_content.perform(action.clone());
+                let query = self.search_state.search_content.text();
+                self.handle_search_query_changed_msg(&query)
+            }
+            Message::ReplaceInputAction(action) => {
+                self.search_state.replace_content.perform(action.clone());
+                let value = self.search_state.replace_content.text();
+                self.handle_replace_query_changed_msg(&value)
+            }
+            Message::SelectAllSearchMatches => {
+                self.handle_select_all_search_matches()
+            }
             Message::FindNext => self.handle_find_match(true),
             Message::FindPrevious => self.handle_find_match(false),
             Message::ReplaceNext => self.handle_replace_next_msg(),

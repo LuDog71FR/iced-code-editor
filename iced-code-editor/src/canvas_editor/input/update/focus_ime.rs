@@ -68,7 +68,13 @@ impl CodeEditor {
         } else {
             self.ime_preedit = Some(ImePreedit {
                 content: content.to_string(),
-                selection: selection.clone(),
+                // Iced's runtime also renders this preedit and slices its text
+                // directly with these byte offsets. Validate here, before the
+                // range reaches either renderer, including collapsed carets.
+                selection: selection
+                    .as_ref()
+                    .filter(|range| content.get((*range).clone()).is_some())
+                    .cloned(),
             });
         }
 
@@ -122,6 +128,45 @@ impl CodeEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ime_preedit_renders_unicode_at_hidpi() -> Result<(), &'static str> {
+        use iced::advanced::graphics::geometry::Renderer as _;
+        use iced::advanced::renderer::{Headless, Renderer as _};
+        use iced::widget::canvas::Program;
+        let mut renderer =
+            iced::futures::executor::block_on(iced::Renderer::new(
+                iced::Font::DEFAULT,
+                iced::Pixels(13.0),
+                Some("tiny-skia"),
+            ))
+            .ok_or("renderer unavailable")?;
+        let mut editor = CodeEditor::new("", "txt");
+        editor.focus_for_test();
+        for content in ["ni", "中文", "nǐ", "你好", "😀", "\u{200a}"] {
+            let _ =
+                editor.handle_ime_preedit_msg(content, &Some(0..content.len()));
+            renderer.reset(iced::Rectangle::with_size(iced::Size::new(
+                500.0, 300.0,
+            )));
+            for geometry in editor.draw(
+                &None,
+                &renderer,
+                &iced::Theme::Dark,
+                iced::Rectangle::with_size(iced::Size::new(500.0, 300.0)),
+                iced::mouse::Cursor::Unavailable,
+            ) {
+                renderer.draw_geometry(geometry);
+            }
+            let pixels = renderer.screenshot(
+                iced::Size::new(500, 300),
+                2.0,
+                iced::Color::BLACK,
+            );
+            assert!(!pixels.is_empty());
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_canvas_focus_lost() {
@@ -226,5 +271,44 @@ mod tests {
 
         assert!(editor.has_canvas_focus);
         assert!(editor.show_cursor);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_ime_preedit_rejects_invalid_byte_ranges() {
+        let mut editor = CodeEditor::new("", "txt");
+        for selection in [
+            1..1,
+            0..4,
+            0..100,
+            std::ops::Range { start: 6, end: 3 },
+            usize::MAX..usize::MAX,
+        ] {
+            let _ = editor.handle_ime_preedit_msg("中文", &Some(selection));
+            let preedit = editor.ime_preedit.as_ref().unwrap();
+            assert_eq!(preedit.content, "中文");
+            assert_eq!(preedit.selection, None);
+        }
+
+        // Invalid selection metadata must not discard the committed text.
+        let _ = editor.handle_ime_commit_msg("中文");
+        assert_eq!(editor.content(), "中文");
+        assert!(editor.ime_preedit.is_none());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_ime_preedit_preserves_valid_unicode_ranges() {
+        let mut editor = CodeEditor::new("", "txt");
+        for selection in [None, Some(0..0), Some(0..3), Some(3..7), Some(8..8)]
+        {
+            let _ = editor.handle_ime_preedit_msg("中😀a", &selection);
+            assert_eq!(
+                editor.ime_preedit.as_ref().unwrap().selection,
+                selection
+            );
+        }
+        let _ = editor.handle_ime_preedit_msg("", &Some(0..100));
+        assert!(editor.ime_preedit.is_none());
     }
 }

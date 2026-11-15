@@ -285,14 +285,25 @@ All editing operations (typing, backspace, delete, enter, tab, paste) apply simu
 
 ### Search and Replace
 
-| Shortcut          | Action                         |
-| ----------------- | ------------------------------ |
-| **Ctrl + F**      | Open search dialog             |
-| **Ctrl + H**      | Open search and replace dialog |
-| **F3**            | Find next match                |
-| **Shift + F3**    | Find previous match            |
-| **Tab** / **Shift + Tab** | Cycle through the dialog fields |
-| **Escape**        | Close search dialog            |
+| Action | macOS | Windows / Linux |
+| --- | --- | --- |
+| Open search | Cmd+F | Ctrl+F |
+| Open search and replace | Cmd+H | Ctrl+H |
+| Toggle replacement row (search open) | Cmd+Shift+H | Ctrl+H |
+| Match case | Cmd+Option+C | Alt+C |
+| Match whole words | Cmd+Option+W | Alt+W |
+| Use regular expressions | Cmd+Option+R | Alt+R |
+| Expand / collapse multiline input | Cmd+Option+M | Alt+M |
+| Select all matches | Option+Enter | Alt+Enter |
+| Next match | Cmd+G or F3 | F3 |
+| Previous match | Cmd+Shift+G or Shift+F3 | Shift+F3 |
+| Replace next match | Enter in replacement field | Enter in replacement field |
+| Replace next match (also in multiline mode) | Cmd+Shift+Enter | Ctrl+Shift+Enter |
+| Replace all matches | Cmd+Enter | Ctrl+Enter |
+| Cycle dialog fields | Tab / Shift+Tab | Tab / Shift+Tab |
+| Close search | Escape | Escape |
+
+Toolbar shortcuts apply while search is open. Enter in the compact search field finds the next match; Enter in expanded inputs inserts a newline. Replacement shortcuts require the replacement row to be visible. Hover each toolbar button to see its platform-specific shortcut.
 
 ### Go to Line
 

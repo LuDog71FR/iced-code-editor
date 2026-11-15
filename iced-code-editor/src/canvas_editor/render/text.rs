@@ -21,6 +21,44 @@ use crate::canvas_editor::{
     CodeEditor, TAB_WIDTH, measure_char_width, measure_text_width,
 };
 
+// Keep ASCII on the configured fixed-pitch font. Unicode needs font fallback
+// and advanced shaping; preserve the editor's cell-based positions between runs.
+pub(super) fn draw_text_runs(
+    frame: &mut canvas::Frame,
+    content: &str,
+    mut position: Point,
+    color: iced::Color,
+    ctx: &RenderContext<'_>,
+) {
+    let mut start = 0;
+    while start < content.len() {
+        let ascii = content[start..].starts_with(|ch: char| ch.is_ascii());
+        let end = content[start..]
+            .char_indices()
+            .find(|(_, ch)| ch.is_ascii() != ascii)
+            .map_or(content.len(), |(i, _)| start + i);
+        let run = &content[start..end];
+        let width =
+            measure_text_width(run, ctx.full_char_width, ctx.char_width);
+        frame.fill_text(canvas::Text {
+            content: run.to_owned(),
+            position,
+            color,
+            size: ctx.font_size.into(),
+            max_width: width + ctx.font_size * 2.0,
+            font: if ascii { ctx.font } else { iced::Font::DEFAULT },
+            shaping: if ascii {
+                iced::advanced::text::Shaping::Basic
+            } else {
+                iced::advanced::text::Shaping::Advanced
+            },
+            ..canvas::Text::default()
+        });
+        position.x += width;
+        start = end;
+    }
+}
+
 /// Width in pixels of a single indentation guide line.
 const INDENT_GUIDE_WIDTH: f32 = 1.0;
 
@@ -293,25 +331,23 @@ impl CodeEditor {
                                 ctx.full_char_width,
                                 ctx.char_width,
                             );
-                            frame.fill_text(canvas::Text {
-                                content: seg.to_string(),
-                                position: Point::new(seg_x, y + 2.0),
-                                color: seg_color,
-                                size: ctx.font_size.into(),
-                                font: ctx.font,
-                                ..canvas::Text::default()
-                            });
+                            draw_text_runs(
+                                frame,
+                                seg,
+                                Point::new(seg_x, y + 2.0),
+                                seg_color,
+                                ctx,
+                            );
                             seg_x += seg_width;
                         }
                     } else {
-                        frame.fill_text(canvas::Text {
-                            content: display_text,
-                            position: Point::new(x_offset, y + 2.0),
-                            color: *color,
-                            size: ctx.font_size.into(),
-                            font: ctx.font,
-                            ..canvas::Text::default()
-                        });
+                        draw_text_runs(
+                            frame,
+                            &display_text,
+                            Point::new(x_offset, y + 2.0),
+                            *color,
+                            ctx,
+                        );
                     }
 
                     x_offset += display_width;
@@ -345,25 +381,23 @@ impl CodeEditor {
                         ctx.full_char_width,
                         ctx.char_width,
                     );
-                    frame.fill_text(canvas::Text {
-                        content: seg.to_string(),
-                        position: Point::new(seg_x, y + 2.0),
-                        color: seg_color,
-                        size: ctx.font_size.into(),
-                        font: ctx.font,
-                        ..canvas::Text::default()
-                    });
+                    draw_text_runs(
+                        frame,
+                        seg,
+                        Point::new(seg_x, y + 2.0),
+                        seg_color,
+                        ctx,
+                    );
                     seg_x += seg_width;
                 }
             } else {
-                frame.fill_text(canvas::Text {
-                    content: display_text,
-                    position: Point::new(base_x, y + 2.0),
-                    color: self.style.text_color,
-                    size: ctx.font_size.into(),
-                    font: ctx.font,
-                    ..canvas::Text::default()
-                });
+                draw_text_runs(
+                    frame,
+                    &display_text,
+                    Point::new(base_x, y + 2.0),
+                    self.style.text_color,
+                    ctx,
+                );
             }
         }
     }

@@ -733,7 +733,10 @@ impl CodeEditor {
     /// assert_eq!(editor.indent_style(), IndentStyle::Spaces(2));
     /// ```
     pub fn set_indent_style(&mut self, style: IndentStyle) {
-        self.indent_style = style;
+        if self.indent_style != style {
+            self.indent_style = style;
+            self.content_cache.clear();
+        }
     }
 
     /// Returns the current indentation style.
@@ -869,6 +872,7 @@ impl CodeEditor {
     ///
     /// When set to `Some(n)`, lines will wrap at column `n`.
     /// When set to `None`, lines will wrap at the viewport width.
+    /// Zero is normalized to one narrow-character column.
     ///
     /// # Arguments
     ///
@@ -884,8 +888,34 @@ impl CodeEditor {
     /// ```
     #[must_use]
     pub fn with_wrap_column(mut self, column: Option<usize>) -> Self {
-        self.wrap_column = column;
+        self.set_wrap_column(column);
         self
+    }
+
+    /// Sets the soft-wrap width in narrow-character columns.
+    ///
+    /// `None` uses the viewport width; `Some(0)` is normalized to `Some(1)`.
+    /// This does not modify document text or enable wrapping. Changing the
+    /// width invalidates text and overlay geometry. While wrapping is enabled,
+    /// horizontal scrolling is reset so the new visual segments stay visible.
+    pub fn set_wrap_column(&mut self, column: Option<usize>) {
+        let column = column.map(|value| value.max(1));
+        if self.wrap_column != column {
+            self.wrap_column = column;
+            if self.wrap_enabled {
+                self.horizontal_scroll_offset = 0.0;
+            }
+            self.content_cache.clear();
+            self.overlay_cache.clear();
+        }
+    }
+
+    /// Returns the soft-wrap width in narrow-character columns.
+    ///
+    /// `None` means viewport-based wrapping. The value is retained while
+    /// wrapping is disabled; zero is normalized to one by the setter.
+    pub fn wrap_column(&self) -> Option<usize> {
+        self.wrap_column
     }
 
     /// Sets whether line numbers are displayed.

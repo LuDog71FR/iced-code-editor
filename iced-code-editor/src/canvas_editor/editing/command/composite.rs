@@ -74,13 +74,26 @@ impl ReplaceTextCommand {
         new_text: String,
         cursor: (usize, usize),
     ) -> Self {
-        // Extract the old text being replaced
-        let line = buffer.line(position.0);
-        let chars: Vec<char> = line.chars().collect();
-        let old_text: String =
-            chars.iter().skip(position.1).take(old_text_len).collect();
-
-        let cursor_after = (position.0, position.1 + new_text.chars().count());
+        let mut old_text = String::new();
+        let mut remaining = old_text_len;
+        for line in position.0..buffer.line_count() {
+            let skip = if line == position.0 { position.1 } else { 0 };
+            for ch in buffer.line(line).chars().skip(skip).take(remaining) {
+                old_text.push(ch);
+            }
+            remaining = old_text_len.saturating_sub(old_text.chars().count());
+            if remaining == 0 {
+                break;
+            }
+            if line + 1 < buffer.line_count() {
+                old_text.push('\n');
+                remaining -= 1;
+            }
+            if remaining == 0 {
+                break;
+            }
+        }
+        let cursor_after = text_end(position, &new_text);
 
         Self {
             position,
@@ -98,27 +111,47 @@ impl Command for ReplaceTextCommand {
         buffer: &mut TextBuffer,
         cursor: &mut (usize, usize),
     ) {
-        // Optimized replacement using replace_range
-        buffer.replace_range(
-            self.position.0,
-            self.position.1,
-            self.old_text.chars().count(),
-            &self.new_text,
-        );
+        replace_text(buffer, self.position, &self.old_text, &self.new_text);
 
         *cursor = self.cursor_after;
     }
 
     fn undo(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) {
-        // Restore old text using replace_range
-        buffer.replace_range(
-            self.position.0,
-            self.position.1,
-            self.new_text.chars().count(),
-            &self.old_text,
-        );
+        replace_text(buffer, self.position, &self.new_text, &self.old_text);
 
         *cursor = self.cursor_before;
+    }
+}
+
+fn text_end(start: (usize, usize), text: &str) -> (usize, usize) {
+    text.chars().fold(start, |(line, col), ch| {
+        if ch == '\n' { (line + 1, 0) } else { (line, col + 1) }
+    })
+}
+
+fn replace_text(
+    buffer: &mut TextBuffer,
+    start: (usize, usize),
+    old: &str,
+    new: &str,
+) {
+    if !old.contains('\n') && !new.contains('\n') {
+        buffer.replace_range(start.0, start.1, old.chars().count(), new);
+        return;
+    }
+    for _ in old.chars() {
+        buffer.delete_forward(start.0, start.1);
+    }
+    let (mut line, mut col) = start;
+    for ch in new.chars() {
+        if ch == '\n' {
+            buffer.insert_newline(line, col);
+            line += 1;
+            col = 0;
+        } else {
+            buffer.insert_char(line, col, ch);
+            col += 1;
+        }
     }
 }
 
@@ -224,5 +257,43 @@ mod tests {
 
         composite.undo(&mut buffer, &mut cursor);
         assert_eq!(buffer.line(0), "foo foo foo");
+    }
+}
+
+#[cfg(test)]
+mod multiline_tests {
+    use super::*;
+
+    #[test]
+    fn multiline_replacements_restore_text_line_endings_and_cursor_on_undo_and_redo()
+     {
+        let cases = [
+            ("前ab\n中cd\n尾", (0, 1), 5, "😀\nx", "前😀\nxd\n尾", (1, 1)),
+            ("a\r\nb\r\n", (0, 1), 1, "", "ab\r\n", (0, 1)),
+            ("a\nb", (0, 1), 0, "\n😀\n", "a\n😀\n\nb", (2, 0)),
+            ("ab", (0, 1), 1, "x\ny\n", "ax\ny\n", (2, 0)),
+        ];
+        for (source, start, length, replacement, expected, end) in cases {
+            let mut buffer = TextBuffer::new(source);
+            let original = buffer.to_string();
+            let cursor_before = (0, 0);
+            let mut cursor = cursor_before;
+            let mut command = ReplaceTextCommand::new(
+                &buffer,
+                start,
+                length,
+                replacement.into(),
+                cursor,
+            );
+            command.execute(&mut buffer, &mut cursor);
+            assert_eq!(buffer.to_string(), expected, "source={source:?}");
+            assert_eq!(cursor, end);
+            command.undo(&mut buffer, &mut cursor);
+            assert_eq!(buffer.to_string(), original);
+            assert_eq!(cursor, cursor_before);
+            command.execute(&mut buffer, &mut cursor);
+            assert_eq!(buffer.to_string(), expected);
+            assert_eq!(cursor, end);
+        }
     }
 }

@@ -203,34 +203,16 @@ impl<'a> Ui<'a> {
         }
     }
 
-    /// Clicks the icon button at `index` in the row directly under the
-    /// dialog field reading `label`.
-    ///
-    /// The dialog's actions are icon-only Font Awesome buttons: they carry
-    /// no text node, so the selector the other tests use cannot see them.
-    /// They do sit in a left-aligned row immediately below their own input,
-    /// which makes that input a findable anchor to measure from.
-    fn click_icon_under(&mut self, label: &str, index: usize) -> Vec<Message> {
-        let messages: Vec<Message> = {
+    /// Clicks a toolbar control by its stable widget identifier.
+    fn click_control(&mut self, id: &'static str) -> Vec<Message> {
+        let messages = {
             let mut ui = simulator(view(self.app));
-            let found = ui.find(input_reading(label.to_string()));
-            assert!(found.is_ok(), "no text input reading {label:?}");
-            let input = found.unwrap_or_default();
-            ui.point_at(Point::new(
-                input.x
-                    + ICON_BUTTON_SIZE / 2.0
-                    + index as f32 * ICON_BUTTON_STEP,
-                input.y + input.height + ICON_ROW_GAP + ICON_BUTTON_SIZE / 2.0,
-            ));
-            let _ = ui.simulate(iced_test::simulator::click());
-            ui.into_messages().collect()
+            assert!(
+                ui.click(iced_test::selector::id(id)).is_ok(),
+                "missing control {id}"
+            );
+            ui.into_messages().collect::<Vec<_>>()
         };
-
-        assert!(
-            !messages.is_empty(),
-            "icon button {index} under {label:?} was not hit — has the \
-             dialog's layout moved?"
-        );
         for message in &messages {
             let _ = self.app.update(message.clone());
         }
@@ -443,15 +425,6 @@ const REPLACE_FIELD: &str = "Replace...";
 /// Sourced from `Translations::command_palette_placeholder`, for the same
 /// reason as [`SEARCH_FIELD`].
 const PALETTE_FIELD: &str = "Type a command...";
-
-/// Side of the dialog's square icon buttons, in pixels.
-const ICON_BUTTON_SIZE: f32 = 15.0;
-
-/// Distance between the left edges of two neighbouring icon buttons.
-const ICON_BUTTON_STEP: f32 = 18.0;
-
-/// Vertical gap between a dialog field and the button row beneath it.
-const ICON_ROW_GAP: f32 = 5.0;
 
 /// Selects the text input whose visible content is `label`.
 ///

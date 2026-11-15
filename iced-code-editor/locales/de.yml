@@ -1,5 +1,10 @@
 # Deutsche Übersetzungen
 search:
+  select_all_matches_tooltip: "Alle Treffer auswählen"
+  whole_word_tooltip: "Ganze Wörter"
+  regex_tooltip: "Reguläre Ausdrücke verwenden"
+  multiline_tooltip: "Mehrzeilige Eingabe ein- / ausklappen"
+  toggle_replace_tooltip: "Ersetzen ein- / ausblenden"
   placeholder: "Suchen..."
   close_tooltip: "Suchdialog schließen (Esc)"
   previous_match_tooltip: "Vorheriger Treffer (Umschalt+F3)"

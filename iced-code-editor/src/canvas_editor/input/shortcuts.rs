@@ -404,6 +404,21 @@ impl CodeEditor {
         modified_key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
     ) -> Option<Action<Message>> {
+        if self.search_state.is_open
+            && !self.goto_line_state.is_open
+            && !self.command_palette_state.is_open
+            && let Some(message) =
+                crate::canvas_editor::features::search::shortcuts::resolve(
+                    key,
+                    modified_key,
+                    *modifiers,
+                    self.search_state.is_replace_mode,
+                    cfg!(target_os = "macos"),
+                )
+        {
+            return Some(Action::publish(message).and_capture());
+        }
+
         if command_pressed(modifiers)
             && modifiers.shift()
             && is_key_char(key, modified_key, "p")

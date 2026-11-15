@@ -19,6 +19,7 @@ two-face = ["dep:two-face"]
 bench = []
 
 [dependencies]
+regex = "1"
 iced.workspace = true
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 # `default-features = false` + `syntect-fancy` is required: two-face defaults to
@@ -33,6 +34,7 @@ unicode-width = "0.2.2"
 serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
+iced_runtime = "0.14"
 criterion = "0.8"
 
 [[bench]]

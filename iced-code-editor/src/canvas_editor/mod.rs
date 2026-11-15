@@ -468,6 +468,20 @@ pub enum Message {
     ReplaceQueryChanged(String),
     /// Toggle case sensitivity
     ToggleCaseSensitive,
+    /// Toggle whole-word matching.
+    ToggleWholeWord,
+    /// Toggle regular expression matching.
+    ToggleSearchRegex,
+    /// Expand or collapse multiline search inputs.
+    ToggleSearchMultiline,
+    /// Show or hide the replacement row.
+    ToggleSearchReplace,
+    /// Edit the multiline query.
+    SearchInputAction(iced::widget::text_editor::Action),
+    /// Edit the multiline replacement.
+    ReplaceInputAction(iced::widget::text_editor::Action),
+    /// Turn every search match into an editable selection (Alt+Enter).
+    SelectAllSearchMatches,
     /// Find next match (F3)
     FindNext,
     /// Find previous match (Shift+F3)
@@ -885,3 +899,15 @@ mod tests {
         assert!(!editor.is_dialog_open());
     }
 }
+
+#[cfg(test)]
+mod wrap_settings_tests;
+
+#[cfg(test)]
+mod indent_settings_tests;
+
+#[cfg(test)]
+mod option_behavior_tests;
+
+#[cfg(test)]
+mod unicode_render_tests;

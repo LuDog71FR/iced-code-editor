@@ -6,6 +6,9 @@
 //! - Position tracking for highlighting
 
 pub(crate) mod dialog;
+mod icons;
+mod pattern;
+pub(crate) mod shortcuts;
 mod update;
 
 use crate::buffer::TextBuffer;
@@ -45,6 +48,19 @@ pub struct SearchState {
     pub replace_with: String,
     /// Case-sensitive search flag
     pub case_sensitive: bool,
+    /// Match whole identifiers only.
+    pub whole_word: bool,
+    /// Interpret the query as a regular expression.
+    pub use_regex: bool,
+    /// Expand both inputs into multiline editors.
+    pub multiline: bool,
+    /// Multiline search input content.
+    pub search_content: iced::widget::text_editor::Content,
+    /// Multiline replacement input content.
+    pub replace_content: iced::widget::text_editor::Content,
+    /// Invalid regular expression message, if any.
+    pub pattern_error: Option<String>,
+    details: Vec<pattern::MatchDetail>,
     /// Whether the search dialog is visible
     pub is_open: bool,
     /// Whether replace mode is active (true) or just search (false)
@@ -69,6 +85,13 @@ impl Default for SearchState {
             query: String::new(),
             replace_with: String::new(),
             case_sensitive: false,
+            whole_word: false,
+            use_regex: false,
+            multiline: false,
+            search_content: iced::widget::text_editor::Content::new(),
+            replace_content: iced::widget::text_editor::Content::new(),
+            pattern_error: None,
+            details: Vec::new(),
             is_open: false,
             is_replace_mode: false,
             matches: Vec::new(),
@@ -131,12 +154,25 @@ impl SearchState {
 
     /// Updates the search query and triggers a new search.
     pub fn set_query(&mut self, query: String, buffer: &TextBuffer) {
+        if self.search_content.text() != query {
+            self.search_content =
+                iced::widget::text_editor::Content::with_text(&query);
+        }
         self.query = query;
         self.update_matches(buffer);
     }
 
     /// Updates the replace text.
     pub fn set_replace_with(&mut self, replace_with: String) {
+        if self.replace_content.text() != replace_with {
+            self.replace_content =
+                iced::widget::text_editor::Content::with_text(&replace_with);
+        }
+        if !self.use_regex {
+            for detail in &mut self.details {
+                detail.replacement.clone_from(&replace_with);
+            }
+        }
         self.replace_with = replace_with;
     }
 
@@ -148,12 +184,29 @@ impl SearchState {
 
     /// Updates the matches list based on current query and options.
     pub fn update_matches(&mut self, buffer: &TextBuffer) {
-        self.matches = find_matches(
-            buffer,
-            &self.query,
-            self.case_sensitive,
-            Some(MAX_MATCHES),
-        );
+        self.pattern_error = None;
+        if self.whole_word || self.use_regex || self.query.contains('\n') {
+            match pattern::find(self, buffer, Some(MAX_MATCHES)) {
+                Ok(details) => {
+                    self.matches =
+                        details.iter().map(|item| item.start).collect();
+                    self.details = details;
+                }
+                Err(error) => {
+                    self.matches.clear();
+                    self.details.clear();
+                    self.pattern_error = Some(error);
+                }
+            }
+        } else {
+            self.details.clear();
+            self.matches = find_matches(
+                buffer,
+                &self.query,
+                self.case_sensitive,
+                Some(MAX_MATCHES),
+            );
+        }
         self.buffer_line_count = buffer.line_count();
 
         // Update current match index
@@ -181,7 +234,12 @@ impl SearchState {
         start_line: usize,
         old_end_exclusive: usize,
     ) {
-        if self.query.is_empty() || self.buffer_line_count == 0 {
+        if self.query.is_empty()
+            || self.buffer_line_count == 0
+            || self.whole_word
+            || self.use_regex
+            || self.query.contains('\n')
+        {
             self.update_matches(buffer);
             return;
         }
@@ -308,40 +366,39 @@ impl SearchState {
             return false;
         }
 
-        let query_len = self.query.chars().count();
         let exact_selection_index = selection.and_then(|(start, end)| {
-            if start.0 != end.0 {
-                return None;
-            }
-
             self.matches_on_line(start.0).find(|&index| {
                 let match_item = self.matches[index];
-                match_item.col == start.1
-                    && match_item.col.saturating_add(query_len) == end.1
+                (match_item.line, match_item.col) == start
+                    && self.match_end(match_item) == end
             })
         });
-        let cursor_index = exact_selection_index.or_else(|| {
-            let line_matches = self.matches_on_line(cursor.0);
-            line_matches
-                .clone()
-                .find(|&index| {
-                    let match_item = self.matches[index];
-                    (match_item.col..=match_item.col.saturating_add(query_len))
-                        .contains(&cursor.1)
-                })
-                .or_else(|| {
-                    line_matches.min_by_key(|&index| {
-                        let match_item = self.matches[index];
-                        let match_end =
-                            match_item.col.saturating_add(query_len);
-                        if cursor.1 < match_item.col {
-                            match_item.col - cursor.1
-                        } else {
-                            cursor.1.saturating_sub(match_end)
-                        }
-                    })
-                })
+        let containing_index = self.details.iter().position(|detail| {
+            (detail.start.line, detail.start.col) <= cursor
+                && cursor <= detail.end
         });
+        let cursor_index =
+            exact_selection_index.or(containing_index).or_else(|| {
+                let line_matches = self.matches_on_line(cursor.0);
+                line_matches
+                    .clone()
+                    .find(|&index| {
+                        let match_item = self.matches[index];
+                        (match_item.col..=self.match_end(match_item).1)
+                            .contains(&cursor.1)
+                    })
+                    .or_else(|| {
+                        line_matches.min_by_key(|&index| {
+                            let match_item = self.matches[index];
+                            let match_end = self.match_end(match_item).1;
+                            if cursor.1 < match_item.col {
+                                match_item.col - cursor.1
+                            } else {
+                                cursor.1.saturating_sub(match_end)
+                            }
+                        })
+                    })
+            });
 
         let Some(index) = cursor_index else {
             return false;
@@ -352,6 +409,32 @@ impl SearchState {
 
         self.current_match_index = Some(index);
         true
+    }
+
+    /// Returns the logical end of a match, including multiline patterns.
+    pub(crate) fn match_end(&self, item: SearchMatch) -> (usize, usize) {
+        self.details
+            .binary_search_by_key(&(item.line, item.col), |detail| {
+                (detail.start.line, detail.start.col)
+            })
+            .ok()
+            .map(|index| self.details[index].end)
+            .unwrap_or((item.line, item.col + self.query.chars().count()))
+    }
+
+    pub(crate) fn replacement(&self, item: SearchMatch) -> (usize, String) {
+        self.details
+            .binary_search_by_key(&(item.line, item.col), |detail| {
+                (detail.start.line, detail.start.col)
+            })
+            .ok()
+            .map(|index| {
+                (
+                    self.details[index].len,
+                    self.details[index].replacement.clone(),
+                )
+            })
+            .unwrap_or((self.query.chars().count(), self.replace_with.clone()))
     }
 
     /// Returns the indices of matches on one logical line.
@@ -1123,5 +1206,61 @@ mod tests {
         // predicate must report it as open too.
         let _task = editor.open_search_replace_dialog();
         assert!(editor.is_search_open());
+    }
+}
+
+#[cfg(test)]
+mod advanced_state_tests {
+    use super::*;
+
+    #[test]
+    fn clearing_or_disabling_regex_discards_errors_and_stale_match_ranges() {
+        let buffer = TextBuffer::new("aaa [");
+        let mut state = SearchState::new();
+        state.use_regex = true;
+        state.set_query("a+".into(), &buffer);
+        assert_eq!(state.match_end(state.matches[0]), (0, 3));
+        state.set_query("[".into(), &buffer);
+        assert!(state.pattern_error.is_some());
+        assert!(state.matches.is_empty());
+        assert_eq!(state.current_match_index, None);
+        state.use_regex = false;
+        state.update_matches(&buffer);
+        assert!(state.pattern_error.is_none());
+        assert_eq!(state.match_end(state.matches[0]), (0, 5));
+        state.set_query(String::new(), &buffer);
+        assert!(state.matches.is_empty());
+        assert!(state.search_content.text().is_empty());
+    }
+
+    #[test]
+    fn multiline_selection_tracks_actual_range_and_cursor_inside_later_line() {
+        let buffer = TextBuffer::new("xa\nb ya\nb");
+        let mut state = SearchState::new();
+        state.set_query("a\nb".into(), &buffer);
+        assert_eq!(state.match_end(state.matches[0]), (1, 1));
+        assert!(state.select_match_at_cursor((2, 1), Some(((1, 3), (2, 1)))));
+        assert_eq!(state.current_match_index, Some(1));
+        assert!(state.select_match_at_cursor((1, 0), None));
+        assert_eq!(state.current_match_index, Some(0));
+    }
+
+    #[test]
+    fn advanced_matches_refresh_after_edits_that_shift_lines_or_cross_boundaries()
+     {
+        let mut buffer = TextBuffer::new("a\nb a\nb");
+        let mut state = SearchState::new();
+        state.set_query("a\nb".into(), &buffer);
+        buffer.insert_newline(0, 0);
+        state.update_matches_after_edit(&buffer, 0, 1);
+        assert_eq!(
+            state.matches,
+            [SearchMatch { line: 1, col: 0 }, SearchMatch { line: 2, col: 2 }]
+        );
+        assert_eq!(state.match_end(state.matches[1]), (3, 1));
+        buffer.delete_forward(1, 1);
+        state.update_matches_after_edit(&buffer, 1, 3);
+        assert_eq!(state.matches, [SearchMatch { line: 1, col: 3 }]);
+        assert_eq!(state.match_end(state.matches[0]), (2, 1));
     }
 }

@@ -236,6 +236,16 @@ translations! {
     replace_placeholder => "replace.placeholder",
         "Returns the placeholder text for the replace input field.",
         "Replace...";
+    select_all_matches_tooltip => "search.select_all_matches_tooltip",
+        "Tooltip for converting search results to selections.", "Select All Matches";
+    whole_word_tooltip => "search.whole_word_tooltip",
+        "Tooltip for whole-word search.", "Match Whole Words";
+    regex_tooltip => "search.regex_tooltip",
+        "Tooltip for regular expression search.", "Use Regular Expressions";
+    multiline_tooltip => "search.multiline_tooltip",
+        "Tooltip for multiline input.", "Expand / Collapse Multiline Input";
+    toggle_replace_tooltip => "search.toggle_replace_tooltip",
+        "Tooltip for toggling replacement controls.", "Show / Hide Replace";
     case_sensitive_label => "settings.case_sensitive_label",
         "Returns the label text for the case sensitive checkbox.",
         "Case sensitive";

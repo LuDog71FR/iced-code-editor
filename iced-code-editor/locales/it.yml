@@ -1,5 +1,10 @@
 # Traduzioni italiane
 search:
+  select_all_matches_tooltip: "Seleziona tutte le corrispondenze"
+  whole_word_tooltip: "Parole intere"
+  regex_tooltip: "Usa espressioni regolari"
+  multiline_tooltip: "Espandi / Comprimi input multilinea"
+  toggle_replace_tooltip: "Mostra / Nascondi sostituzione"
   placeholder: "Cerca..."
   close_tooltip: "Chiudi finestra di ricerca (Esc)"
   previous_match_tooltip: "Risultato precedente (Maiusc+F3)"

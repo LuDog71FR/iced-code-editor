@@ -1,4 +1,9 @@
 search:
+  select_all_matches_tooltip: "选择全部匹配项"
+  whole_word_tooltip: "全词匹配"
+  regex_tooltip: "使用正则表达式"
+  multiline_tooltip: "展开 / 收起多行输入"
+  toggle_replace_tooltip: "显示 / 隐藏替换"
   placeholder: "搜索..."
   close_tooltip: "关闭搜索对话框 (Esc)"
   previous_match_tooltip: "上一个匹配 (Shift+F3)"

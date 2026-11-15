@@ -102,8 +102,6 @@ impl CodeEditor {
             return;
         }
 
-        let query_len = self.search_state.query.chars().count();
-
         let start_visual_idx = start_visual_idx.min(ctx.visual_lines.len());
         let end_visual_idx = end_visual_idx.min(ctx.visual_lines.len());
 
@@ -131,9 +129,26 @@ impl CodeEditor {
                 .matches
                 .iter()
                 .enumerate()
-                .skip(match_range.start)
-                .take(match_range.len())
+                .skip(
+                    if self.search_state.query.contains('\n')
+                        || self.search_state.use_regex
+                    {
+                        0
+                    } else {
+                        match_range.start
+                    },
+                )
+                .take(
+                    if self.search_state.query.contains('\n')
+                        || self.search_state.use_regex
+                    {
+                        match_range.end
+                    } else {
+                        match_range.len()
+                    },
+                )
             {
+                let match_end = self.search_state.match_end(*search_match);
                 // Determine if this is the current match
                 let is_current =
                     self.search_state.current_match_index == Some(match_idx);
@@ -152,8 +167,8 @@ impl CodeEditor {
                 );
                 let end_visual = WrappingCalculator::logical_to_visual(
                     ctx.visual_lines,
-                    search_match.line,
-                    search_match.col + query_len,
+                    match_end.0,
+                    match_end.1,
                 );
 
                 if let (Some(start_v), Some(end_v)) = (start_visual, end_visual)
@@ -166,7 +181,7 @@ impl CodeEditor {
                             ctx,
                             start_v,
                             vl,
-                            (search_match.col, search_match.col + query_len),
+                            (search_match.col, match_end.1),
                             highlight_color,
                         );
                     } else {
@@ -175,8 +190,15 @@ impl CodeEditor {
                             .visual_lines
                             .iter()
                             .enumerate()
-                            .skip(start_v)
-                            .take(end_v - start_v + 1)
+                            .skip(start_v.max(start_visual_idx))
+                            .take(
+                                end_v
+                                    .min(end_visual_idx.saturating_sub(1))
+                                    .saturating_sub(
+                                        start_v.max(start_visual_idx),
+                                    )
+                                    + 1,
+                            )
                         {
                             let sel_start_col = if v_idx == start_v {
                                 search_match.col
@@ -184,7 +206,7 @@ impl CodeEditor {
                                 vl.start_col
                             };
                             let sel_end_col = if v_idx == end_v {
-                                search_match.col + query_len
+                                match_end.1
                             } else {
                                 vl.end_col
                             };
@@ -493,14 +515,16 @@ impl CodeEditor {
                     }
 
                     // 3. Draw preedit text itself
-                    frame.fill_text(canvas::Text {
-                        content: preedit.content.clone(),
-                        position: Point::new(cursor_x, cursor_y + 2.0),
-                        color: self.style.text_color,
-                        size: ctx.font_size.into(),
-                        font: ctx.font,
-                        ..canvas::Text::default()
-                    });
+                    // Use the same bounded layout and Unicode font fallback
+                    // as committed text. The default canvas text width is
+                    // infinite, which can overflow cosmic-text's glyph cache.
+                    super::text::draw_text_runs(
+                        frame,
+                        &preedit.content,
+                        Point::new(cursor_x, cursor_y + 2.0),
+                        self.style.text_color,
+                        ctx,
+                    );
 
                     // 4. Draw bottom underline (IME state indicator)
                     frame.fill_rectangle(

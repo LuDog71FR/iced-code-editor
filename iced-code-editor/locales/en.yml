@@ -1,5 +1,10 @@
 # English translations
 search:
+  select_all_matches_tooltip: "Select All Matches"
+  whole_word_tooltip: "Match Whole Words"
+  regex_tooltip: "Use Regular Expressions"
+  multiline_tooltip: "Expand / Collapse Multiline Input"
+  toggle_replace_tooltip: "Show / Hide Replace"
   placeholder: "Search..."
   close_tooltip: "Close search dialog (Esc)"
   previous_match_tooltip: "Previous match (Shift+F3)"

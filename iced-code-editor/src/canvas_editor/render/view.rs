@@ -1,7 +1,6 @@
 //! Iced UI view and rendering logic.
 
 use iced::Size;
-use iced::advanced::input_method;
 use iced::alignment;
 use iced::mouse;
 use iced::widget::canvas::Canvas;
@@ -382,10 +381,13 @@ impl CodeEditor {
             } else {
                 expand_tabs(content, TAB_WIDTH).into_owned()
             };
+            // Unicode headers need the same fallback as the canvas text layer.
+            let span_font =
+                if content.is_ascii() { font } else { iced::Font::DEFAULT };
             code = code.push(
                 text(content)
                     .size(font_size)
-                    .font(font)
+                    .font(span_font)
                     .wrapping(text::Wrapping::None)
                     .style(move |_| text::Style { color: Some(color) }),
             );
@@ -494,14 +496,9 @@ impl CodeEditor {
     fn create_ime_layer(&self, cursor_rect: Rectangle) -> Element<'_, Message> {
         let ime_enabled = self.is_focused() && self.has_canvas_focus;
 
-        let preedit =
-            self.ime_preedit.as_ref().map(|p| input_method::Preedit {
-                content: p.content.clone(),
-                selection: p.selection.clone(),
-                text_size: None,
-            });
-
-        let ime_layer = ImeRequester::new(ime_enabled, cursor_rect, preedit);
+        // The canvas draws preedit on the spot. Supplying it here would also
+        // create Iced's over-the-spot paragraph with unbounded layout.
+        let ime_layer = ImeRequester::new(ime_enabled, cursor_rect, None);
         iced::Element::new(ime_layer)
     }
 
@@ -562,24 +559,6 @@ impl CodeEditor {
         let cursor_rect = self.calculate_ime_cursor_rect(visual_lines.as_ref());
         let ime_layer = self.create_ime_layer(cursor_rect);
         editor_stack = editor_stack.push(ime_layer);
-
-        // Add search dialog overlay if open
-        if self.search_state.is_open {
-            let search_dialog =
-                search_dialog::view(&self.search_state, &self.translations);
-
-            // Position the dialog in top-right corner with 20px margin
-            let positioned_dialog = container(
-                Row::new()
-                    .push(Space::new().width(Length::Fill))
-                    .push(search_dialog),
-            )
-            .padding(20)
-            .width(Length::Fill)
-            .height(Length::Shrink);
-
-            editor_stack = editor_stack.push(positioned_dialog);
-        }
 
         // Add the compact go-to-line dialog in the top center.
         if self.goto_line_state.is_open {
@@ -663,6 +642,23 @@ impl CodeEditor {
             }
         };
 
+        let editor_body = if self.search_state.is_open {
+            Column::new()
+                .push(search_dialog::view(
+                    &self.search_state,
+                    &self.translations,
+                    !self.vim_enabled,
+                    !self.goto_line_state.is_open
+                        && !self.command_palette_state.is_open,
+                ))
+                .push(editor_body)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else {
+            editor_body
+        };
+
         if self.vim_enabled {
             Column::new()
                 .push(editor_body)
@@ -714,6 +710,50 @@ pub(crate) fn scrollable_rail(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ime_uses_canvas_preedit_without_a_duplicate_runtime_overlay()
+    -> Result<(), &'static str> {
+        use iced::advanced::input_method::InputMethod;
+        use iced::advanced::{Layout, Shell, layout, renderer::Headless};
+
+        let renderer = iced::futures::executor::block_on(iced::Renderer::new(
+            iced::Font::DEFAULT,
+            iced::Pixels(13.0),
+            Some("tiny-skia"),
+        ))
+        .ok_or("headless software renderer unavailable")?;
+        let mut editor = CodeEditor::new("", "txt");
+        editor.focus_for_test();
+        let _ = editor.handle_ime_preedit_msg("中文", &Some(0..3));
+        let cursor =
+            Rectangle::new(iced::Point::new(40.0, 20.0), Size::new(2.0, 18.0));
+        let mut layer = editor.create_ime_layer(cursor);
+        let mut tree = iced::advanced::widget::Tree::new(&layer);
+        let node = layer.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(Size::ZERO, Size::new(500.0, 300.0)),
+        );
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        layer.as_widget_mut().update(
+            &mut tree,
+            &iced::Event::Window(iced::window::Event::RedrawRequested(
+                iced::time::Instant::now(),
+            )),
+            Layout::new(&node),
+            mouse::Cursor::Unavailable,
+            &renderer,
+            &mut iced::advanced::clipboard::Null,
+            &mut shell,
+            &Rectangle::with_size(Size::new(500.0, 300.0)),
+        );
+        assert!(matches!(shell.input_method(), InputMethod::Enabled {
+            cursor: requested, preedit: None, ..
+        } if *requested == cursor));
+        Ok(())
+    }
 
     type InputState = iced::widget::text_input::State<
         <iced::Renderer as iced::advanced::text::Renderer>::Paragraph,
@@ -1035,3 +1075,11 @@ mod tests {
         assert_eq!(style.horizontal_rail.background, expected_rail.background);
     }
 }
+
+#[cfg(test)]
+#[path = "../option_sticky_tests.rs"]
+mod option_sticky_tests;
+
+#[cfg(test)]
+#[path = "search_focus_tests.rs"]
+mod search_focus_tests;

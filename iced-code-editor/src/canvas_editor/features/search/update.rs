@@ -113,6 +113,9 @@ impl CodeEditor {
         replace_text: &str,
     ) -> Task<Message> {
         self.search_state.set_replace_with(replace_text.to_string());
+        if self.search_state.use_regex {
+            self.search_state.update_matches(&self.buffer);
+        }
         Task::none()
     }
 
@@ -156,6 +159,68 @@ impl CodeEditor {
         self.focus_current_match()
     }
 
+    /// Converts the entire result set into selections and returns keyboard
+    /// focus to the document. The display limit does not limit selection.
+    pub(crate) fn handle_select_all_search_matches(&mut self) -> Task<Message> {
+        if !self.search_replace_enabled
+            || !self.search_state.is_open
+            || self.vim_enabled
+        {
+            return Task::none();
+        }
+        let current = self.search_state.current_match();
+        let selections: Vec<_> = if self.search_state.whole_word
+            || self.search_state.use_regex
+            || self.search_state.query.contains('\n')
+        {
+            super::pattern::find(&self.search_state, &self.buffer, None)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|item| crate::canvas_editor::cursor_set::Cursor {
+                    position: item.end,
+                    anchor: Some((item.start.line, item.start.col)),
+                })
+                .collect()
+        } else {
+            let length = self.search_state.query.chars().count();
+            super::find_matches(
+                &self.buffer,
+                &self.search_state.query,
+                self.search_state.case_sensitive,
+                None,
+            )
+            .into_iter()
+            .map(|item| crate::canvas_editor::cursor_set::Cursor {
+                position: (item.line, item.col + length),
+                anchor: Some((item.line, item.col)),
+            })
+            .collect()
+        };
+        if selections.is_empty() {
+            return Task::none();
+        }
+        let primary = current
+            .and_then(|item| {
+                selections
+                    .binary_search_by_key(&(item.line, item.col), |cursor| {
+                        cursor.anchor.unwrap_or(cursor.position)
+                    })
+                    .ok()
+            })
+            .unwrap_or(0);
+        self.cursors.replace_sorted(selections, primary);
+        self.request_focus();
+        let _ = self.handle_canvas_focus_gained_msg();
+        // Keep the toolbar visible while releasing its input focus so typing
+        // reaches the document selections instead of changing the query.
+        Task::batch([
+            iced::advanced::widget::operate(
+                iced::advanced::widget::operation::focusable::unfocus(),
+            ),
+            self.scroll_to_cursor(),
+        ])
+    }
+
     /// Handles replacing the current match and moving to the next.
     ///
     /// # Returns
@@ -164,8 +229,8 @@ impl CodeEditor {
     pub(crate) fn handle_replace_next_msg(&mut self) -> Task<Message> {
         // Replace current match and move to next
         if let Some(match_pos) = self.search_state.current_match() {
-            let query_len = self.search_state.query.chars().count();
-            let replace_text = self.search_state.replace_with.clone();
+            let (query_len, replace_text) =
+                self.search_state.replacement(match_pos);
 
             // Create and execute replace command
             let pos = self.cursors.primary_position();
@@ -210,27 +275,45 @@ impl CodeEditor {
     /// A `Task<Message>` that scrolls to cursor after replacement
     pub(crate) fn handle_replace_all_msg(&mut self) -> Task<Message> {
         // Perform a fresh search to find ALL matches (ignoring the display limit)
-        let all_matches = super::find_matches(
-            &self.buffer,
-            &self.search_state.query,
-            self.search_state.case_sensitive,
-            None, // No limit for Replace All
-        );
+        let all_matches = if self.search_state.whole_word
+            || self.search_state.use_regex
+            || self.search_state.query.contains('\n')
+        {
+            super::pattern::find(&self.search_state, &self.buffer, None)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|item| (item.start, item.len, item.replacement))
+                .collect::<Vec<_>>()
+        } else {
+            super::find_matches(
+                &self.buffer,
+                &self.search_state.query,
+                self.search_state.case_sensitive,
+                None,
+            )
+            .into_iter()
+            .map(|item| {
+                (
+                    item,
+                    self.search_state.query.chars().count(),
+                    self.search_state.replace_with.clone(),
+                )
+            })
+            .collect()
+        };
 
         if !all_matches.is_empty() {
-            let query_len = self.search_state.query.chars().count();
-            let replace_text = self.search_state.replace_with.clone();
-
             // Create composite command for undo
             let mut composite = CompositeCommand::new();
 
             // Process matches in reverse order (to preserve positions)
-            for match_pos in all_matches.iter().rev() {
+            for (match_pos, query_len, replace_text) in all_matches.iter().rev()
+            {
                 let pos = self.cursors.primary_position();
                 let cmd = ReplaceTextCommand::new(
                     &self.buffer,
                     (match_pos.line, match_pos.col),
-                    query_len,
+                    *query_len,
                     replace_text.clone(),
                     pos,
                 );
@@ -506,5 +589,271 @@ mod tests {
 
         assert_eq!(editor.buffer.to_string(), "one two");
         assert!(!editor.can_undo());
+    }
+}
+
+#[cfg(test)]
+mod toolbar_tests {
+    use super::*;
+
+    #[test]
+    fn whole_words_exclude_identifier_fragments_and_refresh_after_edits() {
+        let mut editor = CodeEditor::new("cat scatter cat_ cat", "txt");
+        let _ = editor.update(&Message::OpenSearchReplace);
+        let _ = editor.update(&Message::SearchQueryChanged("cat".into()));
+        let _ = editor.update(&Message::ToggleWholeWord);
+        assert_eq!(editor.search_state.match_count(), 2);
+        let _ = editor.update(&Message::ReplaceQueryChanged("dog".into()));
+        let _ = editor.update(&Message::ReplaceAll);
+        assert_eq!(editor.content(), "dog scatter cat_ dog");
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.content(), "cat scatter cat_ cat");
+        assert_eq!(editor.search_state.match_count(), 2);
+    }
+
+    #[test]
+    fn regex_replacement_uses_actual_match_lengths_and_capture_groups() {
+        let mut editor = CodeEditor::new("é12 é3456", "txt");
+        let _ = editor.update(&Message::OpenSearchReplace);
+        let _ = editor.update(&Message::ToggleSearchRegex);
+        let _ = editor.update(&Message::SearchQueryChanged(r"é(\d+)".into()));
+        let _ = editor.update(&Message::ReplaceQueryChanged("n=$1".into()));
+        assert_eq!(editor.search_state.match_count(), 2);
+        let _ = editor.update(&Message::ReplaceNext);
+        assert_eq!(editor.content(), "n=12 é3456");
+        let _ = editor.update(&Message::ReplaceAll);
+        assert_eq!(editor.content(), "n=12 n=3456");
+        let _ = editor.update(&Message::Undo);
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.content(), "é12 é3456");
+    }
+
+    #[test]
+    fn invalid_regex_clears_matches_and_recovers() {
+        let mut editor = CodeEditor::new("alpha", "txt");
+        let _ = editor.update(&Message::OpenSearch);
+        let _ = editor.update(&Message::ToggleSearchRegex);
+        let _ = editor.update(&Message::SearchQueryChanged("[".into()));
+        assert!(editor.search_state.pattern_error.is_some());
+        assert!(editor.search_state.matches.is_empty());
+        let _ = editor.update(&Message::SearchQueryChanged("alpha".into()));
+        assert!(editor.search_state.pattern_error.is_none());
+        assert_eq!(editor.search_state.match_count(), 1);
+    }
+
+    #[test]
+    fn multiline_query_and_replacement_round_trip_through_undo() {
+        let mut editor = CodeEditor::new("a\nb a\nb", "txt");
+        let _ = editor.update(&Message::OpenSearchReplace);
+        let _ = editor.update(&Message::ToggleSearchMultiline);
+        let _ = editor.update(&Message::SearchQueryChanged("a\nb".into()));
+        let _ = editor
+            .update(&Message::ReplaceQueryChanged("one\ntwo\nthree".into()));
+        assert_eq!(editor.search_state.match_count(), 2);
+        let _ = editor.update(&Message::ReplaceAll);
+        assert_eq!(editor.content(), "one\ntwo\nthree one\ntwo\nthree");
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.content(), "a\nb a\nb");
+        let _ = editor.update(&Message::ToggleSearchMultiline);
+        assert!(!editor.search_state.multiline);
+        assert_eq!(editor.search_state.search_content.text(), "a\nb");
+    }
+}
+
+#[cfg(test)]
+mod select_all_tests {
+    use super::*;
+
+    fn editor_with_query(content: &str, query: &str) -> CodeEditor {
+        let mut editor = CodeEditor::new(content, "txt");
+        let _ = editor.update(&Message::OpenSearch);
+        let _ = editor.update(&Message::SearchQueryChanged(query.into()));
+        editor
+    }
+
+    #[test]
+    fn select_all_matches_returns_focus_and_typing_edits_every_selection() {
+        let mut editor = editor_with_query("foo bar foo\nfoo", "foo");
+        let _ = editor.update(&Message::FindNext);
+        let _ = editor.update(&Message::SelectAllSearchMatches);
+        assert_eq!(editor.cursors.len(), 3);
+        assert_eq!(editor.cursors.primary_position(), (0, 11));
+        assert!(editor.search_state.is_open);
+        assert_eq!(editor.search_state.query, "foo");
+        assert!(editor.has_focus());
+        let _ = editor.update(&Message::CharacterInput('x'));
+        assert_eq!(editor.content(), "x bar x\nx");
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.content(), "foo bar foo\nfoo");
+    }
+
+    #[test]
+    fn adjacent_unicode_matches_remain_distinct_editable_selections() {
+        let mut editor = editor_with_query("ééé", "é");
+        let _ = editor.update(&Message::SelectAllSearchMatches);
+        assert_eq!(editor.cursors.len(), 3);
+        let _ = editor.update(&Message::CharacterInput('x'));
+        assert_eq!(editor.content(), "xxx");
+    }
+
+    #[test]
+    fn all_matches_uses_whole_words_case_regex_lengths_and_multiline_ranges() {
+        let mut editor = editor_with_query("cat CAT scatter", "cat");
+        let _ = editor.update(&Message::ToggleWholeWord);
+        let _ = editor.update(&Message::ToggleCaseSensitive);
+        let _ = editor.update(&Message::SelectAllSearchMatches);
+        assert_eq!(editor.cursors.len(), 1);
+        assert_eq!(
+            editor.cursors.primary().selection_range(),
+            Some(((0, 0), (0, 3)))
+        );
+
+        let mut editor = editor_with_query("é12\né3456", r"é\d+");
+        let _ = editor.update(&Message::ToggleSearchRegex);
+        let _ = editor.update(&Message::SelectAllSearchMatches);
+        assert_eq!(
+            editor.cursors.as_slice()[1].selection_range(),
+            Some(((1, 0), (1, 5)))
+        );
+        let _ = editor.update(&Message::Paste("z".into()));
+        assert_eq!(editor.content(), "z\nz");
+
+        let mut editor = editor_with_query("a\nb a\nb", "a\nb");
+        let _ = editor.update(&Message::SelectAllSearchMatches);
+        assert_eq!(editor.cursors.len(), 2);
+        assert_eq!(
+            editor.cursors.as_slice()[0].selection_range(),
+            Some(((0, 0), (1, 1)))
+        );
+        let _ = editor.update(&Message::Paste("x".into()));
+        assert_eq!(editor.content(), "x x");
+    }
+
+    #[test]
+    fn select_all_is_not_limited_to_displayed_matches() {
+        let count = super::super::MAX_MATCHES + 3;
+        let mut editor = editor_with_query(&vec!["x"; count].join(" "), "x");
+        let _ = editor.update(&Message::SelectAllSearchMatches);
+        assert_eq!(editor.cursors.len(), count);
+    }
+
+    #[test]
+    fn no_matches_and_invalid_regex_preserve_existing_cursor_and_search() {
+        for query in ["absent", "["] {
+            let mut editor = editor_with_query("abc", query);
+            let _ = editor.update(&Message::ToggleSearchRegex);
+            let previous = editor.cursors.as_slice().to_vec();
+            let _ = editor.update(&Message::SelectAllSearchMatches);
+            assert_eq!(editor.cursors.as_slice(), previous);
+            assert!(editor.search_state.is_open);
+        }
+    }
+}
+
+#[cfg(test)]
+mod additional_regression_tests {
+    use super::*;
+
+    #[test]
+    fn zero_width_replace_all_inserts_once_per_line_and_undoes_together() {
+        let mut editor = CodeEditor::new("a\né", "txt");
+        let _ = editor.update(&Message::OpenSearchReplace);
+        let _ = editor.update(&Message::ToggleSearchRegex);
+        let _ = editor.update(&Message::SearchQueryChanged("^".into()));
+        let _ = editor.update(&Message::ReplaceQueryChanged("_".into()));
+        let _ = editor.update(&Message::ReplaceAll);
+        assert_eq!(editor.content(), "_a\n_é");
+        assert_eq!(editor.history.undo_count(), 1);
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.content(), "a\né");
+        let _ = editor.update(&Message::Redo);
+        assert_eq!(editor.content(), "_a\n_é");
+    }
+
+    #[test]
+    fn regex_replace_all_expands_captures_beyond_the_display_limit() {
+        let count = super::super::MAX_MATCHES + 2;
+        let original = vec!["a1"; count].join("\n");
+        let mut editor = CodeEditor::new(&original, "txt");
+        let _ = editor.update(&Message::OpenSearchReplace);
+        let _ = editor.update(&Message::ToggleSearchRegex);
+        let _ = editor
+            .update(&Message::SearchQueryChanged(r"(?P<letter>a)\d".into()));
+        let _ =
+            editor.update(&Message::ReplaceQueryChanged("${letter}x".into()));
+        assert_eq!(
+            editor.search_state.match_count(),
+            super::super::MAX_MATCHES
+        );
+        let _ = editor.update(&Message::ReplaceAll);
+        assert_eq!(editor.content(), vec!["ax"; count].join("\n"));
+        let _ = editor.update(&Message::Undo);
+        assert_eq!(editor.content(), original);
+    }
+
+    #[test]
+    fn multiline_editor_actions_keep_both_contents_and_queries_in_sync() {
+        use iced::widget::text_editor::{Action, Edit};
+        let mut editor = CodeEditor::new("a\nb a\nb", "txt");
+        let _ = editor.update(&Message::OpenSearchReplace);
+        let _ = editor.update(&Message::ToggleSearchMultiline);
+        let _ = editor.update(&Message::SearchInputAction(Action::Edit(
+            Edit::Paste(std::sync::Arc::new("a\nb".into())),
+        )));
+        let _ = editor.update(&Message::ReplaceInputAction(Action::Edit(
+            Edit::Paste(std::sync::Arc::new("x\ny".into())),
+        )));
+        assert_eq!(editor.search_state.query, "a\nb");
+        assert_eq!(editor.search_state.replace_with, "x\ny");
+        assert_eq!(editor.search_state.match_count(), 2);
+        let _ = editor.update(&Message::ToggleSearchMultiline);
+        let _ = editor.update(&Message::ToggleSearchMultiline);
+        assert_eq!(editor.search_state.search_content.text(), "a\nb");
+        assert_eq!(editor.search_state.replace_content.text(), "x\ny");
+        let _ = editor.update(&Message::ReplaceNext);
+        assert_eq!(editor.content(), "x\ny a\nb");
+    }
+
+    #[test]
+    fn changing_replacement_text_refreshes_cached_literal_and_regex_expansions()
+    {
+        for regex in [false, true] {
+            let mut editor = CodeEditor::new("foo12 food", "txt");
+            let _ = editor.update(&Message::OpenSearchReplace);
+            let _ = editor.update(&Message::ToggleWholeWord);
+            if regex {
+                let _ = editor.update(&Message::ToggleSearchRegex);
+            }
+            let _ = editor.update(&Message::SearchQueryChanged(
+                if regex { r"foo(\d+)" } else { "foo12" }.into(),
+            ));
+            let _ = editor.update(&Message::ReplaceQueryChanged("old".into()));
+            let _ = editor.update(&Message::ReplaceQueryChanged(
+                if regex { "n=$1" } else { "$1" }.into(),
+            ));
+            let _ = editor.update(&Message::ReplaceNext);
+            assert_eq!(
+                editor.content(),
+                if regex { "n=12 food" } else { "$1 food" }
+            );
+        }
+    }
+
+    #[test]
+    fn select_all_respects_disabled_search_and_vim_single_cursor_mode() {
+        for vim in [false, true] {
+            let mut editor = CodeEditor::new("foo foo", "txt");
+            let _ = editor.update(&Message::OpenSearch);
+            let _ = editor.update(&Message::SearchQueryChanged("foo".into()));
+            if vim {
+                editor.set_vim_enabled(true);
+            } else {
+                editor.set_search_replace_enabled(false);
+            }
+            let previous = editor.cursors.as_slice().to_vec();
+            let _ = editor.update(&Message::SelectAllSearchMatches);
+            assert_eq!(editor.cursors.as_slice(), previous);
+            assert_eq!(editor.content(), "foo foo");
+        }
     }
 }

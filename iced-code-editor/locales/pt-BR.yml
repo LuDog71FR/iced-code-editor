@@ -1,5 +1,10 @@
 # Traduções em português brasileiro
 search:
+  select_all_matches_tooltip: "Selecionar todas as ocorrências"
+  whole_word_tooltip: "Palavras inteiras"
+  regex_tooltip: "Usar expressões regulares"
+  multiline_tooltip: "Expandir / Recolher entrada multilinha"
+  toggle_replace_tooltip: "Mostrar / Ocultar substituição"
   placeholder: "Pesquisar..."
   close_tooltip: "Fechar diálogo de pesquisa (Esc)"
   previous_match_tooltip: "Correspondência anterior (Shift+F3)"

@@ -1,5 +1,10 @@
 # Traductions françaises
 search:
+  select_all_matches_tooltip: "Sélectionner toutes les occurrences"
+  whole_word_tooltip: "Mots entiers"
+  regex_tooltip: "Utiliser les expressions régulières"
+  multiline_tooltip: "Développer / Réduire la saisie multiligne"
+  toggle_replace_tooltip: "Afficher / Masquer le remplacement"
   placeholder: "Rechercher..."
   close_tooltip: "Fermer la recherche (Échap)"
   previous_match_tooltip: "Résultat précédent (Maj+F3)"
