@@ -35,8 +35,46 @@ use web_time::Instant;
 /// Global counter for generating unique editor IDs (starts at 1)
 static EDITOR_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// ID of the currently focused editor (0 = no editor focused)
+/// ID of the currently focused editor (0 = no editor focused).
+///
+/// Iced runs on one thread, so a process-wide slot is the right scope in a
+/// real application.
+#[cfg(not(test))]
 static FOCUSED_EDITOR_ID: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+thread_local! {
+    /// ID of the currently focused editor (0 = no editor focused), per thread.
+    ///
+    /// libtest runs each unit test on its own thread. With a process-wide
+    /// slot, a test calling `request_focus()` steals focus from a test
+    /// running in parallel, which then silently drops its keyboard input.
+    static FOCUSED_EDITOR_ID: AtomicU64 = const { AtomicU64::new(0) };
+}
+
+/// Returns the ID of the currently focused editor (0 = no editor focused).
+#[cfg(not(test))]
+pub(crate) fn focused_editor_id() -> u64 {
+    FOCUSED_EDITOR_ID.load(Ordering::Relaxed)
+}
+
+/// Returns the ID of the currently focused editor (0 = no editor focused).
+#[cfg(test)]
+pub(crate) fn focused_editor_id() -> u64 {
+    FOCUSED_EDITOR_ID.with(|id| id.load(Ordering::Relaxed))
+}
+
+/// Records `editor_id` as the focused editor (0 clears focus).
+#[cfg(not(test))]
+pub(crate) fn set_focused_editor_id(editor_id: u64) {
+    FOCUSED_EDITOR_ID.store(editor_id, Ordering::Relaxed);
+}
+
+/// Records `editor_id` as the focused editor (0 clears focus).
+#[cfg(test)]
+pub(crate) fn set_focused_editor_id(editor_id: u64) {
+    FOCUSED_EDITOR_ID.with(|id| id.store(editor_id, Ordering::Relaxed));
+}
 
 // Re-export submodules
 #[cfg(feature = "bench")]
@@ -345,7 +383,12 @@ pub struct CodeEditor {
 /// let _ = editor.update(&Message::Undo);
 /// assert_eq!(editor.content(), "hello");
 /// ```
+///
+/// The enum is `#[non_exhaustive]`: new editor features add variants, so a
+/// host `match` on it must keep a wildcard arm, typically forwarding the
+/// message back to [`CodeEditor::update`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Message {
     /// Character typed
     CharacterInput(char),
@@ -659,7 +702,7 @@ impl CodeEditor {
 
         // Give focus to the first editor created (ID == 1)
         if editor_id == 1 {
-            FOCUSED_EDITOR_ID.store(editor_id, Ordering::Relaxed);
+            set_focused_editor_id(editor_id);
         }
 
         let mut editor = Self {

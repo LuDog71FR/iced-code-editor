@@ -898,6 +898,26 @@ impl CodeEditor {
     /// This does not modify document text or enable wrapping. Changing the
     /// width invalidates text and overlay geometry. While wrapping is enabled,
     /// horizontal scrolling is reset so the new visual segments stay visible.
+    ///
+    /// # Arguments
+    ///
+    /// * `column` - Wrap width in columns, or `None` for the viewport width
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// editor.set_wrap_column(Some(80));
+    /// assert_eq!(editor.wrap_column(), Some(80));
+    ///
+    /// editor.set_wrap_column(Some(0)); // Normalized to one column
+    /// assert_eq!(editor.wrap_column(), Some(1));
+    ///
+    /// editor.set_wrap_column(None); // Back to viewport-based wrapping
+    /// assert_eq!(editor.wrap_column(), None);
+    /// ```
     pub fn set_wrap_column(&mut self, column: Option<usize>) {
         let column = column.map(|value| value.max(1));
         if self.wrap_column != column {
@@ -914,6 +934,23 @@ impl CodeEditor {
     ///
     /// `None` means viewport-based wrapping. The value is retained while
     /// wrapping is disabled; zero is normalized to one by the setter.
+    ///
+    /// # Returns
+    ///
+    /// The fixed wrap width, or `None` when wrapping follows the viewport
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert_eq!(editor.wrap_column(), None); // Viewport width by default
+    ///
+    /// editor.set_wrap_column(Some(100));
+    /// editor.set_wrap_enabled(false);
+    /// assert_eq!(editor.wrap_column(), Some(100)); // Kept while disabled
+    /// ```
     pub fn wrap_column(&self) -> Option<usize> {
         self.wrap_column
     }

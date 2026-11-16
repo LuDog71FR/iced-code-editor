@@ -154,10 +154,12 @@ bool_options! {
         "Returns whether the reveal-in-file-manager action is shown.",
         "`true` if the reveal action is shown, `false` otherwise",
         default: "Off by default: the editor doesn't know its own file path.", "!";
-    search_replace_enabled, set_search_replace_enabled,
+    search_replace_enabled, set_search_replace_enabled, with_search_replace_enabled,
         "Returns whether search/replace functionality is enabled.",
         "`true` if search/replace is enabled, `false` otherwise",
-        default: "Enabled by default.", "";
+        default: "Enabled by default.", ""
+        builder: "Enables or disables search/replace using the builder pattern.",
+        "Whether to enable search/replace functionality";
     show_color_previews, set_show_color_previews, with_show_color_previews,
         "Returns whether inline color previews are drawn.",
         "`true` if color-preview swatches are rendered, `false` otherwise",

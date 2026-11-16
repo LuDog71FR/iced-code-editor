@@ -110,6 +110,16 @@ echo "Running clippy..."
 cargo clippy --verbose --workspace --all-targets --all-features -- -D warnings
 
 echo ""
+echo "Checking semver compatibility against the last version on crates.io..."
+if ! cargo semver-checks --version >/dev/null 2>&1; then
+    echo "Error: cargo-semver-checks is not installed."
+    echo "Install it with: cargo install cargo-semver-checks --locked"
+    exit 1
+fi
+# Fails when the API changes require a bigger bump than $LAST_VERSION -> $VERSION
+cargo semver-checks check-release -p iced-code-editor --all-features
+
+echo ""
 echo "Formatting code..."
 cargo fmt --all
 

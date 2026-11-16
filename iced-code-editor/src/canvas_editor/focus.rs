@@ -1,9 +1,9 @@
 //! Editor focus management: programmatic focus/blur and the canvas focus
 //! lock used to suppress input during focus transitions.
 
-use std::sync::atomic::Ordering;
-
-use crate::canvas_editor::{CodeEditor, FOCUSED_EDITOR_ID};
+use crate::canvas_editor::{
+    CodeEditor, focused_editor_id, set_focused_editor_id,
+};
 
 impl CodeEditor {
     /// Requests focus for this editor.
@@ -24,7 +24,7 @@ impl CodeEditor {
     /// editor2.request_focus();
     /// ```
     pub fn request_focus(&self) {
-        FOCUSED_EDITOR_ID.store(self.editor_id, Ordering::Relaxed);
+        set_focused_editor_id(self.editor_id);
     }
 
     /// Checks if this editor currently has focus.
@@ -47,7 +47,7 @@ impl CodeEditor {
     /// }
     /// ```
     pub fn is_focused(&self) -> bool {
-        FOCUSED_EDITOR_ID.load(Ordering::Relaxed) == self.editor_id
+        focused_editor_id() == self.editor_id
     }
 
     /// Removes canvas focus from this editor.
@@ -68,7 +68,7 @@ impl CodeEditor {
     /// ```
     pub fn lose_focus(&mut self) {
         if self.is_focused() {
-            FOCUSED_EDITOR_ID.store(0, Ordering::Relaxed);
+            set_focused_editor_id(0);
         }
         self.has_canvas_focus = false;
         self.show_cursor = false;
@@ -110,7 +110,34 @@ impl CodeEditor {
 
 #[cfg(test)]
 mod tests {
-    use crate::canvas_editor::CodeEditor;
+    use crate::canvas_editor::{
+        CodeEditor, focused_editor_id, set_focused_editor_id,
+    };
+
+    #[test]
+    fn test_set_focused_editor_id_round_trips() {
+        set_focused_editor_id(42);
+        assert_eq!(focused_editor_id(), 42);
+        set_focused_editor_id(0);
+        assert_eq!(focused_editor_id(), 0);
+    }
+
+    #[test]
+    fn test_focus_is_isolated_between_test_threads() {
+        let editor = CodeEditor::new("", "rs");
+        editor.request_focus();
+
+        let other_thread_sees = std::thread::spawn(|| {
+            let thief = CodeEditor::new("", "rs");
+            thief.request_focus();
+            focused_editor_id()
+        })
+        .join()
+        .unwrap_or_default();
+
+        assert_ne!(other_thread_sees, 0);
+        assert!(editor.is_focused());
+    }
 
     #[test]
     fn test_focus_for_test_grants_focus() {

@@ -58,7 +58,7 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 iced = "0.14"
-iced-code-editor = "0.5"
+iced-code-editor = "0.6"
 ```
 
 ### Basic Example
@@ -235,7 +235,6 @@ The editor supports a comprehensive set of keyboard shortcuts:
 | **Page Up** / **Page Down**            | Move cursor one page up/down  |
 | **Shift + Page Up** / **Shift + Page Down** | Select one page up/down  |
 | **Ctrl + Page Up** / **Ctrl + Page Down** | *Not handled* — left uncaptured for the host application to bind (the usual previous/next-tab combination). The same holds for **Alt + Page Up/Down**. |
-| **Shift + Tab**                        | Move focus to the previous editor |
 
 ### Editing
 
@@ -248,6 +247,7 @@ The editor supports a comprehensive set of keyboard shortcuts:
 | **Shift + Delete** | Delete selected text (same as Delete when selection exists)              |
 | **Enter**          | Insert new line                                                          |
 | **Tab**            | Insert indent                                                            |
+| **Shift + Tab**    | Remove one indentation level before each cursor                          |
 | **Alt + Up/Down**  | Move current line (or selected lines) up/down                            |
 | **Shift + Alt + Up/Down** | Duplicate current line (or selected lines) above/below            |
 | **Ctrl + /**       | Toggle line comment on current line (or selected lines)                  |
@@ -408,6 +408,10 @@ match event {
 
 Unknown IDs should be ignored or logged explicitly. The editor emits custom
 action IDs unchanged and does not interpret or execute them internally.
+
+`EditorMessage` is `#[non_exhaustive]`: new editor features add variants, so a
+`match` on it always needs a wildcard arm. Forwarding that arm to
+`editor.update`, as above, is what keeps every built-in feature working.
 
 The built-in labels follow the language configured with `set_language`.
 Custom-entry labels are supplied by the host application, so localize those
@@ -592,6 +596,10 @@ let editor = CodeEditor::new("code", "rs")
     .with_wrap_enabled(true)
     .with_wrap_column(Some(80));
 
+// Change the wrap column at runtime (`None` = viewport width)
+editor.set_wrap_column(Some(100));
+assert_eq!(editor.wrap_column(), Some(100));
+
 // Disable wrapping
 editor.set_wrap_enabled(false);
 
@@ -602,6 +610,8 @@ if editor.wrap_enabled() {
 ```
 
 When enabled, wrapped lines show a continuation indicator (↪) in the line number gutter.
+
+The wrap column is measured in narrow-character columns and `Some(0)` is normalized to `Some(1)`. It is kept while wrapping is disabled, so re-enabling wrapping restores it. Changing it while wrapping is enabled resets the horizontal scroll.
 
 ### Enable/disable code folding
 
@@ -837,7 +847,7 @@ LSP support provides hover documentation, auto-completion, go-to-definition, and
 
 ```toml
 [dependencies]
-iced-code-editor = { version = "0.5", features = ["lsp-process"] }
+iced-code-editor = { version = "0.6", features = ["lsp-process"] }
 ```
 
 #### Enable/disable LSP on an editor

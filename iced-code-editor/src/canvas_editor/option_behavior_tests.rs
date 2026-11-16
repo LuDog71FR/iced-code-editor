@@ -29,8 +29,6 @@ fn drawing(
     )
 }
 
-static FOCUS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 fn focused(source: &str) -> CodeEditor {
     let mut editor = CodeEditor::new(source, "rs");
     editor.request_focus();
@@ -43,7 +41,6 @@ fn focused(source: &str) -> CodeEditor {
 #[test]
 fn editor_config_option_visual_toggles_round_trip() -> Result<(), &'static str>
 {
-    let _guard = FOCUS_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let renderer = renderer()?;
     for theme in [iced::Theme::Dark, iced::Theme::Light] {
         for (source, layer, setter) in [
@@ -95,7 +92,6 @@ fn editor_config_option_folding_restores_hidden_lines() {
 
 #[test]
 fn editor_config_option_auto_indent_changes_enter_and_undo() {
-    let _guard = FOCUS_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     for (enabled, expected) in [(true, "    x\n    "), (false, "    x\n")] {
         let mut editor = focused("    x");
         editor.cursors.set_single((0, 5));
@@ -109,7 +105,6 @@ fn editor_config_option_auto_indent_changes_enter_and_undo() {
 
 #[test]
 fn editor_config_option_auto_brackets_pair_skip_surround_and_undo() {
-    let _guard = FOCUS_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     for (open, close) in
         [('(', ')'), ('[', ']'), ('{', '}'), ('"', '"'), ('\'', '\'')]
     {
@@ -149,7 +144,6 @@ fn editor_config_option_auto_brackets_pair_skip_surround_and_undo() {
 #[test]
 fn editor_config_option_vim_changes_navigation_insertion_and_cursor()
 -> Result<(), &'static str> {
-    let _guard = FOCUS_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let renderer = renderer()?;
     let mut editor = focused("abc");
     let normal = drawing(&editor, &renderer, 1);

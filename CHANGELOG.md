@@ -9,6 +9,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.6.0] - 2026-11-16
+
+### Added
+
+- feat: **advanced search and replace toolbar**
+  ([#40](https://github.com/LuDog71FR/iced-code-editor/pull/40))
+  - Match whole words (`Alt+W`, `Cmd+Option+W` on macOS) and use regular
+    expressions (`Alt+R`, `Cmd+Option+R`), on top of the existing case toggle.
+  - Regex replacements expand capture groups: `$1`, `${name}`, and `$$` for a
+    literal dollar. An invalid pattern is reported in the toolbar instead of
+    matching nothing silently.
+  - Expandable multiline search and replace inputs (`Alt+M`, `Cmd+Option+M`), so
+    a match can span several lines.
+  - Select all matches as a multi-cursor selection (`Alt+Enter`,
+    `Option+Enter`).
+  - `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) replaces the next match, also in
+    multiline mode; `Ctrl+Enter` (`Cmd+Enter`) replaces all of them in one undo
+    step.
+  - Vector toolbar icons, with translated tooltips that show each button's
+    platform-specific shortcut.
+  - New dependencies: `regex` and `iced_runtime`.
+- feat: `CodeEditor::set_wrap_column` and `CodeEditor::wrap_column` change and read
+  the wrap column at runtime
+  ([#40](https://github.com/LuDog71FR/iced-code-editor/pull/40)). `Some(0)` is
+  normalized to `Some(1)`, and the value is kept while wrapping is disabled.
+- feat: `CodeEditor::with_search_replace_enabled`, the builder counterpart of
+  `set_search_replace_enabled`. The README already used it, but it did not exist,
+  so that example did not compile.
+
+### Changed
+
+- **Breaking:** `Message` has seven new variants for the search toolbar
+  ([#40](https://github.com/LuDog71FR/iced-code-editor/pull/40)):
+  `ToggleWholeWord`, `ToggleSearchRegex`, `ToggleSearchMultiline`,
+  `ToggleSearchReplace`, `SearchInputAction(text_editor::Action)`,
+  `ReplaceInputAction(text_editor::Action)` and `SelectAllSearchMatches`.
+  No variant was removed or renamed.
+- **Breaking:** `Message` is now `#[non_exhaustive]`, so a host `match` on it
+  needs a wildcard arm. Hosts that forward unhandled messages with
+  `other => editor.update(&other)`, as the README does, need no change. Future
+  variants are then no longer a breaking change.
+- While the search dialog is open, the editor now captures `Alt+C`, `Alt+W`,
+  `Alt+R`, `Alt+M`, `Alt+Enter`, `Ctrl+Enter` and `Ctrl+Shift+Enter` (their
+  `Cmd`/`Option` counterparts on macOS), so these no longer reach the host
+  application in that state. On Windows and Linux, `Ctrl+H` with the dialog open
+  now shows or hides the replacement row instead of only opening replace mode,
+  and `Enter` in an expanded (multiline) input inserts a newline
+  ([#40](https://github.com/LuDog71FR/iced-code-editor/pull/40)).
+- style: the context menu's hover and pressed backgrounds are softer
+  ([#39](https://github.com/LuDog71FR/iced-code-editor/pull/39)).
+- style: the search and replace inputs use the application font, and their
+  placeholders are easier to read
+  ([#40](https://github.com/LuDog71FR/iced-code-editor/pull/40)).
+
+### Fixed
+
+- fix: `with_wrap_column` now goes through the setter, so the cached wrap width is
+  invalidated when the column changes
+  ([#40](https://github.com/LuDog71FR/iced-code-editor/pull/40)).
+- fix: indentation guides are redrawn when the indent style changes
+  ([#40](https://github.com/LuDog71FR/iced-code-editor/pull/40)).
+- fix: Chinese text falls back to a CJK-capable font on the canvas, and glyph
+  coordinates no longer overflow
+  ([#40](https://github.com/LuDog71FR/iced-code-editor/pull/40)).
+- fix: IME composition reuses the document text layout and is bounded to the
+  editor, the duplicate runtime preedit overlay is gone, and invalid UTF-8
+  selection ranges are rejected
+  ([#40](https://github.com/LuDog71FR/iced-code-editor/pull/40)).
+
+- test: unit tests no longer share one focused-editor slot across threads. A test
+  calling `request_focus()` could steal focus from a test running in parallel,
+  which made `select_all_unfocuses_live_inputs_without_removing_search_or_replacement_rows`
+  fail in a full run. Under `cfg(test)` the slot is now thread-local; the library
+  itself is unchanged.
+
+### Documentation
+
+- docs: `set_wrap_column` and `wrap_column` now have examples, in rustdoc and in
+  the README.
+- docs: the README listed `Shift+Tab` as moving focus to the previous editor; it
+  now documents the outdent behavior introduced in 0.5.3.
+- docs: `docs/DEV.md` brought up to date with the search toolbar (whole-word,
+  regex and multiline matching, capture-group replacements, select all matches),
+  the new source files, and the current test counts.
+
 
 ## [0.5.3] - 2026-11-08
 
@@ -33,11 +118,31 @@ Nothing yet.
 
 - `Home` now jumps to the first non-blank character of the line, and to column 0 when
   the cursor is already there ("smart Home"), as in most code editors.
+- **Breaking:** `Shift+Tab` now removes one indentation unit before each cursor
+  instead of moving focus away from the editor
+  ([#30](https://github.com/LuDog71FR/iced-code-editor/pull/30)). The
+  `Message::FocusNavigationShiftTab` variant is replaced by `Message::Backtab`.
+  While the search dialog is open, `Shift+Tab` still cycles its fields.
 - chore(deps): `iced_aw` upgraded from 0.13 to 0.14 (still on `iced` 0.14).
 - chore(deps): demo app: `opener` upgraded from 0.8 to 0.9 (still on `zbus` 5, so
   the `zbus` audit exceptions stay).
 - chore(deps): demo app: `rfd` upgraded from 0.17 to 0.18.
 - chore(deps): dev: `criterion` upgraded from 0.5 to 0.8 (benchmarks only).
+
+### Fixed
+
+- fix: selection drag scrolls smoothly at the editor edges
+  ([#33](https://github.com/LuDog71FR/iced-code-editor/pull/33)). Drags and
+  releases outside the editor bounds are still tracked, and the scroll speed grows
+  with the distance past the edge, independent of the frame rate.
+- fix: `lose_focus` now clears the global focused-editor slot, and Backspace and
+  Delete are ignored by an editor without focus
+  ([#28](https://github.com/LuDog71FR/iced-code-editor/pull/28)).
+- fix: the Find/Replace inputs keep their focus when a sticky-scroll header
+  appears or disappears
+  ([#27](https://github.com/LuDog71FR/iced-code-editor/pull/27)).
+- fix(demo-app): the wasm32 build compiles cleanly under `-D missing-docs`
+  ([#38](https://github.com/LuDog71FR/iced-code-editor/pull/38)).
 
 ### Security
 
@@ -415,6 +520,10 @@ Nothing yet.
   `unsound` warning, and the path (`iced_wgpu` → `cryoglyph` → `lru`) is not
   selectable from this workspace. Dependabot only bumps direct dependencies,
   which is why these went unnoticed.
+
+- chore(deps): Dependabot lockfile bumps `bytes` 1.11.0 → 1.12.1
+  ([#24](https://github.com/LuDog71FR/iced-code-editor/pull/24)) and `time`
+  0.3.44 → 0.3.55 ([#25](https://github.com/LuDog71FR/iced-code-editor/pull/25)).
 
 - chore: `cargo audit` now runs in CI, as a `Security Audit` job separate from
   `build` so a new advisory is reported on its own rather than behind a build

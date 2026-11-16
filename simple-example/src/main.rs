@@ -24,7 +24,7 @@ enum Message {
     /// The text input's contents changed.
     InputChanged(String),
     /// The text input was clicked, which must take focus from the editor.
-    TextInputClicked,
+    InputClicked,
 }
 
 impl Default for MyApp {
@@ -49,11 +49,11 @@ impl MyApp {
             }
             Message::InputChanged(value) => {
                 self.input_value = value;
-                self.editor.lose_focus();
+                self.editor.lose_focus(); // required: transfer focus away from editor
                 Task::none()
             }
-            Message::TextInputClicked => {
-                self.editor.lose_focus();
+            Message::InputClicked => {
+                self.editor.lose_focus(); // required: transfer focus away from editor
                 Task::none()
             }
         }
@@ -65,7 +65,7 @@ impl MyApp {
                 .on_input(Message::InputChanged)
                 .padding(8),
         )
-        .on_press(Message::TextInputClicked);
+        .on_press(Message::InputClicked); // detect click to trigger lose_focus
 
         container(
             column![input, self.editor.view().map(Message::EditorEvent)]

@@ -63,3 +63,25 @@ jobs:
       # the 2026-08-30 review.
       - name: Audit
         run: cargo audit --deny warnings
+
+  # Separate job for the same reasons as `audit`: a semver break is reported
+  # on its own, in parallel with `build`.
+  semver:
+    name: Semver Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Installed from source, like cargo-audit, to keep third-party actions
+      # out of the checks.
+      - name: Install cargo-semver-checks
+        run: cargo install cargo-semver-checks --locked
+
+      # Compares the public API against the last version published on
+      # crates.io, and fails when the changes need a bigger bump than the
+      # `version` in Cargo.toml declares. A pull request that breaks the API
+      # therefore fails here until the version is bumped accordingly.
+      # --all-features covers the API behind `lsp-process`.
+      - name: Check semver
+        run: cargo semver-checks check-release -p iced-code-editor --all-features

@@ -13,7 +13,7 @@ use super::shortcuts::command_pressed;
 use crate::canvas_editor::features::folding;
 use crate::canvas_editor::features::vim::VimMode;
 use crate::canvas_editor::{
-    ArrowDirection, CodeEditor, FOCUSED_EDITOR_ID, Message,
+    ArrowDirection, CodeEditor, Message, focused_editor_id,
 };
 
 impl CodeEditor {
@@ -24,9 +24,7 @@ impl CodeEditor {
     /// `true` if the editor has both Iced focus and internal canvas focus and is not focus-locked; `false` otherwise
     pub(crate) fn has_focus(&self) -> bool {
         // Check if this editor has Iced focus
-        let focused_id =
-            FOCUSED_EDITOR_ID.load(std::sync::atomic::Ordering::Relaxed);
-        focused_id == self.editor_id
+        focused_editor_id() == self.editor_id
             && self.has_canvas_focus
             && !self.focus_locked
     }

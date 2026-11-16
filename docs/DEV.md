@@ -113,11 +113,14 @@ iced-code-editor/
     ├── bool_options.rs        # Macro generating the boolean options' getters/builders
     ├── focus.rs               # Editor focus management
     ├── bench_support.rs       # Criterion benchmark harness (feature: bench)
+    ├── *_tests.rs             # Cross-module behavior tests (indent, wrap,
+    │                          #   option, sticky, Unicode rendering)
     ├── editing/               # Cursor, selection, clipboard, undo/redo
     │   ├── mod.rs
     │   ├── cursor.rs           # Cursor movement/positioning, paging, scroll-to-cursor
     │   ├── cursor_set.rs       # Multi-cursor collection (Cursor / CursorSet)
     │   ├── selection.rs        # Text selection logic
+    │   ├── word.rs             # Word boundaries for word motion/deletion
     │   ├── clipboard.rs        # Clipboard operations
     │   ├── history.rs          # Command history management
     │   └── command/            # Command pattern for undo/redo
@@ -152,6 +155,7 @@ iced-code-editor/
     │   ├── gutter.rs            # Line numbers, wrap indicators, fold chevrons
     │   ├── overlays.rs          # Selection/cursor/search highlight drawing
     │   ├── wrapping.rs          # Line wrapping (logical <-> visual lines)
+    │   ├── search_focus_tests.rs # Search toolbar focus/layout tests
     │   └── view.rs              # Iced UI view construction
     ├── features/                # Optional editor features
     │   ├── mod.rs
@@ -173,8 +177,11 @@ iced-code-editor/
     │   │   ├── dialog.rs
     │   │   └── update.rs
     │   ├── search/                # Search/replace
-    │   │   ├── mod.rs             # Search state and matching
-    │   │   ├── dialog.rs          # Search/replace dialog UI
+    │   │   ├── mod.rs             # Search state and literal matching
+    │   │   ├── pattern.rs         # Whole-word, regex and multiline matching
+    │   │   ├── dialog.rs          # Search/replace toolbar UI
+    │   │   ├── shortcuts.rs       # Toolbar key bindings + platform hint labels
+    │   │   ├── icons.rs           # Vector toolbar icons
     │   │   └── update.rs
     │   └── vim/                   # Vim emulation
     │       ├── mod.rs
@@ -538,7 +545,7 @@ exists rather than a preference for macros:
 - **The generated example *asserts* the default** rather than stating it in
   prose the way the hand-written getters did. A default that changes now fails
   a doctest instead of quietly contradicting its own documentation. That is a
-  meaningful share of the 240 doctests.
+  meaningful share of the 256 doctests.
 
 The doc shape is stated once in the macro, so an option cannot arrive with a
 section missing — which matters under `missing_docs = "deny"` and the project's
@@ -680,6 +687,9 @@ pub struct VisualLine {
 - **Viewport wrapping** (`wrap_column = None`): wraps at the available pixel width
   (viewport width minus the gutter), using the CJK-aware character widths.
 - **Fixed-column wrapping** (`wrap_column = Some(n)`): wraps at `n` characters.
+  `set_wrap_column()` normalizes `Some(0)` to `Some(1)`, clears both canvas
+  layers when the value changes, and resets the horizontal scroll while
+  wrapping is on. The value is kept while wrapping is off.
 - **Folding-aware**: logical lines hidden by collapsed folds produce no visual lines
   (the `hidden` set is passed in — see [Code Folding](#code-folding)).
 - `logical_to_visual()` maps a buffer position to its visual line for cursor placement.
@@ -779,33 +789,63 @@ headers, which is the bug `3b2084c` fixed.
 
 ### Search and Replace
 
-**Location:** `canvas_editor/features/search/mod.rs` (state/matching), `canvas_editor/features/search/dialog.rs` (UI)
+**Location:** `canvas_editor/features/search/mod.rs` (state, literal matching),
+`canvas_editor/features/search/pattern.rs` (whole-word / regex / multiline matching),
+`canvas_editor/features/search/dialog.rs` (toolbar UI),
+`canvas_editor/features/search/shortcuts.rs` (toolbar key bindings and hint labels),
+`canvas_editor/features/search/icons.rs` (vector toolbar icons),
+`canvas_editor/features/search/update.rs` (message handlers)
 
-A built-in find/replace dialog, gated by `search_replace_enabled`.
+A built-in find/replace toolbar, gated by `search_replace_enabled`.
 
 ```rust
 pub struct SearchState {
     pub query: String,
     pub replace_with: String,
     pub case_sensitive: bool,
+    pub whole_word: bool,
+    pub use_regex: bool,
+    pub multiline: bool,                // expanded (multi-line) inputs
+    pub search_content: text_editor::Content,  // backing store of the expanded inputs
+    pub replace_content: text_editor::Content,
+    pub pattern_error: Option<String>,  // invalid regex, shown in the toolbar
     pub is_open: bool,
     pub is_replace_mode: bool,          // search-only vs search+replace
-    pub matches: Vec<SearchMatch>,      // all matches in the buffer
+    pub matches: Vec<SearchMatch>,      // match starts, in document order
     pub current_match_index: Option<usize>,
     pub focused_field: SearchFocusedField, // Tab navigation
-    // input IDs ...
+    // input IDs, per-match details ...
 }
 ```
 
+**Two matching paths.** A plain literal query goes through `find_matches()`,
+which scans line by line and returns every `SearchMatch { line, col }` (columns
+are UTF-8 character offsets). As soon as *whole word*, *regex*, or a query
+containing `\n` is involved, `update_matches()` switches to `pattern::find()`
+instead. It joins the buffer with `\n`, compiles the query with the `regex`
+crate (a literal query is `regex::escape`d first), and returns a `MatchDetail`
+per match: start, logical end, length in characters, and the *expanded*
+replacement. Keeping the details is what lets a match span several lines and
+lets a replacement use capture groups (`$1`, `${name}`, `$$` for a literal
+dollar). `match_end()` and `replacement()` read them back, and fall back to the
+literal query length when there are none. A regex that fails to compile clears
+the matches and stores the message in `pattern_error`.
+
 **Behaviour:**
 
-- `find_matches()` scans the buffer and returns every `SearchMatch { line, col }`
-  (columns are UTF-8 character offsets). Re-run on query change or case toggle.
+- The match list is capped at `MAX_MATCHES` for display; Replace All and
+  Select All Matches re-scan without the cap.
 - `next_match()` / `previous_match()` cycle through results; `select_match_near_cursor()`
   jumps to the match closest to the caret when the dialog opens.
+- **Select all matches** (`Alt+Enter`) turns every match into a selection of a
+  multi-cursor set, keeping the current match as the primary cursor. It is
+  ignored while Vim mode is on, since Vim is single-cursor.
+- Replace All is one `CompositeCommand`, so it undoes in one step.
 - Matches are highlighted in the `overlay_cache` layer; only the visible match range
   is drawn (`get_visible_match_range()`).
-- All dialog labels and placeholders are localized through the i18n layer.
+- `shortcuts.rs` is the single place that maps each toolbar `Message` to its
+  key binding and to its platform-specific tooltip hint (`⌥ ⌘ R` vs `Alt+R`).
+- All dialog labels, tooltips and placeholders are localized through the i18n layer.
 
 ### Command Palette
 
@@ -1356,6 +1396,16 @@ if focused_id != self.editor_id {
 - Cursor blinking paused for unfocused editors (performance optimization)
 
 **Design rationale:** Global `AtomicU64` provides thread-safe coordination without locking overhead or parameter threading. `Ordering::Relaxed` is sufficient for single-threaded GUI context.
+
+**Unit tests get one focus slot per thread.** Under `#[cfg(test)]`,
+`FOCUSED_EDITOR_ID` is a `thread_local!` instead of a process-wide static.
+libtest runs each test on its own thread, and with a shared slot a test calling
+`request_focus()` stole focus from a test running in parallel, which then
+dropped its keyboard input and failed intermittently. All access goes through
+`focused_editor_id()` / `set_focused_editor_id()` (`canvas_editor/mod.rs`), so
+the two variants stay interchangeable. Doctests, integration tests and the
+demo-app build the library without `cfg(test)`, so they keep the real global
+slot.
 
 ### Selection Rendering
 
@@ -1948,10 +1998,10 @@ notice the regression exists at the right level.
 
 | Level | Where | Count | Answers |
 |---|---|---|---|
-| Unit | `#[cfg(test)] mod tests` beside the code | 688 | Is this function correct? |
-| Doctest | `# Example` blocks on public items | 240 | Is the documented usage real and still compiling? |
-| Handler | `demo-app/src/{app,ui}` tests | 70 | Does `update()` do the right thing with this `Message`? |
-| Interface | `demo-app/src/ui_tests/` | 74 | Does any widget actually *emit* that `Message`? |
+| Unit | `#[cfg(test)] mod tests` beside the code | 811 | Is this function correct? |
+| Doctest | `# Example` blocks on public items | 256 | Is the documented usage real and still compiling? |
+| Handler | `demo-app/src/{app,ui}` tests | 79 | Does `update()` do the right thing with this `Message`? |
+| Interface | `demo-app/src/ui_tests/` | 82 | Does any widget actually *emit* that `Message`? |
 | Integration | `iced-code-editor/tests/` | 13 | Does the public API work from outside the crate? |
 
 ### Unit Tests
@@ -1994,7 +2044,7 @@ clicks and types on the actual widgets, feeds the resulting messages back into
 `update`, and asserts both on the state and on what the next render shows:
 
 - `chrome.rs` (11) — toolbar, status bar, tabs
-- `dialogs.rs` (23) — search, go-to-line, command palette, context menu
+- `dialogs.rs` (31) — search, go-to-line, command palette, context menu
 - `editing.rs` (37) — typing, selection, clipboard, navigation keys
 - `sticky_scroll.rs` (3) — pinned headers and click-to-jump
 
@@ -2032,7 +2082,7 @@ cursor to line 30 instead of leaving it at 0 before the host-passthrough fix.
 ### Running Tests
 
 ```bash
-# Run all tests: 688 unit + 144 demo-app + 13 integration + 240 doctests
+# Run all tests: 811 unit + 161 demo-app + 13 integration + 256 doctests
 cargo test --workspace --all-features
 
 # Run with output
