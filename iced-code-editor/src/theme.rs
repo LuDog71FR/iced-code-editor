@@ -56,6 +56,72 @@ pub struct Style {
     pub bracket_match_color: Color,
     /// Background fill color for the IME preedit (composition) region
     pub ime_preedit_background_color: Color,
+    /// Name of the syntect theme that colors the code tokens.
+    ///
+    /// Any theme bundled with syntect works: `"base16-ocean.dark"`,
+    /// `"base16-eighties.dark"`, `"base16-mocha.dark"`, `"base16-ocean.light"`,
+    /// `"InspiredGitHub"`, `"Solarized (dark)"` and `"Solarized (light)"`.
+    /// `None`, or an unknown name, picks `base16-ocean` in its dark or light
+    /// variant from the lightness of [`Style::background`].
+    pub syntax_theme_name: Option<&'static str>,
+    /// Colors drawn over the syntax theme for common token kinds, matched by
+    /// TextMate scope. The default overrides nothing.
+    pub token_colors: TokenColors,
+}
+
+/// Colors that replace the syntax theme's for common token kinds.
+///
+/// Tokens are matched by TextMate scope name, so one set of colors applies to
+/// every grammar that uses the usual names (JSON, YAML, TOML, JavaScript,
+/// Rust, ...). A `None` field keeps the syntax theme's color.
+///
+/// # Example
+///
+/// ```
+/// use iced::Color;
+/// use iced_code_editor::{CodeEditor, TokenColors, theme};
+///
+/// let mut style = theme::from_iced_theme(&iced::Theme::Dark);
+/// style.token_colors = TokenColors {
+///     key: Some(Color::from_rgb(0.5, 0.8, 1.0)),
+///     string: Some(Color::from_rgb(0.6, 0.9, 0.5)),
+///     ..TokenColors::default()
+/// };
+///
+/// let mut editor = CodeEditor::new("{\"name\": \"value\"}", "json");
+/// editor.set_theme(style);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TokenColors {
+    /// Object keys and property names (JSON and YAML keys, object-literal
+    /// keys). Takes precedence over [`TokenColors::string`] for quoted keys.
+    pub key: Option<Color>,
+    /// Strings, quotes included (`string` scopes).
+    pub string: Option<Color>,
+    /// Numbers (`constant.numeric` scopes).
+    pub number: Option<Color>,
+    /// `true`, `false`, `null` and other `constant.language` values.
+    pub literal: Option<Color>,
+    /// Comments, delimiters included (`comment` scopes).
+    pub comment: Option<Color>,
+    /// Brackets, separators and other `punctuation` that does not delimit a
+    /// string or comment.
+    pub punctuation: Option<Color>,
+}
+
+impl TokenColors {
+    /// Whether no token kind is overridden.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::TokenColors;
+    ///
+    /// assert!(TokenColors::default().is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// The theme catalog of a code editor.
@@ -237,6 +303,8 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         selection_color,
         bracket_match_color,
         ime_preedit_background_color,
+        syntax_theme_name: None,
+        token_colors: TokenColors::default(),
     }
 }
 

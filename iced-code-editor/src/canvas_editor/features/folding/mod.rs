@@ -55,6 +55,69 @@ impl FoldRegion {
     }
 }
 
+/// When the gutter draws fold markers (the `▼`/`▶` chevrons).
+///
+/// # Example
+///
+/// ```
+/// use iced_code_editor::{CodeEditor, FoldMarkers};
+///
+/// let mut editor = CodeEditor::new("fn main() {\n    body();\n}", "rs");
+/// editor.set_fold_markers(FoldMarkers::OnGutterHover);
+/// assert_eq!(editor.fold_markers(), FoldMarkers::OnGutterHover);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FoldMarkers {
+    /// Always shown (the default).
+    #[default]
+    Always,
+    /// Shown while the pointer is over the gutter, and always on collapsed
+    /// lines so hidden content stays discoverable.
+    OnGutterHover,
+    /// Never shown and taking no gutter space. Blocks can still be folded
+    /// with the keyboard shortcuts and the API.
+    Never,
+}
+
+impl FoldMarkers {
+    /// Whether a fold header shows its marker.
+    ///
+    /// # Arguments
+    ///
+    /// * `folded` - Whether the header's block is collapsed
+    /// * `gutter_hovered` - Whether the pointer is over the gutter
+    pub(crate) fn is_visible(self, folded: bool, gutter_hovered: bool) -> bool {
+        match self {
+            Self::Always => true,
+            Self::OnGutterHover => folded || gutter_hovered,
+            Self::Never => false,
+        }
+    }
+}
+
+/// Which side of the line numbers the fold-marker column sits on.
+///
+/// # Example
+///
+/// ```
+/// use iced_code_editor::{CodeEditor, FoldMarkerPosition};
+///
+/// let mut editor = CodeEditor::new("fn main() {\n    body();\n}", "rs");
+/// editor.set_fold_marker_position(FoldMarkerPosition::BeforeLineNumbers);
+/// assert_eq!(
+///     editor.fold_marker_position(),
+///     FoldMarkerPosition::BeforeLineNumbers
+/// );
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FoldMarkerPosition {
+    /// At the outer (left) edge of the gutter, before the line numbers.
+    BeforeLineNumbers,
+    /// Between the line numbers and the text (the default).
+    #[default]
+    AfterLineNumbers,
+}
+
 /// Detects all indentation-based foldable regions in the buffer.
 ///
 /// A line `i` is a fold header when the next non-blank line is indented more
@@ -178,6 +241,35 @@ pub fn hidden_lines(
         }
     }
     hidden
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::*;
+
+    #[test]
+    fn test_fold_marker_visibility_by_mode() {
+        for folded in [false, true] {
+            for hovered in [false, true] {
+                assert!(FoldMarkers::Always.is_visible(folded, hovered));
+                assert!(!FoldMarkers::Never.is_visible(folded, hovered));
+            }
+        }
+        let on_hover = FoldMarkers::OnGutterHover;
+        assert!(!on_hover.is_visible(false, false));
+        assert!(on_hover.is_visible(false, true));
+        assert!(on_hover.is_visible(true, false), "collapsed stays visible");
+        assert!(on_hover.is_visible(true, true));
+    }
+
+    #[test]
+    fn test_fold_marker_defaults_keep_the_existing_gutter() {
+        assert_eq!(FoldMarkers::default(), FoldMarkers::Always);
+        assert_eq!(
+            FoldMarkerPosition::default(),
+            FoldMarkerPosition::AfterLineNumbers
+        );
+    }
 }
 
 #[cfg(test)]

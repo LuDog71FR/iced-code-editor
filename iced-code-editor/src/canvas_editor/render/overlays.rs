@@ -3,6 +3,8 @@
 
 use iced::mouse;
 use iced::widget::canvas;
+use std::ops::Range;
+
 use iced::{Color, Point, Rectangle, Size};
 
 use super::text::{RenderContext, calculate_segment_geometry};
@@ -234,112 +236,28 @@ impl CodeEditor {
     /// * `ctx` - Rendering context containing visual lines and metrics
     /// * `start` - Selection start (line, col)
     /// * `end` - Selection end (line, col), must be >= start
+    /// * `window` - Visual line indices currently drawn
     fn draw_single_selection(
         &self,
         frame: &mut canvas::Frame,
         ctx: &RenderContext,
         start: (usize, usize),
         end: (usize, usize),
+        window: Range<usize>,
     ) {
         let selection_color = self.style.selection_color;
-
-        if start.0 == end.0 {
-            // Single line selection - need to handle wrapped segments
-            let start_visual = WrappingCalculator::logical_to_visual(
-                ctx.visual_lines,
-                start.0,
-                start.1,
-            );
-            let end_visual = WrappingCalculator::logical_to_visual(
-                ctx.visual_lines,
-                end.0,
-                end.1,
-            );
-
-            if let (Some(start_v), Some(end_v)) = (start_visual, end_visual) {
-                if start_v == end_v {
-                    // Selection within same visual line
-                    let vl = &ctx.visual_lines[start_v];
-                    self.fill_highlight_segment(
-                        frame,
-                        ctx,
-                        start_v,
-                        vl,
-                        (start.1, end.1),
-                        selection_color,
-                    );
-                } else {
-                    // Selection spans multiple visual lines (same logical line)
-                    for (v_idx, vl) in ctx
-                        .visual_lines
-                        .iter()
-                        .enumerate()
-                        .skip(start_v)
-                        .take(end_v - start_v + 1)
-                    {
-                        let sel_start_col = if v_idx == start_v {
-                            start.1
-                        } else {
-                            vl.start_col
-                        };
-                        let sel_end_col =
-                            if v_idx == end_v { end.1 } else { vl.end_col };
-
-                        self.fill_highlight_segment(
-                            frame,
-                            ctx,
-                            v_idx,
-                            vl,
-                            (sel_start_col, sel_end_col),
-                            selection_color,
-                        );
-                    }
-                }
-            }
-        } else {
-            // Multi-line selection
-            let start_visual = WrappingCalculator::logical_to_visual(
-                ctx.visual_lines,
-                start.0,
-                start.1,
-            );
-            let end_visual = WrappingCalculator::logical_to_visual(
-                ctx.visual_lines,
-                end.0,
-                end.1,
-            );
-
-            if let (Some(start_v), Some(end_v)) = (start_visual, end_visual) {
-                for (v_idx, vl) in ctx
-                    .visual_lines
-                    .iter()
-                    .enumerate()
-                    .skip(start_v)
-                    .take(end_v - start_v + 1)
-                {
-                    let sel_start_col =
-                        if vl.logical_line == start.0 && v_idx == start_v {
-                            start.1
-                        } else {
-                            vl.start_col
-                        };
-
-                    let sel_end_col =
-                        if vl.logical_line == end.0 && v_idx == end_v {
-                            end.1
-                        } else {
-                            vl.end_col
-                        };
-
-                    self.fill_highlight_segment(
-                        frame,
-                        ctx,
-                        v_idx,
-                        vl,
-                        (sel_start_col, sel_end_col),
-                        selection_color,
-                    );
-                }
+        for (v_idx, cols) in
+            selection_segments(ctx.visual_lines, start, end, window)
+        {
+            if let Some(vl) = ctx.visual_lines.get(v_idx) {
+                self.fill_highlight_segment(
+                    frame,
+                    ctx,
+                    v_idx,
+                    vl,
+                    cols,
+                    selection_color,
+                );
             }
         }
     }
@@ -394,16 +312,24 @@ impl CodeEditor {
     ///
     /// * `frame` - The canvas frame to draw on
     /// * `ctx` - Rendering context containing visual lines and metrics
+    /// * `window` - Visual line indices currently drawn
     pub(super) fn draw_selection_highlight(
         &self,
         frame: &mut canvas::Frame,
         ctx: &RenderContext,
+        window: Range<usize>,
     ) {
         for cursor in self.cursors.iter() {
             if let Some((start, end)) = cursor.selection_range()
                 && start != end
             {
-                self.draw_single_selection(frame, ctx, start, end);
+                self.draw_single_selection(
+                    frame,
+                    ctx,
+                    start,
+                    end,
+                    window.clone(),
+                );
             }
         }
     }
@@ -775,12 +701,113 @@ fn validate_selection_indices(
     }
 }
 
+/// Lists the visual-line segments covered by a selection.
+///
+/// Each item is a visual line index paired with the column range to fill on
+/// it. Only rows inside `window` are produced: selecting all of a large
+/// document must not queue one rectangle per selected line every frame (the
+/// overlay layer redraws on each caret blink), when only the visible rows can
+/// be seen.
+///
+/// # Arguments
+///
+/// * `visual_lines` - The wrapped visual lines of the document
+/// * `start` - Selection start (line, col)
+/// * `end` - Selection end (line, col), must be >= start
+/// * `window` - Visual line indices currently drawn
+///
+/// # Returns
+///
+/// The `(visual_index, (start_col, end_col))` segments to highlight, in order.
+fn selection_segments(
+    visual_lines: &[VisualLine],
+    start: (usize, usize),
+    end: (usize, usize),
+    window: Range<usize>,
+) -> impl Iterator<Item = (usize, (usize, usize))> + '_ {
+    let start_v =
+        WrappingCalculator::logical_to_visual(visual_lines, start.0, start.1);
+    let end_v =
+        WrappingCalculator::logical_to_visual(visual_lines, end.0, end.1);
+    let rows = match (start_v, end_v) {
+        (Some(first), Some(last)) => {
+            first.max(window.start)..last.saturating_add(1).min(window.end)
+        }
+        _ => 0..0,
+    };
+    rows.filter_map(move |v_idx| {
+        let vl = visual_lines.get(v_idx)?;
+        let from = if Some(v_idx) == start_v { start.1 } else { vl.start_col };
+        let to = if Some(v_idx) == end_v { end.1 } else { vl.end_col };
+        Some((v_idx, (from, to)))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
+    use std::rc::Rc;
 
     use super::*;
     use crate::canvas_editor::compare_floats;
+
+    /// Builds an unwrapped editor of `lines` numbered lines and returns its
+    /// visual lines.
+    fn visual_lines_of(lines: usize) -> (CodeEditor, Rc<Vec<VisualLine>>) {
+        let text = (0..lines)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let editor = CodeEditor::new(&text, "txt");
+        let visual_lines = editor.visual_lines_cached(800.0);
+        (editor, visual_lines)
+    }
+
+    #[test]
+    fn test_select_all_draws_only_the_visible_window() {
+        let (editor, visual_lines) = visual_lines_of(90_000);
+        let last = editor.buffer.line_count() - 1;
+        let end = (last, editor.buffer.line_len(last));
+
+        let segments: Vec<_> =
+            selection_segments(&visual_lines, (0, 0), end, 1_000..1_040)
+                .collect();
+
+        assert_eq!(
+            segments.len(),
+            40,
+            "a 90k-line selection must queue one rectangle per visible row"
+        );
+        assert_eq!(segments.first().map(|s| s.0), Some(1_000));
+        assert_eq!(segments.last().map(|s| s.0), Some(1_039));
+    }
+
+    #[test]
+    fn test_selection_segments_keep_partial_first_and_last_rows() {
+        let (_, visual_lines) = visual_lines_of(5);
+
+        let segments: Vec<_> =
+            selection_segments(&visual_lines, (1, 2), (3, 4), 0..5).collect();
+
+        // "line 1".."line 3": from col 2 on the first row, whole middle row,
+        // up to col 4 on the last row.
+        assert_eq!(segments, vec![(1, (2, 6)), (2, (0, 6)), (3, (0, 4))]);
+    }
+
+    #[test]
+    fn test_selection_segments_outside_the_window_draw_nothing() {
+        let (_, visual_lines) = visual_lines_of(100);
+
+        assert_eq!(
+            selection_segments(&visual_lines, (0, 0), (5, 2), 50..60).count(),
+            0
+        );
+        // A window that clips both ends keeps only the overlap.
+        let segments: Vec<_> =
+            selection_segments(&visual_lines, (10, 1), (20, 3), 15..18)
+                .collect();
+        assert_eq!(segments, vec![(15, (0, 7)), (16, (0, 7)), (17, (0, 7))]);
+    }
 
     #[test]
     fn test_vim_cursor_rendering_insert_uses_bar() {

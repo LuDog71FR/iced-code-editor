@@ -5,6 +5,8 @@ use iced::advanced::text::{
     Alignment, Paragraph, Renderer as TextRenderer, Text,
 };
 use std::cmp::Ordering as CmpOrdering;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use unicode_width::UnicodeWidthChar;
 
 use crate::canvas_editor::CodeEditor;
@@ -20,6 +22,76 @@ pub(crate) const GUTTER_WIDTH: f32 = 45.0;
 pub(crate) const FOLD_MARGIN_WIDTH: f32 = 14.0;
 pub(crate) const CURSOR_BLINK_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(530);
+
+/// Reference glyph used to measure wide (CJK) characters.
+const WIDE_REFERENCE_GLYPH: &str = "汉";
+
+/// Largest narrow-width drift, in pixels, under which a cached wide width is
+/// still trusted (see [`cached_wide_char_width`]).
+const NARROW_WIDTH_TOLERANCE: f32 = 0.01;
+
+/// Wide-glyph widths shared by every editor in the process, keyed by font and
+/// size bits, each stored with the narrow width measured alongside it.
+type WideWidthCache = HashMap<(iced::Font, u32), (f32, f32)>;
+
+/// Process-wide [`WideWidthCache`].
+static WIDE_WIDTHS: OnceLock<Mutex<WideWidthCache>> = OnceLock::new();
+
+#[cfg(test)]
+thread_local! {
+    /// Wide-glyph measurements taken on this thread, counted by the tests.
+    static WIDE_MEASUREMENTS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// Returns the wide-glyph width of `font` at `size`, measuring it only when
+/// no trustworthy cached value exists.
+///
+/// Measuring the wide reference glyph usually starts a fallback-font search
+/// (most code fonts have no CJK glyphs), which costs far more than measuring
+/// an ASCII letter. Hosts that build many editors (one per tab or request
+/// body) paid it on every construction and every font change.
+///
+/// The cache is validated with `narrow_width`, a fresh measurement of the
+/// narrow glyph: if it no longer matches the narrow width stored with the
+/// entry, the font's glyphs changed since (typically a font loaded after the
+/// first measurement, which had fallen back to another face), so the wide
+/// glyph is measured again and the entry replaced.
+///
+/// # Arguments
+///
+/// * `font` - The font to measure
+/// * `size` - The font size in pixels
+/// * `narrow_width` - The current width of the narrow reference glyph
+/// * `measure` - Measures the wide reference glyph
+fn cached_wide_char_width(
+    font: iced::Font,
+    size: f32,
+    narrow_width: f32,
+    measure: impl FnOnce() -> f32,
+) -> f32 {
+    let key = (font, size.to_bits());
+    let cache = WIDE_WIDTHS.get_or_init(Mutex::default);
+    let cached = cache
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(&key)
+        .copied();
+    if let Some((narrow, wide)) = cached
+        && (narrow - narrow_width).abs() <= NARROW_WIDTH_TOLERANCE
+    {
+        return wide;
+    }
+
+    #[cfg(test)]
+    WIDE_MEASUREMENTS.with(|count| count.set(count.get() + 1));
+    let wide = measure();
+    cache
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(key, (narrow_width, wide));
+    wide
+}
 
 /// Measures the width of a single character.
 ///
@@ -140,6 +212,20 @@ pub(crate) const CACHE_WINDOW_MARGIN_MULTIPLIER: usize = 2;
 /// as later content redraws advance the cached parser state.
 pub(crate) const HIGHLIGHT_LINES_PER_FRAME: usize = 2_000;
 
+/// Wall-clock budget for sequential syntect catch-up within one content frame.
+///
+/// A line count alone cannot bound frame time: a line's cost varies a lot
+/// with syntax, line length and build profile (a debug build is roughly ten
+/// times slower), so [`HIGHLIGHT_LINES_PER_FRAME`] lines can take well over
+/// a frame. This caps the time as well; 8 ms keeps a frame inside a 60 fps
+/// budget while still making steady progress.
+pub(crate) const HIGHLIGHT_TIME_PER_FRAME: std::time::Duration =
+    std::time::Duration::from_millis(8);
+
+/// Lines parsed between two clock reads during highlight catch-up, so the
+/// time check itself stays negligible.
+pub(crate) const HIGHLIGHT_CLOCK_CHECK_INTERVAL: usize = 64;
+
 /// Compares two floating point numbers with a small epsilon tolerance.
 ///
 /// # Arguments
@@ -226,8 +312,15 @@ impl CodeEditor {
         auto_adjust_line_height: bool,
     ) {
         self.char_width = self.measure_single_char_width("a");
-        // Use '汉' as a standard reference for CJK (Chinese, Japanese, Korean) wide characters
-        self.full_char_width = self.measure_single_char_width("汉");
+        // Use '汉' as a standard reference for CJK (Chinese, Japanese, Korean)
+        // wide characters. It is the costly one to measure, so it is shared
+        // across editors and validated by the fresh narrow width.
+        self.full_char_width = cached_wide_char_width(
+            self.font,
+            self.font_size,
+            self.char_width,
+            || self.measure_single_char_width(WIDE_REFERENCE_GLYPH),
+        );
 
         // Fallback for infinite width measurements
         if self.char_width.is_infinite() {
@@ -506,10 +599,49 @@ impl CodeEditor {
     }
 
     /// Returns the width of the fold margin (the chevron column), or `0.0` when
-    /// folding is disabled.
+    /// folding is disabled or fold markers are never shown.
     pub(crate) fn fold_margin_width(&self) -> f32 {
-        if self.folding_enabled { FOLD_MARGIN_WIDTH } else { 0.0 }
+        if self.folding_enabled
+            && self.fold_markers != crate::FoldMarkers::Never
+        {
+            FOLD_MARGIN_WIDTH
+        } else {
+            0.0
+        }
     }
+
+    /// Returns the horizontal extents of the gutter columns, in canvas
+    /// coordinates.
+    ///
+    /// The single source of truth for the gutter layout: drawing, fold
+    /// clicks, the gutter background and sticky headers all read it, so the
+    /// fold-marker column can move to either side of the line numbers.
+    pub(crate) fn gutter_columns(&self) -> GutterColumns {
+        let numbers = self.line_number_gutter_width();
+        let markers = self.fold_margin_width();
+        match self.fold_marker_position {
+            crate::FoldMarkerPosition::AfterLineNumbers => GutterColumns {
+                line_numbers: 0.0..numbers,
+                fold_markers: numbers..numbers + markers,
+            },
+            crate::FoldMarkerPosition::BeforeLineNumbers => GutterColumns {
+                fold_markers: 0.0..markers,
+                line_numbers: markers..markers + numbers,
+            },
+        }
+    }
+}
+
+/// Horizontal extents of the gutter's two columns, in canvas coordinates.
+///
+/// Either range is empty when its column is hidden (line numbers disabled,
+/// folding disabled or fold markers never shown).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GutterColumns {
+    /// The line-number column.
+    pub(crate) line_numbers: std::ops::Range<f32>,
+    /// The fold-marker (chevron) column.
+    pub(crate) fold_markers: std::ops::Range<f32>,
 }
 
 #[cfg(test)]
@@ -770,6 +902,140 @@ mod tests {
         // Check that width_cjk is roughly double of width_a (common in terminal fonts)
         // but we just check it is significantly larger
         assert!(width_cjk >= width_a * 1.5);
+    }
+
+    #[test]
+    fn test_gutter_columns_default_to_numbers_then_markers() {
+        let editor = CodeEditor::new("fn a() {\n    b\n}", "rs");
+        let columns = editor.gutter_columns();
+
+        assert_eq!(columns.line_numbers, 0.0..GUTTER_WIDTH);
+        assert_eq!(
+            columns.fold_markers,
+            GUTTER_WIDTH..GUTTER_WIDTH + FOLD_MARGIN_WIDTH
+        );
+        assert_eq!(
+            columns.fold_markers.end.to_bits(),
+            editor.gutter_width().to_bits()
+        );
+    }
+
+    #[test]
+    fn test_marker_position_only_swaps_the_gutter_columns() {
+        let mut editor = CodeEditor::new("fn a() {\n    b\n}", "rs");
+        let width = editor.gutter_width();
+        editor.set_fold_marker_position(
+            crate::FoldMarkerPosition::BeforeLineNumbers,
+        );
+        let columns = editor.gutter_columns();
+
+        assert_eq!(columns.fold_markers, 0.0..FOLD_MARGIN_WIDTH);
+        assert_eq!(
+            columns.line_numbers,
+            FOLD_MARGIN_WIDTH..FOLD_MARGIN_WIDTH + GUTTER_WIDTH
+        );
+        assert_eq!(
+            editor.gutter_width().to_bits(),
+            width.to_bits(),
+            "the text must not move"
+        );
+    }
+
+    #[test]
+    fn test_never_markers_free_their_column_but_keep_fold_state() {
+        let mut editor = CodeEditor::new("fn a() {\n    b\n}", "rs");
+        let _ = editor.update(&crate::Message::ToggleFold(0));
+        assert!(editor.is_folded(0));
+
+        editor.set_fold_markers(crate::FoldMarkers::Never);
+
+        assert!(editor.gutter_columns().fold_markers.is_empty());
+        assert_eq!(editor.gutter_width().to_bits(), GUTTER_WIDTH.to_bits());
+        assert!(editor.is_folded(0), "the fold state survives");
+        assert_eq!(
+            editor.visual_lines_cached(800.0).len(),
+            2,
+            "the folded block stays hidden"
+        );
+    }
+
+    #[test]
+    fn test_hover_markers_show_on_hover_and_on_collapsed_lines() {
+        let mut editor =
+            CodeEditor::new("fn a() {\n    b\n}\nfn c() {\n    d\n}", "rs");
+        editor.set_fold_markers(crate::FoldMarkers::OnGutterHover);
+        let marked = |editor: &CodeEditor| -> Vec<usize> {
+            editor
+                .visual_lines_cached(800.0)
+                .iter()
+                .filter(|line| editor.shows_fold_marker(line))
+                .map(|line| line.logical_line)
+                .collect()
+        };
+
+        assert!(marked(&editor).is_empty(), "hidden while not hovered");
+        let _ = editor.update(&crate::Message::ToggleFold(3));
+        assert_eq!(marked(&editor), vec![3], "a collapsed block stays marked");
+        editor.gutter_hovered.set(true);
+        assert_eq!(marked(&editor), vec![0, 3], "all shown on hover");
+    }
+
+    /// Wide measurements taken so far on this thread.
+    fn wide_measurements() -> usize {
+        WIDE_MEASUREMENTS.with(std::cell::Cell::get)
+    }
+
+    #[test]
+    fn test_wide_width_is_measured_once_per_font_and_size() {
+        // A font no other test uses, so the process-wide cache starts cold.
+        let font = iced::Font::with_name("Wide Width Count Test");
+        let mut first = CodeEditor::new("", "rs");
+        first.set_font(font);
+        let start = wide_measurements();
+
+        first.set_font_size(13.25, true);
+        assert_eq!(wide_measurements(), start + 1, "cold cache measures");
+
+        for _ in 0..5 {
+            let mut editor = CodeEditor::new("", "rs");
+            editor.set_font(font);
+            editor.set_font_size(13.25, true);
+            assert_eq!(
+                editor.full_char_width.to_bits(),
+                first.full_char_width.to_bits()
+            );
+        }
+        assert_eq!(wide_measurements(), start + 1, "same font/size: cache hit");
+
+        first.set_font_size(16.75, true);
+        assert_eq!(wide_measurements(), start + 2, "a new size measures once");
+    }
+
+    #[test]
+    fn test_cached_wide_width_matches_a_direct_measurement() {
+        let mut editor = CodeEditor::new("", "rs");
+        editor.set_font(iced::Font::with_name("Wide Width Match Test"));
+        editor.set_font_size(15.5, false);
+
+        let direct = editor.measure_single_char_width(WIDE_REFERENCE_GLYPH);
+        assert_eq!(editor.full_char_width.to_bits(), direct.to_bits());
+    }
+
+    #[test]
+    fn test_stale_wide_width_is_measured_again() {
+        let font = iced::Font::with_name("Wide Width Stale Test");
+        // Seed an entry whose narrow width no longer matches, as when the
+        // font was still falling back to another face at first measurement.
+        let _ = cached_wide_char_width(font, 12.0, 999.0, || 1.0);
+
+        let mut editor = CodeEditor::new("", "rs");
+        editor.set_font(font);
+        let start = wide_measurements();
+        editor.set_font_size(12.0, false);
+
+        assert_eq!(wide_measurements(), start + 1, "stale entry re-measured");
+        let direct = editor.measure_single_char_width(WIDE_REFERENCE_GLYPH);
+        assert_eq!(editor.full_char_width.to_bits(), direct.to_bits());
     }
 
     #[test]

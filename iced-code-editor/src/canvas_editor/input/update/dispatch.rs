@@ -232,6 +232,7 @@ impl CodeEditor {
 
             // Multi-cursor operations
             Message::AltClick(point) => self.handle_alt_click_msg(*point),
+            Message::ShiftClick(point) => self.handle_shift_click_msg(*point),
             Message::AddCursorAbove => self.handle_add_cursor_above_msg(),
             Message::AddCursorBelow => self.handle_add_cursor_below_msg(),
             Message::SelectNextOccurrence => {

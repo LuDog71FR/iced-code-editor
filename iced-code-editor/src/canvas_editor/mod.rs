@@ -25,8 +25,9 @@ pub use editing::history::CommandHistory;
 use features::{command_palette, folding, goto_line, search, vim};
 use metrics::{
     CACHE_WINDOW_MARGIN_MULTIPLIER, CHAR_WIDTH, CURSOR_BLINK_INTERVAL,
-    FONT_SIZE, GUTTER_WIDTH, HIGHLIGHT_LINES_PER_FRAME, LINE_HEIGHT, TAB_WIDTH,
-    compare_floats, indent_width, measure_char_width, measure_text_width,
+    FONT_SIZE, HIGHLIGHT_CLOCK_CHECK_INTERVAL, HIGHLIGHT_LINES_PER_FRAME,
+    HIGHLIGHT_TIME_PER_FRAME, LINE_HEIGHT, TAB_WIDTH, compare_floats,
+    indent_width, measure_char_width, measure_text_width,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -207,6 +208,14 @@ pub struct CodeEditor {
     pub(crate) wrap_column: Option<usize>,
     /// Whether code folding (collapse/expand blocks) is enabled.
     pub(crate) folding_enabled: bool,
+    /// When fold markers are drawn in the gutter.
+    pub(crate) fold_markers: folding::FoldMarkers,
+    /// Which side of the line numbers the fold-marker column sits on.
+    pub(crate) fold_marker_position: folding::FoldMarkerPosition,
+    /// Whether the pointer is over the gutter, for
+    /// [`folding::FoldMarkers::OnGutterHover`]. Updated from canvas events,
+    /// which only get `&self`.
+    pub(crate) gutter_hovered: Cell<bool>,
     /// Header line indices of regions that are currently collapsed.
     pub(crate) collapsed_folds: HashSet<usize>,
     /// Monotonic revision counter for fold state.
@@ -344,6 +353,14 @@ pub struct CodeEditor {
     /// Remaining syntax lines that may be parsed during the current content
     /// render. `usize::MAX` keeps direct non-render uses (notably tests) uncapped.
     pub(crate) highlight_lines_remaining: Cell<usize>,
+    /// Instant after which the current content render stops parsing new
+    /// syntax lines (see [`HIGHLIGHT_TIME_PER_FRAME`]). `None` outside a
+    /// content render, which keeps other callers (sticky headers, tests)
+    /// unbounded in time.
+    pub(crate) highlight_deadline: Cell<Option<Instant>>,
+    /// Set when a highlight request could not be served because a frame
+    /// budget ran out, so the canvas schedules another frame to carry on.
+    pub(crate) highlight_catch_up_pending: Cell<bool>,
     /// Sequential per-line bracket-nesting-depth cache (see [`BracketDepthCache`]),
     /// used by bracket-pair colorization. Stored behind a `RefCell` for the same
     /// reason as `highlight_cache`: it is memoized during rendering (`&self`).
@@ -555,6 +572,10 @@ pub enum Message {
     ImeClosed,
     /// Alt+Click: add a new cursor at the given canvas position
     AltClick(iced::Point),
+    /// Shift+Click: extend the primary selection from its anchor (or from the
+    /// caret when nothing is selected) to the given canvas position. Focus and
+    /// drag tracking behave as for [`Message::MouseClick`].
+    ShiftClick(iced::Point),
     /// Ctrl+Alt+Up: add a cursor on the line above the primary cursor
     AddCursorAbove,
     /// Ctrl+Alt+Down: add a cursor on the line below the primary cursor
@@ -733,6 +754,9 @@ impl CodeEditor {
             indent_style: IndentStyle::Spaces(4),
             wrap_column: None,
             folding_enabled: true,
+            fold_markers: folding::FoldMarkers::default(),
+            fold_marker_position: folding::FoldMarkerPosition::default(),
+            gutter_hovered: Cell::new(false),
             collapsed_folds: HashSet::new(),
             fold_revision: 0,
             foldable_regions_cache: RefCell::new(None),
@@ -788,6 +812,8 @@ impl CodeEditor {
             resolved_syntax: RefCell::new(None),
             highlight_cache: RefCell::new(None),
             highlight_lines_remaining: Cell::new(usize::MAX),
+            highlight_deadline: Cell::new(None),
+            highlight_catch_up_pending: Cell::new(false),
             bracket_depth_cache: RefCell::new(BracketDepthCache::new()),
             pre_edit_line: 0,
             pre_edit_last_line: 0,

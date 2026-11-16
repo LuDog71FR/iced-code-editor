@@ -15,12 +15,14 @@
 use std::collections::HashSet;
 use std::hint::black_box;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use iced_code_editor::CodeEditor;
 use iced_code_editor::bench_support::{
     IncrementalEditBenchmark, IncrementalLspEditBenchmark,
     IncrementalNoWrapEditBenchmark, IncrementalSearchEditBenchmark, TextBuffer,
     WrappingCalculator, calculate_visual_line_range_len,
-    compute_foldable_regions, find_matches, highlight_line_spans,
+    compute_foldable_regions, find_matches, highlight_line_spans, paste_text,
+    undo_paste,
 };
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -225,6 +227,70 @@ fn bench_search(c: &mut Criterion) {
     });
 }
 
+/// A minified-JSON-like single line of roughly `chars` characters.
+fn long_single_line(chars: usize) -> String {
+    let mut out = String::with_capacity(chars + 32);
+    let mut i = 0;
+    while out.len() < chars {
+        out.push_str(&format!("{{\"key_{i}\":[{i},true,null]}},"));
+        i += 1;
+    }
+    out
+}
+
+/// Benchmarks pasting a large text, and undoing that paste.
+///
+/// Both run through `InsertTextCommand`, the command every paste uses. The
+/// long single line is the shape (minified JSON) where any per-character
+/// char-to-byte rescan turns quadratic.
+fn bench_paste(c: &mut Criterion) {
+    let inputs = [
+        ("paste_source_20k_lines", sample_source(20_000)),
+        ("paste_single_line_200k_chars", long_single_line(200_000)),
+    ];
+
+    for (name, text) in &inputs {
+        c.bench_function(name, |b| {
+            b.iter_batched(
+                || TextBuffer::new(""),
+                |mut buffer| {
+                    let _ = paste_text(&mut buffer, black_box(text));
+                    buffer
+                },
+                BatchSize::LargeInput,
+            );
+        });
+
+        c.bench_function(&format!("undo_{name}"), |b| {
+            b.iter_batched(
+                || {
+                    let mut buffer = TextBuffer::new("");
+                    let command = paste_text(&mut buffer, text);
+                    (buffer, command)
+                },
+                |(mut buffer, mut command)| {
+                    undo_paste(&mut buffer, &mut command);
+                    buffer
+                },
+                BatchSize::LargeInput,
+            );
+        });
+    }
+}
+
+/// Benchmarks building a configured editor, as a host with many editors
+/// (one per tab or request body) does for each one: construct, then pick the
+/// font size. Each step measures the font's glyph widths.
+fn bench_editor_setup(c: &mut Criterion) {
+    c.bench_function("new_editor_with_font_size", |b| {
+        b.iter(|| {
+            let mut editor = CodeEditor::new(black_box("{}"), "json");
+            editor.set_font_size(15.0, true);
+            editor
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_highlight_line,
@@ -234,6 +300,8 @@ criterion_group!(
     bench_incremental_no_wrap_edits,
     bench_incremental_search_edits,
     bench_folding,
-    bench_search
+    bench_search,
+    bench_paste,
+    bench_editor_setup
 );
 criterion_main!(benches);

@@ -24,17 +24,17 @@ Screenshot of the demo application:
 
 ## Features
 
-- **Syntax highlighting** for multiple programming languages via [syntect](https://github.com/trishume/syntect)
+- **Syntax highlighting** for multiple programming languages via [syntect](https://github.com/trishume/syntect), with a choice of bundled syntax themes and per-token-kind color overrides (keys, strings, numbers, literals, comments, punctuation)
 - **Line numbers** with styled gutter
-- **Text selection** via mouse drag and keyboard shortcuts
+- **Text selection** via mouse drag, Shift+Click and keyboard shortcuts
 - **Clipboard operations** (copy, paste)
 - **Undo/Redo** with smart command grouping and configurable history
 - **Custom scrollbars** with themed styling
-- **Focus management** for multiple editors
+- **Focus management** for multiple editors — a click outside an editor releases its keyboard focus
 - **Native Iced theme support** - Automatically adapts to all 23+ built-in Iced themes
 - **Line wrapping** to split long lines
-- **Code folding** to collapse/expand indentation-based blocks
-- **High performance** canvas-based rendering
+- **Code folding** to collapse/expand indentation-based blocks, with fold markers shown always, on gutter hover, or never, on either side of the line numbers
+- **High performance** canvas-based rendering — large pastes, select-all and syntax highlighting of big files stay responsive
 - **Search and replace** text
 - **Command palette** (`Ctrl+Shift+P`) listing every editor action, extensible with the host application's own commands
 - **Language Server Protocol** (LSP) support
@@ -58,16 +58,17 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 iced = "0.14"
-iced-code-editor = "0.6"
+iced-code-editor = "0.7"
 ```
 
 ### Basic Example
 
 Here's a minimal example to integrate the code editor into your Iced application:
 
-> **Note:** `CodeEditor` does not automatically lose focus when another widget is clicked.
-> You must call `editor.lose_focus()` whenever another interactive widget is activated.
-> The pattern below uses `mouse_area` to detect clicks on sibling widgets.
+> **Note:** A press outside the editor releases its keyboard focus automatically.
+> Call `editor.lose_focus()` when focus moves *without* a click, such as keyboard
+> navigation or a programmatic focus change. The `mouse_area` pattern below still
+> works, but is no longer required for clicks.
 
 ```rust
 use iced::widget::{column, container, mouse_area, text_input};
@@ -108,11 +109,11 @@ impl MyApp {
             }
             Message::InputChanged(value) => {
                 self.input_value = value;
-                self.editor.lose_focus(); // required: transfer focus away from editor
+                self.editor.lose_focus(); // explicit transfer, e.g. for keyboard focus
                 Task::none()
             }
             Message::InputClicked => {
-                self.editor.lose_focus(); // required: transfer focus away from editor
+                self.editor.lose_focus(); // explicit transfer, e.g. for keyboard focus
                 Task::none()
             }
         }
@@ -234,6 +235,7 @@ The editor supports a comprehensive set of keyboard shortcuts:
 | **Ctrl + Home** / **Ctrl + End**       | Jump to start/end of document |
 | **Page Up** / **Page Down**            | Move cursor one page up/down  |
 | **Shift + Page Up** / **Shift + Page Down** | Select one page up/down  |
+| **Shift + Click**                      | Extend the selection from its anchor (or the caret) to the clicked position |
 | **Ctrl + Page Up** / **Ctrl + Page Down** | *Not handled* — left uncaptured for the host application to bind (the usual previous/next-tab combination). The same holds for **Alt + Page Up/Down**. |
 
 ### Editing
@@ -342,6 +344,8 @@ These shortcuts are active only when code folding is enabled:
 | **Ctrl + J** | Unfold all blocks                               |
 
 You can also click the fold chevrons (▼ / ▶) in the gutter to collapse or expand a block.
+When they are configured to appear only on hover (see
+[Fold markers](#fold-markers)), move the pointer over the gutter to reveal them.
 
 ### LSP Completion
 
@@ -531,6 +535,42 @@ for theme in iced::Theme::ALL {
 }
 ```
 
+#### Syntax theme and token colors
+
+Code tokens are colored by a syntect theme. By default it is `base16-ocean`,
+in its dark or light variant to match the editor background. Pick another
+bundled theme with `Style::syntax_theme_name`, and override the color of
+common token kinds with `Style::token_colors`:
+
+```rust
+use iced::Color;
+use iced_code_editor::{TokenColors, theme};
+
+let mut style = theme::from_iced_theme(&iced::Theme::Dark);
+
+// Any syntect bundled theme: "base16-ocean.dark", "base16-eighties.dark",
+// "base16-mocha.dark", "base16-ocean.light", "InspiredGitHub",
+// "Solarized (dark)", "Solarized (light)". An unknown name falls back to
+// the automatic choice.
+style.syntax_theme_name = Some("base16-mocha.dark");
+
+// Recolor token kinds by TextMate scope, across grammars (JSON, YAML,
+// JavaScript, Rust, ...). `None` keeps the syntax theme's color.
+style.token_colors = TokenColors {
+    key: Some(Color::from_rgb(0.55, 0.75, 1.0)),
+    string: Some(Color::from_rgb(0.65, 0.85, 0.5)),
+    number: Some(Color::from_rgb(0.95, 0.65, 0.4)),
+    ..TokenColors::default()
+};
+
+editor.set_theme(style);
+```
+
+Object keys (JSON and YAML keys, object-literal keys) take the `key` color
+even though they are quoted strings. Tokens that a theme draws as a
+background highlight, such as invalid syntax in base16 themes, always fall
+back to a legible color, so half-typed code never disappears.
+
 ### Getting and Setting Content
 
 ```rust
@@ -653,6 +693,31 @@ if editor.is_folded(0) {
 ```
 
 When folding is disabled, the collapsed state is preserved (so re-enabling restores the previously collapsed blocks) but no lines are hidden.
+
+#### Fold markers
+
+`FoldMarkers` chooses when the chevrons are drawn, and `FoldMarkerPosition`
+which side of the line numbers their column sits on:
+
+```rust
+use iced_code_editor::{FoldMarkerPosition, FoldMarkers};
+
+// Default: chevrons always visible, between the line numbers and the text.
+editor.set_fold_markers(FoldMarkers::Always);
+
+// Show them only while the pointer is over the gutter. Collapsed blocks keep
+// their ▶ so hidden content stays discoverable.
+editor.set_fold_markers(FoldMarkers::OnGutterHover);
+
+// Never show them: their column is freed and the text moves closer to the
+// line numbers. Folding still works with the shortcuts and the API above.
+editor.set_fold_markers(FoldMarkers::Never);
+
+// Put the chevron column at the outer edge of the gutter instead.
+editor.set_fold_marker_position(FoldMarkerPosition::BeforeLineNumbers);
+
+assert_eq!(editor.fold_marker_position(), FoldMarkerPosition::BeforeLineNumbers);
+```
 
 ### Enable/disable line numbers
 
@@ -847,7 +912,7 @@ LSP support provides hover documentation, auto-completion, go-to-definition, and
 
 ```toml
 [dependencies]
-iced-code-editor = { version = "0.6", features = ["lsp-process"] }
+iced-code-editor = { version = "0.7", features = ["lsp-process"] }
 ```
 
 #### Enable/disable LSP on an editor
@@ -1028,6 +1093,7 @@ A full-featured demo application is included in the `demo-app` directory, showca
 
 - File operations (open, save, save as)
 - Theme switching
+- Fold markers shown on gutter hover (`FoldMarkers::OnGutterHover`)
 - Modified state tracking
 - Clipboard operations
 - Full keyboard navigation

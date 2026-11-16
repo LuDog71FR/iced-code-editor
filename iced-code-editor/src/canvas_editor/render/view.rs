@@ -18,7 +18,7 @@ use crate::canvas_editor::features::goto_line::dialog as goto_line_dialog;
 use crate::canvas_editor::features::search::dialog as search_dialog;
 use crate::canvas_editor::features::sticky_scroll;
 use crate::canvas_editor::input::ime_requester::ImeRequester;
-use crate::canvas_editor::{CodeEditor, GUTTER_WIDTH, Message, TAB_WIDTH};
+use crate::canvas_editor::{CodeEditor, Message, TAB_WIDTH};
 use std::rc::Rc;
 
 /// Horizontal gap in pixels between the gutter and the code text, matching the
@@ -185,7 +185,9 @@ impl CodeEditor {
                 container(
                     Space::new().width(Length::Fill).height(Length::Fill),
                 )
-                .width(Length::Fixed(GUTTER_WIDTH))
+                // Spans the fold margin too when it comes first, so the
+                // whole gutter left of the numbers shares one background.
+                .width(Length::Fixed(self.gutter_columns().line_numbers.end))
                 .height(Length::Fill)
                 .style(move |_| container::Style {
                     background: Some(Background::Color(gutter_background)),
@@ -347,6 +349,17 @@ impl CodeEditor {
 
         let mut row = Row::new();
 
+        // Keep the fold margin empty: a pinned header is not where the user
+        // folds, and a chevron there would invite a click that does nothing.
+        let fold_margin_width = self.fold_margin_width();
+        let fold_margin =
+            || Space::new().width(Length::Fixed(fold_margin_width));
+        let markers_first = self.fold_marker_position
+            == crate::FoldMarkerPosition::BeforeLineNumbers;
+        if markers_first {
+            row = row.push(fold_margin());
+        }
+
         if self.line_numbers_enabled {
             row = row.push(
                 container(
@@ -362,10 +375,9 @@ impl CodeEditor {
             );
         }
 
-        // Keep the fold margin empty: a pinned header is not where the user
-        // folds, and a chevron there would invite a click that does nothing.
-        row = row
-            .push(Space::new().width(Length::Fixed(self.fold_margin_width())));
+        if !markers_first {
+            row = row.push(fold_margin());
+        }
         row =
             row.push(Space::new().width(Length::Fixed(CODE_TEXT_LEFT_PADDING)));
 
@@ -502,6 +514,39 @@ impl CodeEditor {
         iced::Element::new(ime_layer)
     }
 
+    /// Wraps the canvas scrollable in the right-click context menu.
+    ///
+    /// The menu owns its transient open/close state and positions itself at
+    /// the right-click location. Its widget *captures* the right press before
+    /// forwarding it to its underlay, and a `Stack` stops delivering a
+    /// captured event after its topmost layer. Wrapping the whole editor stack
+    /// therefore hid the press from the canvas, which sits below the IME and
+    /// dialog layers: no `ContextMenuRequested` was published, so the caret
+    /// and selection handling for context clicks never ran.
+    ///
+    /// A scrollable forwards events to its content whether or not they were
+    /// captured, so wrapping only the scrollable keeps the menu over the same
+    /// area while the canvas still sees the press.
+    fn with_context_menu<'a>(
+        &self,
+        underlay: impl Into<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        let action_context = self.action_context();
+        let custom_context_menu_entries =
+            self.custom_context_menu_entries().to_vec();
+        let default_context_menu_enabled = self.default_context_menu_enabled();
+        let translations = self.translations;
+        ContextMenu::new(underlay, move || {
+            context_menu::view(
+                &custom_context_menu_entries,
+                default_context_menu_enabled,
+                action_context,
+                translations,
+            )
+        })
+        .into()
+    }
+
     /// Creates the view element with scrollable wrapper.
     ///
     /// The backgrounds (editor and gutter) are handled by container styles
@@ -534,8 +579,11 @@ impl CodeEditor {
         // Calculate canvas height and visual lines
         let (visual_lines, canvas_height) = self.calculate_canvas_height();
 
-        // Create scrollable containing the canvas
-        let scrollable = self.create_canvas_with_scrollable(canvas_height);
+        // Create scrollable containing the canvas, with the right-click menu
+        // wrapped directly around it (see `with_context_menu`).
+        let scrollable = self.with_context_menu(
+            self.create_canvas_with_scrollable(canvas_height),
+        );
 
         // Create background layer with gutter and code backgrounds
         let background_row = self.create_background_layer();
@@ -606,23 +654,6 @@ impl CodeEditor {
             .width(Length::Fill)
             .height(Length::Fill)
             .clip(true);
-
-        // The context menu owns its transient open/close state and positions
-        // itself at the right-click location. The canvas still receives the
-        // right-click event so it can preserve or reposition the selection.
-        let action_context = self.action_context();
-        let custom_context_menu_entries =
-            self.custom_context_menu_entries().to_vec();
-        let default_context_menu_enabled = self.default_context_menu_enabled();
-        let translations = self.translations;
-        let editor_container = ContextMenu::new(editor_container, move || {
-            context_menu::view(
-                &custom_context_menu_entries,
-                default_context_menu_enabled,
-                action_context,
-                translations,
-            )
-        });
 
         // When wrap is disabled, add a horizontal scrollbar below the editor.
         let editor_body: Element<'_, Message> = if self.wrap_enabled {

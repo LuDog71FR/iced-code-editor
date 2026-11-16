@@ -26,6 +26,8 @@ pub(crate) struct ResolvedSyntax {
     /// Whether it was resolved against a dark editor background, which selects
     /// the dark token palette.
     dark_background: bool,
+    /// The syntect theme name the style requested, if any.
+    theme_name: Option<&'static str>,
     /// The resolved grammar, `None` when syntect ships none at all.
     reference: Option<&'static SyntaxReference>,
     /// The resolved token palette, `None` when the theme set is empty.
@@ -39,15 +41,23 @@ impl ResolvedSyntax {
     ///
     /// * `syntax` - Syntax identifier that was resolved.
     /// * `dark_background` - Whether the editor background is dark.
+    /// * `theme_name` - The syntect theme name the style requested, if any.
     /// * `reference` - The grammar the identifier resolved to.
-    /// * `theme` - The token palette the background selected.
+    /// * `theme` - The token palette that was selected.
     pub(crate) fn new(
         syntax: &str,
         dark_background: bool,
+        theme_name: Option<&'static str>,
         reference: Option<&'static SyntaxReference>,
         theme: Option<&'static Theme>,
     ) -> Self {
-        Self { syntax: syntax.to_string(), dark_background, reference, theme }
+        Self {
+            syntax: syntax.to_string(),
+            dark_background,
+            theme_name,
+            reference,
+            theme,
+        }
     }
 
     /// Returns the memoized resolution when it still matches both inputs.
@@ -56,17 +66,21 @@ impl ResolvedSyntax {
     ///
     /// * `syntax` - Syntax identifier being resolved now.
     /// * `dark_background` - Whether the editor background is dark now.
+    /// * `theme_name` - The syntect theme name the style requests now.
     ///
     /// # Returns
     ///
-    /// The grammar and palette, or `None` when either input has changed.
+    /// The grammar and palette, or `None` when any input has changed.
     pub(crate) fn get(
         &self,
         syntax: &str,
         dark_background: bool,
+        theme_name: Option<&'static str>,
     ) -> Option<(Option<&'static SyntaxReference>, Option<&'static Theme>)>
     {
-        (self.syntax == syntax && self.dark_background == dark_background)
+        (self.syntax == syntax
+            && self.dark_background == dark_background
+            && self.theme_name == theme_name)
             .then_some((self.reference, self.theme))
     }
 }
@@ -567,22 +581,26 @@ mod tests {
     use crate::canvas_editor::Message;
 
     #[test]
-    fn test_resolved_syntax_hits_only_on_both_keys() {
+    fn test_resolved_syntax_hits_only_on_all_keys() {
         let editor = CodeEditor::new("fn main() {}", "rs");
         let (_, reference, theme) = editor.resolve_syntax();
-        let resolved = ResolvedSyntax::new("rs", true, reference, theme);
+        let resolved = ResolvedSyntax::new("rs", true, None, reference, theme);
 
         assert!(
-            resolved.get("rs", true).is_some(),
-            "the same identifier and background must hit"
+            resolved.get("rs", true, None).is_some(),
+            "the same identifier, background and theme name must hit"
         );
         assert!(
-            resolved.get("lua", true).is_none(),
+            resolved.get("lua", true, None).is_none(),
             "a different syntax identifier must miss"
         );
         assert!(
-            resolved.get("rs", false).is_none(),
+            resolved.get("rs", false, None).is_none(),
             "a background lightness flip must miss: it selects another palette"
+        );
+        assert!(
+            resolved.get("rs", true, Some("InspiredGitHub")).is_none(),
+            "a requested theme name must miss: it selects another palette"
         );
     }
 
@@ -596,11 +614,9 @@ mod tests {
 
         let _ = editor.resolve_syntax();
         assert!(
-            editor
-                .resolved_syntax
-                .borrow()
-                .as_ref()
-                .is_some_and(|resolved| resolved.get("rs", true).is_some()),
+            editor.resolved_syntax.borrow().as_ref().is_some_and(|resolved| {
+                resolved.get("rs", true, None).is_some()
+            }),
             "the first resolution must be memoized under its own key"
         );
 
@@ -608,11 +624,9 @@ mod tests {
         // serve the previous grammar.
         editor.set_syntax("lua");
         assert!(
-            editor
-                .resolved_syntax
-                .borrow()
-                .as_ref()
-                .is_some_and(|resolved| resolved.get("lua", true).is_none()),
+            editor.resolved_syntax.borrow().as_ref().is_some_and(|resolved| {
+                resolved.get("lua", true, None).is_none()
+            }),
             "the stale entry must not answer for the new identifier"
         );
         assert_eq!(editor.syntax_name(), "Lua");

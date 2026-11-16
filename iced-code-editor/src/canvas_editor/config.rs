@@ -5,6 +5,9 @@
 use crate::canvas_editor::features::context_menu::{
     ContextMenuEntry, ContextMenuItem,
 };
+use crate::canvas_editor::features::folding::{
+    FoldMarkerPosition, FoldMarkers,
+};
 use crate::canvas_editor::features::vim::VimMode;
 use crate::canvas_editor::{CodeEditor, IndentStyle};
 use crate::theme::Style;
@@ -661,6 +664,86 @@ impl CodeEditor {
             self.folding_enabled = enabled;
             self.bump_fold_revision();
         }
+    }
+
+    /// Sets when fold markers (the `▼`/`▶` chevrons) are drawn in the gutter.
+    ///
+    /// [`FoldMarkers::Never`] also frees the fold-marker column, so the text
+    /// moves closer to the line numbers; blocks can still be folded with the
+    /// keyboard shortcuts and the API. The fold state is kept across changes.
+    ///
+    /// # Arguments
+    ///
+    /// * `markers` - When fold markers are drawn
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, FoldMarkers};
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {\n    body();\n}", "rs");
+    /// editor.set_fold_markers(FoldMarkers::Never);
+    /// assert_eq!(editor.fold_markers(), FoldMarkers::Never);
+    /// ```
+    pub fn set_fold_markers(&mut self, markers: FoldMarkers) {
+        if self.fold_markers != markers {
+            self.fold_markers = markers;
+            // `Never` changes the gutter width, hence wrapping and hit tests.
+            self.bump_fold_revision();
+        }
+    }
+
+    /// Returns when fold markers are drawn in the gutter.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, FoldMarkers};
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert_eq!(editor.fold_markers(), FoldMarkers::Always);
+    /// ```
+    pub fn fold_markers(&self) -> FoldMarkers {
+        self.fold_markers
+    }
+
+    /// Sets which side of the line numbers the fold-marker column sits on.
+    ///
+    /// # Arguments
+    ///
+    /// * `position` - Where the fold-marker column goes
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, FoldMarkerPosition};
+    ///
+    /// let mut editor = CodeEditor::new("fn main() {\n    body();\n}", "rs");
+    /// editor.set_fold_marker_position(FoldMarkerPosition::BeforeLineNumbers);
+    /// ```
+    pub fn set_fold_marker_position(&mut self, position: FoldMarkerPosition) {
+        if self.fold_marker_position != position {
+            self.fold_marker_position = position;
+            self.content_cache.clear();
+            self.overlay_cache.clear();
+        }
+    }
+
+    /// Returns which side of the line numbers the fold-marker column sits on.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{CodeEditor, FoldMarkerPosition};
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert_eq!(
+    ///     editor.fold_marker_position(),
+    ///     FoldMarkerPosition::AfterLineNumbers
+    /// );
+    /// ```
+    pub fn fold_marker_position(&self) -> FoldMarkerPosition {
+        self.fold_marker_position
     }
 
     /// Enables or disables automatic indentation on Enter.

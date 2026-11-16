@@ -250,7 +250,9 @@ pub mod theme;
 #[doc(hidden)]
 #[cfg(feature = "bench")]
 pub use canvas_editor::bench_support;
-pub use canvas_editor::features::folding::FoldRegion;
+pub use canvas_editor::features::folding::{
+    FoldMarkerPosition, FoldMarkers, FoldRegion,
+};
 /// LSP integration types and traits for editor clients.
 pub use canvas_editor::lsp::{
     LspClient, LspDocument, LspFormattingOptions, LspPosition, LspRange,
@@ -261,7 +263,7 @@ pub use canvas_editor::{
     ContextMenuItem, IndentStyle, Message, VimMode,
 };
 pub use i18n::{Language, Translations};
-pub use theme::{Catalog, Style, StyleFn, from_iced_theme};
+pub use theme::{Catalog, Style, StyleFn, TokenColors, from_iced_theme};
 
 #[cfg(all(feature = "lsp-process", not(target_arch = "wasm32")))]
 pub use canvas_editor::lsp::process::{

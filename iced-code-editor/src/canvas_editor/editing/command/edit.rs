@@ -5,9 +5,15 @@ use crate::buffer::TextBuffer;
 
 use super::Command;
 
-/// Inserts `text` into `buffer` starting at `(line, col)`, character by
-/// character, translating `'\n'` into a newline split and every other
-/// character into a plain insertion.
+/// Inserts `text` into `buffer` starting at `(line, col)`, translating each
+/// `'\n'` into a line split.
+///
+/// The text is spliced in whole segments, not character by character: the
+/// first segment and the tail of the target line are joined in one
+/// `replace_range`, and every following segment becomes a new line. A
+/// per-character loop re-scanned the line to map a char index to a byte index
+/// on every character, which made pasting a long line (minified JSON)
+/// quadratic in its length.
 ///
 /// Returns the buffer position immediately after the last inserted
 /// character (i.e. where the caret would rest after typing `text`).
@@ -24,21 +30,64 @@ fn insert_text_at(
     col: usize,
     text: &str,
 ) -> (usize, usize) {
+    let mut segments = text.split('\n');
+    let first = segments.next().unwrap_or_default();
+    let Some(second) = segments.next() else {
+        // No newline: one splice into the target line.
+        buffer.replace_range(line, col, 0, first);
+        return (line, col + first.chars().count());
+    };
+
+    // Cut the target line at `col`: its tail moves to the end of the last
+    // inserted line.
+    let tail_len = buffer.line_len(line).saturating_sub(col);
+    let tail: String = buffer.line(line).chars().skip(col).collect();
+    buffer.replace_range(line, col, tail_len, first);
+
     let mut current_line = line;
-    let mut current_col = col;
-
-    for ch in text.chars() {
-        if ch == '\n' {
-            buffer.insert_newline(current_line, current_col);
-            current_line += 1;
-            current_col = 0;
-        } else {
-            buffer.insert_char(current_line, current_col, ch);
-            current_col += 1;
-        }
+    let mut last = second;
+    for segment in segments {
+        current_line += 1;
+        buffer.insert_line(current_line, last.to_owned());
+        last = segment;
     }
+    current_line += 1;
+    let end_col = last.chars().count();
+    buffer.insert_line(current_line, format!("{last}{tail}"));
 
-    (current_line, current_col)
+    (current_line, end_col)
+}
+
+/// Deletes the text between `start` and `end` (`(line, col)` pairs, `end`
+/// exclusive) in one splice.
+///
+/// The surviving tail of the last line is joined onto the first line's
+/// prefix, then the fully consumed lines are dropped. This keeps the work
+/// proportional to the text touched plus the lines removed, instead of one
+/// char-to-byte rescan per deleted character.
+fn delete_range_at(
+    buffer: &mut TextBuffer,
+    start: (usize, usize),
+    end: (usize, usize),
+) {
+    if start >= end {
+        return;
+    }
+    if start.0 == end.0 {
+        buffer.replace_range(start.0, start.1, end.1 - start.1, "");
+        return;
+    }
+    let tail: String = buffer.line(end.0).chars().skip(end.1).collect();
+    let first_line_len = buffer.line_len(start.0);
+    buffer.replace_range(
+        start.0,
+        start.1,
+        first_line_len.saturating_sub(start.1),
+        &tail,
+    );
+    for _ in start.0..end.0 {
+        buffer.remove_line(start.0 + 1);
+    }
 }
 
 /// Command for inserting a single character.
@@ -389,28 +438,9 @@ impl Command for InsertTextCommand {
     }
 
     fn undo(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) {
-        // Delete characters in reverse, starting from the end of the inserted
-        // text rather than from wherever the caret was left to rest.
-        let mut current_line = self.insert_end.0;
-        let mut current_col = self.insert_end.1;
-
-        for ch in self.text.chars().rev() {
-            if ch == '\n' {
-                // Merge lines
-                if current_line > 0 {
-                    let prev_line_len = buffer.line_len(current_line - 1);
-                    buffer.delete_char(current_line, 0);
-                    current_line -= 1;
-                    current_col = prev_line_len;
-                }
-            } else {
-                // Delete character
-                if current_col > 0 {
-                    buffer.delete_char(current_line, current_col);
-                    current_col -= 1;
-                }
-            }
-        }
+        // Remove the inserted span in one splice, ending at the end of the
+        // inserted text rather than wherever the caret was left to rest.
+        delete_range_at(buffer, (self.line, self.col), self.insert_end);
 
         *cursor = self.cursor_before;
     }
@@ -489,79 +519,20 @@ impl Command for DeleteRangeCommand {
         buffer: &mut TextBuffer,
         cursor: &mut (usize, usize),
     ) {
-        // Delete from start to end
-        if self.start == self.end {
-            *cursor = self.start;
-            return;
-        }
-
-        if self.start.0 == self.end.0 {
-            // Single line: remove the selected characters in one splice.
-            buffer.replace_range(
-                self.start.0,
-                self.start.1,
-                self.end.1 - self.start.1,
-                "",
-            );
-        } else {
-            // Multi-line: splice the surviving tail of the last line onto
-            // the first line's prefix, then drop the fully-consumed lines
-            // in between (including the original last line). This keeps
-            // the whole operation O(text touched + lines removed) instead
-            // of the previous per-character `delete_forward` loop.
-            let tail: String =
-                buffer.line(self.end.0).chars().skip(self.end.1).collect();
-            let first_line_len = buffer.line_len(self.start.0);
-            buffer.replace_range(
-                self.start.0,
-                self.start.1,
-                first_line_len - self.start.1,
-                &tail,
-            );
-            for _ in self.start.0..self.end.0 {
-                buffer.remove_line(self.start.0 + 1);
-            }
-        }
+        delete_range_at(buffer, self.start, self.end);
 
         *cursor = self.start;
     }
 
     fn undo(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) {
-        // Re-insert the deleted text by reversing the splice performed in
-        // `execute`, using the exact captured text instead of replaying it
-        // character by character.
-        if self.start.0 == self.end.0 {
-            buffer.replace_range(
-                self.start.0,
-                self.start.1,
-                0,
-                &self.deleted_text,
-            );
-        } else {
-            let segments: Vec<&str> = self.deleted_text.split('\n').collect();
-            if let [first_segment, middle_segments @ .., last_segment] =
-                segments.as_slice()
-            {
-                let tail: String = buffer
-                    .line(self.start.0)
-                    .chars()
-                    .skip(self.start.1)
-                    .collect();
-                buffer.replace_range(
-                    self.start.0,
-                    self.start.1,
-                    tail.chars().count(),
-                    first_segment,
-                );
-                for (offset, segment) in middle_segments.iter().enumerate() {
-                    buffer.insert_line(
-                        self.start.0 + 1 + offset,
-                        (*segment).to_string(),
-                    );
-                }
-                buffer.insert_line(self.end.0, format!("{last_segment}{tail}"));
-            }
-        }
+        // Re-insert the exact captured text in one splice, reversing
+        // `execute`.
+        let _ = insert_text_at(
+            buffer,
+            self.start.0,
+            self.start.1,
+            &self.deleted_text,
+        );
         *cursor = self.cursor_before;
     }
 }
@@ -585,6 +556,78 @@ mod tests {
         assert_eq!(buffer.line(0), "ab");
         assert_eq!(buffer.line(1), "bc");
         assert_eq!(end, (1, 1));
+    }
+
+    /// Reference: the original character-by-character insertion that
+    /// `insert_text_at` replaced, kept to pin down exact equivalence.
+    fn insert_text_per_char(
+        buffer: &mut TextBuffer,
+        line: usize,
+        col: usize,
+        text: &str,
+    ) -> (usize, usize) {
+        let (mut line, mut col) = (line, col);
+        for ch in text.chars() {
+            if ch == '\n' {
+                buffer.insert_newline(line, col);
+                line += 1;
+                col = 0;
+            } else {
+                buffer.insert_char(line, col, ch);
+                col += 1;
+            }
+        }
+        (line, col)
+    }
+
+    /// Insertion texts and positions covering the edge cases: empty text,
+    /// leading/trailing/consecutive newlines, multibyte characters, and
+    /// insertion at the start, middle and end of a line.
+    const INSERT_CASES: [(&str, usize, usize, &str); 8] = [
+        ("hello\nworld", 0, 2, "XY"),
+        ("hello\nworld", 0, 5, "a\nb\nc"),
+        ("hello\nworld", 1, 0, "\n"),
+        ("hello\nworld", 1, 5, "tail\n"),
+        ("hello\nworld", 0, 0, "\n\nlead"),
+        ("héllo\nwörld", 0, 3, "ünï\ncödé\n汉字"),
+        ("", 0, 0, "only\ninserted\ntext"),
+        ("abc", 0, 1, ""),
+    ];
+
+    #[test]
+    fn test_insert_text_at_matches_per_character_insertion() {
+        for (content, line, col, text) in INSERT_CASES {
+            let mut bulk = TextBuffer::new(content);
+            let mut reference = TextBuffer::new(content);
+
+            let bulk_end = insert_text_at(&mut bulk, line, col, text);
+            let reference_end =
+                insert_text_per_char(&mut reference, line, col, text);
+
+            assert_eq!(
+                bulk.to_string(),
+                reference.to_string(),
+                "{text:?} at ({line}, {col})"
+            );
+            assert_eq!(bulk.line_count(), reference.line_count());
+            assert_eq!(bulk_end, reference_end, "{text:?} at ({line}, {col})");
+        }
+    }
+
+    #[test]
+    fn test_insert_text_command_undo_restores_original() {
+        for (content, line, col, text) in INSERT_CASES {
+            let mut buffer = TextBuffer::new(content);
+            let mut cursor = (line, col);
+            let mut command =
+                InsertTextCommand::new(line, col, text.to_owned(), cursor);
+
+            command.execute(&mut buffer, &mut cursor);
+            command.undo(&mut buffer, &mut cursor);
+
+            assert_eq!(buffer.to_string(), content, "undo of {text:?}");
+            assert_eq!(cursor, (line, col));
+        }
     }
 
     #[test]
