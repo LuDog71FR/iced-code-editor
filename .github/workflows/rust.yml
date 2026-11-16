@@ -79,9 +79,29 @@ jobs:
         run: cargo install cargo-semver-checks --locked
 
       # Compares the public API against the last version published on
-      # crates.io, and fails when the changes need a bigger bump than the
-      # `version` in Cargo.toml declares. A pull request that breaks the API
-      # therefore fails here until the version is bumped accordingly.
+      # crates.io. With the version unchanged, it assumes a minor release, so
+      # an API break is reported as needing a major bump.
+      #
+      # Informational only: pull requests never bump `version` -- the
+      # maintainer does, at release time -- so a break is expected to show up
+      # here before the bump exists. Failing the job would block such a PR for
+      # something its author cannot fix. The step is allowed to fail and the
+      # next one turns the result into a warning on the run instead. The hard
+      # gate is `publish_release.sh`, which runs the same check against the
+      # bumped version before anything is published.
       # --all-features covers the API behind `lsp-process`.
       - name: Check semver
+        id: semver
+        continue-on-error: true
         run: cargo semver-checks check-release -p iced-code-editor --all-features
+
+      - name: Report semver break
+        if: steps.semver.outcome == 'failure'
+        run: |
+          echo "::warning title=Breaking API change::This change breaks the public API of iced-code-editor. The next release needs a major version bump (see the Check semver step log)."
+          {
+            echo "### Breaking API change"
+            echo ""
+            echo "\`cargo semver-checks\` found changes that require a major version bump."
+            echo "See the **Check semver** step log for the failing lints."
+          } >> "$GITHUB_STEP_SUMMARY"
