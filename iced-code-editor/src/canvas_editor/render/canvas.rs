@@ -8,7 +8,14 @@ use std::rc::Rc;
 use super::text::RenderContext;
 use super::wrapping::VisualLine;
 use crate::canvas_editor::features::color_preview;
-use crate::canvas_editor::{CodeEditor, HIGHLIGHT_LINES_PER_FRAME, Message};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+
+use crate::canvas_editor::{
+    CodeEditor, HIGHLIGHT_LINES_PER_FRAME, HIGHLIGHT_TIME_PER_FRAME, Message,
+};
 
 impl canvas::Program<Message> for CodeEditor {
     type State = Option<iced::time::Instant>;
@@ -74,12 +81,20 @@ impl canvas::Program<Message> for CodeEditor {
         // This keeps selection dragging and cursor blinking smooth by avoiding
         // invalidation of the text layer on every overlay update.
         let visual_lines_for_content = visual_lines.clone();
+        // A previous frame ran out of highlight budget: redraw the content
+        // layer so this frame refills the budget and advances the parse.
+        if self.highlight_catch_up_pending.replace(false) {
+            self.content_cache.clear();
+        }
         let content_geometry =
             self.content_cache.draw(renderer, bounds.size(), |frame| {
-                // Bound sequential syntect catch-up work for this frame. This
-                // keeps a deep jump or a cache truncation in a huge file from
-                // blocking the UI while parsing every preceding line.
+                // Bound sequential syntect catch-up work for this frame, in
+                // lines and in time. This keeps a deep jump or a cache
+                // truncation in a huge file from blocking the UI while parsing
+                // every preceding line.
                 self.highlight_lines_remaining.set(HIGHLIGHT_LINES_PER_FRAME);
+                self.highlight_deadline
+                    .set(Some(Instant::now() + HIGHLIGHT_TIME_PER_FRAME));
 
                 // Shared with the sticky-scroll layer, which colors the same
                 // lines outside the canvas.
@@ -159,6 +174,10 @@ impl canvas::Program<Message> for CodeEditor {
                     let y = idx as f32 * self.line_height;
                     self.draw_line_numbers(frame, &ctx, visual_line, y);
                 }
+
+                // Highlighting outside a content render (sticky headers) is
+                // not bound by this frame's clock.
+                self.highlight_deadline.set(None);
             });
 
         let visual_lines_for_overlay = visual_lines;
@@ -195,7 +214,7 @@ impl canvas::Program<Message> for CodeEditor {
 
                 self.draw_search_highlights(frame, &ctx, start_idx, end_idx);
                 self.draw_matching_bracket_highlight(frame, &ctx);
-                self.draw_selection_highlight(frame, &ctx);
+                self.draw_selection_highlight(frame, &ctx, start_idx..end_idx);
                 self.draw_jump_link_highlight(frame, &ctx, bounds, _cursor);
                 self.draw_cursor(frame, &ctx);
             });
@@ -239,6 +258,12 @@ impl canvas::Program<Message> for CodeEditor {
                 return Some(Action::request_redraw_at(*previous + interval));
             }
             *state = None;
+            // Keep sequential highlight catch-up going: each content frame
+            // parses a bounded slice, and nothing else asks for the next
+            // frame while the user is idle.
+            if self.highlight_catch_up_pending.get() {
+                return Some(Action::request_redraw());
+            }
         }
         match event {
             Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
@@ -317,6 +342,79 @@ mod tests {
         canvas::Program::<Message>::mouse_interaction(
             editor, &None, bounds, cursor,
         )
+    }
+
+    /// A JSON document comfortably longer than one frame's line budget.
+    fn large_json_editor() -> (CodeEditor, usize) {
+        let line_count = HIGHLIGHT_LINES_PER_FRAME * 2 + 500;
+        let content = (0..line_count)
+            .map(|i| format!("{{\"key{i}\": {i}}}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        (CodeEditor::new(&content, "json"), line_count - 1)
+    }
+
+    /// Highlights `line` with one frame's worth of budget, as `draw` does:
+    /// the pending flag is consumed at the start of the frame and the line
+    /// budget refilled.
+    fn highlight_one_frame(editor: &CodeEditor, line: usize) -> usize {
+        editor.highlight_catch_up_pending.set(false);
+        editor.highlight_lines_remaining.set(HIGHLIGHT_LINES_PER_FRAME);
+        let (syntax_set, syntax, theme) = editor.resolve_syntax();
+        let (Some(syntax), Some(theme)) = (syntax, theme) else {
+            return 0;
+        };
+        editor.highlighted_line_cached(line, syntax, theme, syntax_set).len()
+    }
+
+    /// Feeds a `RedrawRequested` event to the canvas program.
+    fn redraw_requested(editor: &CodeEditor) -> Option<Action<Message>> {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(800.0, 600.0));
+        let event = Event::Window(iced::window::Event::RedrawRequested(
+            iced::time::Instant::now(),
+        ));
+        canvas::Program::<Message>::update(
+            editor,
+            &mut None,
+            &event,
+            bounds,
+            mouse::Cursor::Unavailable,
+        )
+    }
+
+    #[test]
+    fn test_unfinished_highlighting_schedules_another_frame() {
+        let (editor, deep_line) = large_json_editor();
+
+        // One frame cannot reach the deep line: it falls back to plain text.
+        assert_eq!(highlight_one_frame(&editor, deep_line), 1);
+
+        // Nothing else may redraw the editor (no typing, no scrolling), so
+        // the canvas itself must ask for the next frame; otherwise the rest
+        // of the document stays uncolored indefinitely.
+        assert!(
+            redraw_requested(&editor).is_some(),
+            "a budget-limited frame must schedule the next one"
+        );
+    }
+
+    #[test]
+    fn test_highlight_catch_up_converges_then_goes_quiet() {
+        let (editor, deep_line) = large_json_editor();
+
+        let mut frames = 0;
+        let mut spans = highlight_one_frame(&editor, deep_line);
+        while redraw_requested(&editor).is_some() {
+            spans = highlight_one_frame(&editor, deep_line);
+            frames += 1;
+            assert!(frames < 10_000, "catch-up must converge");
+        }
+
+        assert!(spans > 1, "the deep line must end up highlighted");
+        assert!(
+            redraw_requested(&editor).is_none(),
+            "a fully highlighted editor must stop requesting frames"
+        );
     }
 
     #[test]

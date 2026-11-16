@@ -247,7 +247,8 @@ impl CodeEditor {
     /// if any.
     ///
     /// Returns `None` when folding is disabled, when the point is outside the
-    /// fold margin, or when the targeted line is not a fold header.
+    /// fold margin (always the case with [`crate::FoldMarkers::Never`]), or
+    /// when the targeted line is not a fold header.
     ///
     /// # Arguments
     ///
@@ -257,9 +258,9 @@ impl CodeEditor {
             return None;
         }
 
-        // The fold margin is the strip between the line-number area and the text.
-        let margin_start = self.line_number_gutter_width();
-        if point.x < margin_start || point.x >= self.gutter_width() {
+        // The fold margin is on either side of the line numbers; it is empty
+        // (so never hit) when fold markers are never shown.
+        if !self.gutter_columns().fold_markers.contains(&point.x) {
             return None;
         }
 
@@ -272,6 +273,31 @@ impl CodeEditor {
 
         folding::is_line_fold_header(&self.buffer, visual_line.logical_line)
             .then_some(visual_line.logical_line)
+    }
+
+    /// Records whether the pointer is over the gutter.
+    ///
+    /// # Arguments
+    ///
+    /// * `position` - The pointer position in canvas coordinates, or `None`
+    ///   when it is outside the canvas
+    ///
+    /// # Returns
+    ///
+    /// `true` when the change alters what is drawn, i.e. the hover state
+    /// flipped under [`crate::FoldMarkers::OnGutterHover`]. The content layer,
+    /// where the markers are drawn, is then invalidated.
+    pub(crate) fn update_gutter_hover(&self, position: Option<Point>) -> bool {
+        let hovered =
+            position.is_some_and(|point| point.x < self.gutter_width());
+        let changed = self.gutter_hovered.replace(hovered) != hovered;
+        let redraw = changed
+            && self.folding_enabled
+            && self.fold_markers == crate::FoldMarkers::OnGutterHover;
+        if redraw {
+            self.content_cache.clear();
+        }
+        redraw
     }
 
     /// Handles mouse events (button presses, movement, releases).
@@ -291,9 +317,33 @@ impl CodeEditor {
         bounds: Rectangle,
         cursor: &mouse::Cursor,
     ) -> Option<Action<Message>> {
+        if matches!(
+            event,
+            mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft
+        ) && self.update_gutter_hover(cursor.position_in(bounds))
+            && !self.is_dragging
+            && !cursor.is_over(bounds)
+        {
+            // The pointer left the gutter by leaving the canvas: no message
+            // is published below, so ask for the redraw that hides the
+            // hover-only fold markers.
+            return Some(Action::request_redraw());
+        }
+
         match event {
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
-                cursor.position_in(bounds).map(|position| {
+                // A press outside the canvas means focus is moving to another
+                // widget. iced 0.14 delivers keyboard events to every widget,
+                // so without releasing focus here the editor would keep
+                // consuming keystrokes (and Ctrl+C/X/A) meant for, say, a
+                // `text_input` the user just clicked. The press is not
+                // captured: it belongs to the widget under the pointer.
+                let Some(position) = cursor.position_in(bounds) else {
+                    return self
+                        .has_canvas_focus
+                        .then(|| Action::publish(Message::CanvasFocusLost));
+                };
+                Some(position).map(|position| {
                     // Clicking a fold chevron toggles the block instead of
                     // moving the caret.
                     if let Some(header) = self.fold_header_at_point(position) {
@@ -319,6 +369,12 @@ impl CodeEditor {
                             Message::AltClick(position)
                         };
                         return Action::publish(message).and_capture();
+                    }
+
+                    // Shift+Click: extend the selection to the click. Left
+                    // uncaptured like a plain click, for focus management.
+                    if self.modifiers.get().shift() {
+                        return Action::publish(Message::ShiftClick(position));
                     }
 
                     let click_count = self.classify_click(position);
@@ -427,7 +483,7 @@ impl CodeEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::canvas_editor::metrics::compare_floats;
+    use crate::canvas_editor::metrics::{FOLD_MARGIN_WIDTH, compare_floats};
     use iced::event;
     use std::cmp::Ordering;
 
@@ -647,6 +703,57 @@ mod tests {
         }
     }
 
+    /// A cursor just past the bottom-right corner of [`MOUSE_BOUNDS`].
+    fn cursor_outside() -> mouse::Cursor {
+        mouse::Cursor::Available(Point::new(
+            MOUSE_BOUNDS.x + MOUSE_BOUNDS.width + 5.0,
+            MOUSE_BOUNDS.y + MOUSE_BOUNDS.height + 5.0,
+        ))
+    }
+
+    #[test]
+    fn test_left_press_outside_releases_canvas_focus() {
+        let mut editor = CodeEditor::new("one\ntwo", "txt");
+        editor.has_canvas_focus = true;
+
+        let message = mouse_message(&editor, &LEFT_PRESS, &cursor_outside());
+        assert!(
+            matches!(message, Some(Message::CanvasFocusLost)),
+            "a press aimed at another widget must release focus, got {message:?}"
+        );
+    }
+
+    #[test]
+    fn test_left_press_outside_is_not_captured() {
+        let mut editor = CodeEditor::new("one\ntwo", "txt");
+        editor.has_canvas_focus = true;
+
+        // The press belongs to the widget under the pointer, which must
+        // still receive it.
+        assert!(matches!(
+            mouse_status(&editor, &LEFT_PRESS, &cursor_outside()),
+            Some(event::Status::Ignored)
+        ));
+    }
+
+    #[test]
+    fn test_left_press_outside_is_silent_without_canvas_focus() {
+        let editor = CodeEditor::new("one\ntwo", "txt");
+        assert!(!editor.has_canvas_focus);
+
+        // An unfocused editor has nothing to release: every editor in the
+        // window sees the press, and only the focused one may react.
+        assert!(
+            editor
+                .handle_mouse_event(
+                    &LEFT_PRESS,
+                    MOUSE_BOUNDS,
+                    &cursor_outside()
+                )
+                .is_none()
+        );
+    }
+
     #[test]
     fn test_right_click_requests_the_context_menu() {
         let editor = CodeEditor::new("one\ntwo", "txt");
@@ -715,6 +822,107 @@ mod tests {
             mouse_status(&editor, &release, &cursor_at(5.0, 5.0)),
             Some(event::Status::Captured)
         ));
+    }
+
+    /// Canvas point over column `col` of `line`, in [`MOUSE_BOUNDS`] space.
+    fn text_point(editor: &CodeEditor, line: usize, col: usize) -> Point {
+        Point::new(
+            editor.gutter_width() + 5.0 + editor.char_width() * col as f32,
+            editor.line_height() * (line as f32 + 0.5),
+        )
+    }
+
+    /// Routes a left press at `(line, col)` through the canvas event handler
+    /// with `modifiers` held, then applies the published message.
+    fn press_at(
+        editor: &mut CodeEditor,
+        line: usize,
+        col: usize,
+        modifiers: keyboard::Modifiers,
+    ) {
+        editor.modifiers.set(modifiers);
+        let point = text_point(editor, line, col);
+        let message =
+            mouse_message(editor, &LEFT_PRESS, &cursor_at(point.x, point.y));
+        editor.modifiers.set(keyboard::Modifiers::default());
+        if let Some(message) = message {
+            let _ = editor.update(&message);
+        }
+        let _ = editor.update(&Message::MouseRelease);
+    }
+
+    #[test]
+    fn test_shift_click_selects_from_caret_to_click() {
+        let mut editor = CodeEditor::new("hello world\nsecond line", "txt");
+        press_at(&mut editor, 0, 2, keyboard::Modifiers::default());
+
+        press_at(&mut editor, 1, 3, keyboard::Modifiers::SHIFT);
+
+        assert_eq!(editor.cursors.primary().anchor, Some((0, 2)));
+        assert_eq!(editor.cursors.primary_position(), (1, 3));
+        assert_eq!(editor.selected_text().as_deref(), Some("llo world\nsec"));
+    }
+
+    #[test]
+    fn test_shift_click_moves_the_end_but_keeps_the_original_anchor() {
+        let mut editor = CodeEditor::new("hello world\nsecond line", "txt");
+        press_at(&mut editor, 0, 6, keyboard::Modifiers::default());
+        press_at(&mut editor, 1, 6, keyboard::Modifiers::SHIFT);
+
+        // A second Shift+click before the anchor flips the selection
+        // around the same anchor instead of starting from the last click.
+        press_at(&mut editor, 0, 1, keyboard::Modifiers::SHIFT);
+
+        assert_eq!(editor.cursors.primary().anchor, Some((0, 6)));
+        assert_eq!(editor.cursors.primary_position(), (0, 1));
+        assert_eq!(editor.selected_text().as_deref(), Some("ello "));
+    }
+
+    #[test]
+    fn test_shift_click_takes_focus_and_collapses_multi_cursor() {
+        let mut editor = CodeEditor::new("aaaa\nbbbb\ncccc", "txt");
+        editor.cursors.add_cursor((2, 1));
+        let primary = editor.cursors.primary_position();
+        assert!(!editor.has_canvas_focus);
+
+        press_at(&mut editor, 1, 2, keyboard::Modifiers::SHIFT);
+
+        // Like a plain click, only the primary cursor survives, and it
+        // anchors the new selection.
+        assert!(editor.has_canvas_focus);
+        assert_eq!(editor.cursors.iter().count(), 1);
+        assert_eq!(editor.cursors.primary().anchor, Some(primary));
+        assert_eq!(editor.cursors.primary_position(), (1, 2));
+    }
+
+    #[test]
+    fn test_shift_click_then_drag_extends_from_the_anchor() {
+        let mut editor = CodeEditor::new("hello world\nsecond line", "txt");
+        press_at(&mut editor, 0, 2, keyboard::Modifiers::SHIFT);
+        editor.modifiers.set(keyboard::Modifiers::SHIFT);
+        let start = text_point(&editor, 0, 4);
+        let message =
+            mouse_message(&editor, &LEFT_PRESS, &cursor_at(start.x, start.y));
+        editor.modifiers.set(keyboard::Modifiers::default());
+        if let Some(message) = message {
+            let _ = editor.update(&message);
+        }
+
+        let _ = editor.update(&Message::MouseDrag(text_point(&editor, 1, 2)));
+
+        assert_eq!(editor.cursors.primary().anchor, Some((0, 0)));
+        assert_eq!(editor.cursors.primary_position(), (1, 2));
+    }
+
+    #[test]
+    fn test_vim_shift_click_enters_visual_mode() {
+        let mut editor = CodeEditor::new("hello world\nsecond line", "txt")
+            .with_vim_enabled(true);
+
+        press_at(&mut editor, 0, 4, keyboard::Modifiers::SHIFT);
+
+        assert_eq!(editor.vim_state.mode(), VimMode::Visual);
+        assert!(editor.cursors.primary().has_selection());
     }
 
     #[test]
@@ -829,6 +1037,98 @@ mod tests {
             mouse_message(&editor, &LEFT_PRESS, &cursor),
             Some(Message::ToggleFold(0))
         ));
+    }
+
+    /// Message published by a left press at `x` on the first visual line.
+    fn press_message_at_x(editor: &CodeEditor, x: f32) -> Option<Message> {
+        mouse_message(
+            editor,
+            &LEFT_PRESS,
+            &cursor_at(x, editor.line_height * 0.5),
+        )
+    }
+
+    #[test]
+    fn test_fold_click_follows_the_marker_column_position() {
+        let mut editor = CodeEditor::new("fn a() {\n    body\n}\n", "rs");
+        editor.set_fold_marker_position(
+            crate::FoldMarkerPosition::BeforeLineNumbers,
+        );
+
+        // The markers now sit at the outer edge of the gutter...
+        assert!(matches!(
+            press_message_at_x(&editor, FOLD_MARGIN_WIDTH / 2.0),
+            Some(Message::ToggleFold(0))
+        ));
+        // ...and their old place, right of the numbers, is a plain click.
+        let old_column = f32::midpoint(
+            editor.line_number_gutter_width(),
+            editor.gutter_width(),
+        );
+        assert!(!matches!(
+            press_message_at_x(&editor, old_column),
+            Some(Message::ToggleFold(_))
+        ));
+    }
+
+    #[test]
+    fn test_never_fold_markers_leave_no_click_target() {
+        let mut editor = CodeEditor::new("fn a() {\n    body\n}\n", "rs");
+        let with_markers = editor.gutter_width();
+        editor.set_fold_markers(crate::FoldMarkers::Never);
+
+        assert!(
+            (with_markers - editor.gutter_width() - FOLD_MARGIN_WIDTH).abs()
+                < f32::EPSILON,
+            "the fold-marker column must be freed"
+        );
+        for x in [1.0, editor.gutter_width() - 1.0] {
+            assert!(!matches!(
+                press_message_at_x(&editor, x),
+                Some(Message::ToggleFold(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn test_gutter_hover_redraws_only_on_hover_mode_transitions() {
+        let mut editor = CodeEditor::new("fn a() {\n    body\n}\n", "rs");
+        let gutter = Some(Point::new(5.0, 5.0));
+        let text = Some(Point::new(editor.gutter_width() + 30.0, 5.0));
+
+        // `Always` draws markers regardless of hover: nothing to redraw.
+        assert!(!editor.update_gutter_hover(gutter));
+        assert!(!editor.update_gutter_hover(text));
+
+        editor.set_fold_markers(crate::FoldMarkers::OnGutterHover);
+        assert!(editor.update_gutter_hover(gutter), "entering the gutter");
+        assert!(!editor.update_gutter_hover(gutter), "still in the gutter");
+        assert!(editor.update_gutter_hover(text), "leaving to the text");
+        assert!(editor.update_gutter_hover(gutter));
+        assert!(editor.update_gutter_hover(None), "leaving the canvas");
+    }
+
+    #[test]
+    fn test_leaving_the_canvas_from_the_gutter_requests_a_redraw() {
+        let mut editor = CodeEditor::new("fn a() {\n    body\n}\n", "rs");
+        editor.set_fold_markers(crate::FoldMarkers::OnGutterHover);
+        let moved = mouse::Event::CursorMoved { position: Point::ORIGIN };
+        let _ = editor.handle_mouse_event(
+            &moved,
+            MOUSE_BOUNDS,
+            &cursor_at(5.0, 5.0),
+        );
+        assert!(editor.gutter_hovered.get());
+
+        let action =
+            editor.handle_mouse_event(&moved, MOUSE_BOUNDS, &cursor_outside());
+
+        assert!(!editor.gutter_hovered.get());
+        assert!(
+            action.is_some(),
+            "no message is published outside the canvas, so the markers \
+             would stay visible without an explicit redraw"
+        );
     }
 
     #[test]

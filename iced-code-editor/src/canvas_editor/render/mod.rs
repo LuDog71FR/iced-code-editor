@@ -7,5 +7,6 @@ pub(crate) mod gutter;
 pub(crate) mod highlighting;
 pub(crate) mod overlays;
 pub(crate) mod text;
+mod token_colors;
 pub(crate) mod view;
 pub(crate) mod wrapping;

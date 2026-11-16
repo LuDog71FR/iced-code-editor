@@ -13,11 +13,19 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{
-    HighlightIterator, HighlightState, Highlighter, Style, ThemeSet,
+    HighlightState, Highlighter, RangedHighlightIterator, Style, ThemeSet,
 };
 use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 
-use crate::canvas_editor::{CodeEditor, HighlightCache, ResolvedSyntax};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+
+use super::token_colors::TokenColorizer;
+use crate::canvas_editor::{
+    CodeEditor, HIGHLIGHT_CLOCK_CHECK_INTERVAL, HighlightCache, ResolvedSyntax,
+};
 
 /// Loading syntect's syntax definitions is expensive, so the set is built once
 /// per process and shared by every editor instance.
@@ -34,11 +42,53 @@ static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
 ///
 /// * `style` - The syntect style whose foreground color is converted.
 fn color_from_style(style: Style) -> Color {
+    color_from_syntect(style.foreground)
+}
+
+/// Converts a syntect [`syntect::highlighting::Color`] into an opaque iced
+/// [`Color`].
+fn color_from_syntect(color: syntect::highlighting::Color) -> Color {
     Color::from_rgb(
-        f32::from(style.foreground.r) / 255.0,
-        f32::from(style.foreground.g) / 255.0,
-        f32::from(style.foreground.b) / 255.0,
+        f32::from(color.r) / 255.0,
+        f32::from(color.g) / 255.0,
+        f32::from(color.b) / 255.0,
     )
+}
+
+/// Perceptual luminance (ITU-R BT.601), used only to compare contrast.
+fn luminance(color: Color) -> f32 {
+    color.r * 0.299 + color.g * 0.587 + color.b * 0.114
+}
+
+/// Minimum luminance separation for a token to count as legible.
+const MIN_CONTRAST: f32 = 0.12;
+
+/// Whether `color` stands out enough from `background` to be read.
+fn contrasts_with(color: Color, background: Color) -> bool {
+    (luminance(color) - luminance(background)).abs() >= MIN_CONTRAST
+}
+
+/// Picks a foreground color for `style` that is legible on `background`.
+///
+/// Some syntect themes express a scope as a *background* highlight: the
+/// base16 themes paint `invalid.illegal` as "foreground = the theme
+/// background, background = red". Drawing only the foreground on the editor
+/// background therefore made half-typed code (an unmatched brace, a stray
+/// comma) disappear until it became valid again.
+///
+/// Resolution order: the style's foreground if it contrasts, then its
+/// background (the color the theme chose to stand out, so invalid tokens
+/// read as red), then `fallback`, the editor's plain text color.
+fn readable_color(style: Style, background: Color, fallback: Color) -> Color {
+    let foreground = color_from_style(style);
+    if contrasts_with(foreground, background) {
+        return foreground;
+    }
+    let highlight = color_from_syntect(style.background);
+    if contrasts_with(highlight, background) {
+        return highlight;
+    }
+    fallback
 }
 
 /// Tokenizes a full logical line into colored spans using syntect.
@@ -70,9 +120,18 @@ pub fn highlight_line_spans(
         .highlight_line(line, syntax_set)
         .unwrap_or_else(|_| vec![(Style::default(), line)]);
 
+    // Check contrast against the theme's own colors, for the same reason as
+    // the rendering path (see `readable_color`).
+    let background =
+        theme.settings.background.map_or(Color::BLACK, color_from_syntect);
+    let fallback =
+        theme.settings.foreground.map_or(Color::WHITE, color_from_syntect);
+
     ranges
         .into_iter()
-        .map(|(style, text)| (color_from_style(style), text.to_string()))
+        .map(|(style, text)| {
+            (readable_color(style, background, fallback), text.to_string())
+        })
         .collect()
 }
 
@@ -124,8 +183,9 @@ impl CodeEditor {
     /// extensions (`python`/`py`, `markdown`/`md`, …) are normalized here, and
     /// an unknown syntax falls back to plain text rather than losing the text.
     ///
-    /// The token palette follows the editor's own theme: a light editor
-    /// background selects `base16-ocean.light`, a dark one
+    /// The token palette is [`crate::Style::syntax_theme_name`] when set to a
+    /// bundled theme; otherwise it follows the editor's own theme: a light
+    /// editor background selects `base16-ocean.light`, a dark one
     /// `base16-ocean.dark`.
     ///
     /// # Returns
@@ -156,23 +216,26 @@ impl CodeEditor {
         let dark_background =
             crate::theme::is_dark_background(self.style.background);
 
+        let requested_theme = self.style.syntax_theme_name;
+
         let mut memo = self.resolved_syntax.borrow_mut();
-        if let Some((syntax, theme)) = memo
-            .as_ref()
-            .and_then(|resolved| resolved.get(&self.syntax, dark_background))
-        {
+        if let Some((syntax, theme)) = memo.as_ref().and_then(|resolved| {
+            resolved.get(&self.syntax, dark_background, requested_theme)
+        }) {
             return (syntax_set, syntax, theme);
         }
 
         let theme_set = THEME_SET.get_or_init(ThemeSet::load_defaults);
-        let theme_name = if dark_background {
+        let automatic_theme = if dark_background {
             "base16-ocean.dark"
         } else {
             "base16-ocean.light"
         };
-        let theme = theme_set
-            .themes
-            .get(theme_name)
+        // A host-chosen theme wins; an unknown name falls back to the
+        // automatic one rather than losing the colors.
+        let theme = requested_theme
+            .and_then(|name| theme_set.themes.get(name))
+            .or_else(|| theme_set.themes.get(automatic_theme))
             .or_else(|| theme_set.themes.values().next());
 
         // Normalize common language aliases/extensions used by consumers.
@@ -191,6 +254,7 @@ impl CodeEditor {
         *memo = Some(ResolvedSyntax::new(
             &self.syntax,
             dark_background,
+            requested_theme,
             syntax,
             theme,
         ));
@@ -274,8 +338,22 @@ impl CodeEditor {
             .saturating_sub(1)
             .min(target);
         let mut result = None;
+        let background = self.style.background;
+        let fallback = self.style.text_color;
+        let deadline = self.highlight_deadline.get();
+        let mut parsed = 0usize;
         if lines_to_parse > 0 {
             for index in cache.valid_len()..=parse_end {
+                // Stop when this frame's time budget runs out, even if the
+                // line budget has not. The clock is only read every few lines.
+                if parsed > 0
+                    && parsed.is_multiple_of(HIGHLIGHT_CLOCK_CHECK_INTERVAL)
+                    && deadline
+                        .is_some_and(|deadline| Instant::now() >= deadline)
+                {
+                    break;
+                }
+                parsed += 1;
                 // syntect's `_newlines` syntaxes expect a trailing '\n' for correct
                 // end-of-line context handling; the stored buffer line has none.
                 let mut line = self.buffer.line(index).to_string();
@@ -284,19 +362,30 @@ impl CodeEditor {
                 let ops = parse_state
                     .parse_line(&line, syntax_set)
                     .unwrap_or_default();
-                let spans: Vec<(Color, String)> = HighlightIterator::new(
+                // Captured before the highlighter advances the scope stack.
+                let mut token_colors = TokenColorizer::new(
+                    self.style.token_colors,
+                    highlight_state.path.clone(),
+                    &ops,
+                );
+                let spans: Vec<(Color, String)> = RangedHighlightIterator::new(
                     &mut highlight_state,
                     &ops,
                     &line,
                     &highlighter,
                 )
-                .filter_map(|(style, text)| {
+                .filter_map(|(style, text, range)| {
                     let text = text.strip_suffix('\n').unwrap_or(text);
                     if text.is_empty() {
-                        None
-                    } else {
-                        Some((color_from_style(style), text.to_string()))
+                        return None;
                     }
+                    let color = token_colors
+                        .as_mut()
+                        .and_then(|colors| colors.color_at(range.start))
+                        .unwrap_or_else(|| {
+                            readable_color(style, background, fallback)
+                        });
+                    Some((color, text.to_string()))
                 })
                 .collect();
 
@@ -311,9 +400,16 @@ impl CodeEditor {
                 }
             }
         }
-        self.highlight_lines_remaining.set(
-            self.highlight_lines_remaining.get().saturating_sub(lines_to_parse),
-        );
+        // Charge only the lines actually parsed: stopping on the time budget
+        // must not consume the rest of the line budget.
+        self.highlight_lines_remaining
+            .set(self.highlight_lines_remaining.get().saturating_sub(parsed));
+        // The target is still out of reach: ask for another frame. The line
+        // budget is only refilled when the content layer is redrawn, so
+        // without this the catch-up would stop until an unrelated redraw.
+        if cache.valid_len() <= target {
+            self.highlight_catch_up_pending.set(true);
+        }
 
         result.or_else(|| cache.spans(logical_line)).unwrap_or_else(|| {
             Rc::new(vec![(
@@ -430,6 +526,121 @@ mod tests {
             Some(2)
         );
         assert_eq!(editor.highlight_lines_remaining.get(), 0);
+    }
+
+    #[test]
+    fn test_expired_time_budget_stops_parsing_early() {
+        let content = vec!["{\"k\": 1}"; 1_000].join("\n");
+        let editor = CodeEditor::new(&content, "json");
+        let (syntax_set, syntax, theme) = editor.resolve_syntax();
+        let (Some(syntax), Some(theme)) = (syntax, theme) else {
+            return;
+        };
+        // Plenty of line budget, but the frame's clock already ran out.
+        editor.highlight_lines_remaining.set(10_000);
+        editor.highlight_deadline.set(Some(Instant::now()));
+
+        let _ = editor.highlighted_line_cached(999, syntax, theme, syntax_set);
+
+        let parsed = editor
+            .highlight_cache
+            .borrow()
+            .as_ref()
+            .map(super::HighlightCache::valid_len);
+        assert_eq!(
+            parsed,
+            Some(HIGHLIGHT_CLOCK_CHECK_INTERVAL),
+            "parsing stops at the first clock check past the deadline"
+        );
+        assert_eq!(
+            editor.highlight_lines_remaining.get(),
+            10_000 - HIGHLIGHT_CLOCK_CHECK_INTERVAL,
+            "only the lines actually parsed are charged"
+        );
+        assert!(editor.highlight_catch_up_pending.get());
+    }
+
+    #[test]
+    fn test_no_deadline_parses_up_to_the_target() {
+        let content = vec!["{\"k\": 1}"; 1_000].join("\n");
+        let editor = CodeEditor::new(&content, "json");
+        let (syntax_set, syntax, theme) = editor.resolve_syntax();
+        let (Some(syntax), Some(theme)) = (syntax, theme) else {
+            return;
+        };
+
+        let _ = editor.highlighted_line_cached(999, syntax, theme, syntax_set);
+
+        assert!(!editor.highlight_catch_up_pending.get());
+        assert_eq!(
+            editor
+                .highlight_cache
+                .borrow()
+                .as_ref()
+                .map(super::HighlightCache::valid_len),
+            Some(1_000)
+        );
+    }
+
+    /// Perceptual luminance (ITU-R BT.601), recomputed locally so the test
+    /// does not depend on the code under test.
+    fn test_luminance(color: Color) -> f32 {
+        color.r * 0.299 + color.g * 0.587 + color.b * 0.114
+    }
+
+    /// Every rendered span of `code` must stay legible on the editor
+    /// background, for both the light and the dark palette.
+    fn assert_all_spans_legible(code: &str, syntax_name: &str) {
+        for iced_theme in [iced::Theme::Dark, iced::Theme::Light] {
+            let mut editor = CodeEditor::new(code, syntax_name);
+            editor.set_theme(crate::theme::from_iced_theme(&iced_theme));
+            let (syntax_set, syntax, theme) = editor.resolve_syntax();
+            let (Some(syntax), Some(theme)) = (syntax, theme) else {
+                continue;
+            };
+            let background = test_luminance(editor.style.background);
+
+            for line in 0..editor.buffer.line_count() {
+                let spans = editor
+                    .highlighted_line_cached(line, syntax, theme, syntax_set);
+                for (color, text) in spans.iter() {
+                    let contrast = (test_luminance(*color) - background).abs();
+                    assert!(
+                        contrast >= 0.12,
+                        "{iced_theme:?}: {text:?} on line {line} is drawn in \
+                         {color:?}, which vanishes into the background"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_invalid_json_tokens_stay_legible() {
+        // A half-typed JSON body: the grammar flags the stray tokens as
+        // `invalid.illegal`, which base16 themes paint as background-coloured
+        // text on a red block.
+        assert_all_spans_legible("{\n  \"a\": 1,,\n  \"b\" 2\n}}\n]", "json");
+    }
+
+    #[test]
+    fn test_valid_code_keeps_distinct_theme_colors() {
+        // The legibility fallback must not flatten ordinary highlighting.
+        let editor = CodeEditor::new("{\"key\": \"value\", \"n\": 42}", "json");
+        let (syntax_set, syntax, theme) = editor.resolve_syntax();
+        let (Some(syntax), Some(theme)) = (syntax, theme) else {
+            return;
+        };
+        let spans =
+            editor.highlighted_line_cached(0, syntax, theme, syntax_set);
+        let mut colors: Vec<Color> = Vec::new();
+        for (color, _) in spans.iter() {
+            if !colors.contains(color) {
+                colors.push(*color);
+            }
+        }
+        assert!(colors.len() >= 3, "expected varied token colors: {colors:?}");
+        assert_all_spans_legible("{\"key\": \"value\", \"n\": 42}", "json");
     }
 
     #[test]

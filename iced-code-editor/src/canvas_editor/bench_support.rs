@@ -164,3 +164,34 @@ pub fn calculate_visual_line_range_len(
         )
         .len()
 }
+
+/// Inserts `text` at the start of `buffer` through `InsertTextCommand`, the
+/// command a paste runs, and returns the executed command so a benchmark can
+/// undo it.
+pub fn paste_text(
+    buffer: &mut TextBuffer,
+    text: &str,
+) -> super::editing::command::InsertTextCommand {
+    use super::editing::command::Command;
+
+    let mut command = super::editing::command::InsertTextCommand::new(
+        0,
+        0,
+        text.to_owned(),
+        (0, 0),
+    );
+    let mut cursor = (0, 0);
+    command.execute(buffer, &mut cursor);
+    command
+}
+
+/// Undoes a paste made with [`paste_text`], restoring `buffer`.
+pub fn undo_paste(
+    buffer: &mut TextBuffer,
+    command: &mut super::editing::command::InsertTextCommand,
+) {
+    use super::editing::command::Command;
+
+    let mut cursor = (0, 0);
+    command.undo(buffer, &mut cursor);
+}

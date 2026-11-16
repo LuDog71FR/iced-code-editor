@@ -21,6 +21,18 @@ impl CodeEditor {
         }
     }
 
+    /// Gives this editor keyboard focus in response to a click on it.
+    ///
+    /// A click is an explicit request for focus, so it also lifts the focus
+    /// lock that [`Message::CanvasFocusLost`] sets; without that, an editor
+    /// that lost focus to an outside click would ignore every key after the
+    /// user clicked back into it.
+    fn take_focus_from_click(&mut self) {
+        self.request_focus();
+        self.has_canvas_focus = true;
+        self.focus_locked = false;
+    }
+
     /// Handles mouse click operations.
     ///
     /// Sets focus, ends command grouping, positions cursor, starts selection tracking.
@@ -36,11 +48,7 @@ impl CodeEditor {
         &mut self,
         point: iced::Point,
     ) -> Task<Message> {
-        // Capture focus when clicked using the new focus method
-        self.request_focus();
-
-        // Set internal canvas focus state
-        self.has_canvas_focus = true;
+        self.take_focus_from_click();
 
         // End grouping on mouse click
         self.end_grouping_if_active();
@@ -61,6 +69,38 @@ impl CodeEditor {
         // Show cursor when focused
         self.show_cursor = true;
 
+        Task::none()
+    }
+
+    /// Handles a Shift+click: extends the primary selection to `point`.
+    ///
+    /// The selection keeps its existing anchor, or starts at the caret when
+    /// nothing is selected, so successive Shift+clicks move only the far end.
+    /// Extra cursors are dropped, as for a plain click, and the press starts
+    /// a drag so moving the pointer keeps extending from the same anchor. In
+    /// Vim mode the release then turns the selection into Visual mode.
+    pub(crate) fn handle_shift_click_msg(
+        &mut self,
+        point: iced::Point,
+    ) -> Task<Message> {
+        self.take_focus_from_click();
+        self.end_grouping_if_active();
+        self.cursors.remove_all_but_primary();
+
+        let primary = self.cursors.primary_mut();
+        let anchor = primary.anchor.unwrap_or(primary.position);
+        if let Some(position) = self.calculate_cursor_from_point(point) {
+            let primary = self.cursors.primary_mut();
+            primary.anchor = Some(anchor);
+            primary.position = position;
+        }
+
+        self.is_dragging = true;
+        self.drag_viewport_point = None;
+        self.show_cursor = true;
+        self.reset_cursor_blink();
+        self.overlay_cache.clear();
+        self.sync_search_match_from_primary_cursor();
         Task::none()
     }
 
@@ -214,8 +254,7 @@ impl CodeEditor {
         &mut self,
         point: iced::Point,
     ) -> Task<Message> {
-        self.request_focus();
-        self.has_canvas_focus = true;
+        self.take_focus_from_click();
         self.end_grouping_if_active();
         self.cursors.remove_all_but_primary();
         if let Some((line, col)) = self.calculate_cursor_from_point(point) {
@@ -245,8 +284,7 @@ impl CodeEditor {
         &mut self,
         point: iced::Point,
     ) -> Task<Message> {
-        self.request_focus();
-        self.has_canvas_focus = true;
+        self.take_focus_from_click();
         self.end_grouping_if_active();
         self.cursors.remove_all_but_primary();
         if let Some((line, _col)) = self.calculate_cursor_from_point(point) {
@@ -273,9 +311,7 @@ impl CodeEditor {
         &mut self,
         point: iced::Point,
     ) -> Task<Message> {
-        self.request_focus();
-        self.has_canvas_focus = true;
-        self.focus_locked = false;
+        self.take_focus_from_click();
         self.show_cursor = true;
         self.is_dragging = false;
         self.drag_viewport_point = None;
@@ -487,6 +523,31 @@ mod tests {
 
         assert!(editor.has_canvas_focus);
         assert!(editor.show_cursor);
+    }
+
+    #[test]
+    fn test_click_after_focus_loss_unlocks_focus() {
+        let point = iced::Point::new(100.0, 10.0);
+        let clicks = [
+            Message::MouseClick(point),
+            Message::DoubleClick(point),
+            Message::TripleClick(point),
+        ];
+
+        for click in clicks {
+            let mut editor = CodeEditor::new("hello world", "py");
+            editor.has_canvas_focus = true;
+            let _ = editor.update(&Message::CanvasFocusLost);
+            assert!(editor.focus_locked);
+
+            // Clicking the editor is an explicit request for focus, so it
+            // must lift the lock that the focus loss set; otherwise the
+            // editor would ignore every key until the host intervened.
+            let _ = editor.update(&click);
+
+            assert!(editor.has_canvas_focus, "{click:?} must regain focus");
+            assert!(!editor.focus_locked, "{click:?} must unlock focus");
+        }
     }
 
     #[test]

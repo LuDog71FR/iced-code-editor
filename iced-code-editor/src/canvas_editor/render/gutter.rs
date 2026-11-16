@@ -25,9 +25,11 @@ impl CodeEditor {
         visual_line: &VisualLine,
         y: f32,
     ) {
-        // The line-number area is the left part of the gutter; the fold margin
-        // (when folding is enabled) is the right strip adjacent to the text.
-        let number_area_width = self.line_number_gutter_width();
+        // The line numbers and the fold margin sit side by side, in the order
+        // chosen by `fold_marker_position`.
+        let columns = self.gutter_columns();
+        let number_area_start = columns.line_numbers.start;
+        let number_area_width = columns.line_numbers.end - number_area_start;
 
         if self.line_numbers_enabled {
             if visual_line.is_first_segment() {
@@ -39,7 +41,8 @@ impl CodeEditor {
                     ctx.full_char_width,
                     ctx.char_width,
                 );
-                let x_pos = (number_area_width - text_width) / 2.0;
+                let x_pos =
+                    number_area_start + (number_area_width - text_width) / 2.0;
                 frame.fill_text(canvas::Text {
                     content: line_num_text,
                     position: Point::new(x_pos, y + 2.0),
@@ -52,7 +55,10 @@ impl CodeEditor {
                 // Draw wrap indicator for continuation lines.
                 frame.fill_text(canvas::Text {
                     content: "↪".to_string(),
-                    position: Point::new(number_area_width - 20.0, y + 2.0),
+                    position: Point::new(
+                        columns.line_numbers.end - 20.0,
+                        y + 2.0,
+                    ),
                     color: self.style.line_number_color,
                     size: ctx.font_size.into(),
                     font: ctx.font,
@@ -61,13 +67,20 @@ impl CodeEditor {
             }
         }
 
-        self.draw_fold_chevron(frame, ctx, visual_line, y, number_area_width);
+        self.draw_fold_chevron(
+            frame,
+            ctx,
+            visual_line,
+            y,
+            columns.fold_markers.start,
+        );
     }
 
     /// Draws the fold chevron in the fold margin for a foldable header line.
     ///
     /// Draws nothing when folding is disabled, on continuation (wrapped)
-    /// segments, or on lines that are not fold headers.
+    /// segments, on lines that are not fold headers, or when the
+    /// [`crate::FoldMarkers`] mode hides the marker.
     ///
     /// # Arguments
     ///
@@ -75,21 +88,16 @@ impl CodeEditor {
     /// * `ctx` - Rendering context containing metrics
     /// * `visual_line` - The visual line to render
     /// * `y` - Y position for rendering
-    /// * `number_area_width` - Width of the line-number area (start of the fold margin)
+    /// * `margin_start` - X position where the fold margin starts
     fn draw_fold_chevron(
         &self,
         frame: &mut canvas::Frame,
         ctx: &RenderContext,
         visual_line: &VisualLine,
         y: f32,
-        number_area_width: f32,
+        margin_start: f32,
     ) {
-        if !self.folding_enabled || !visual_line.is_first_segment() {
-            return;
-        }
-
-        if !folding::is_line_fold_header(&self.buffer, visual_line.logical_line)
-        {
+        if !self.shows_fold_marker(visual_line) {
             return;
         }
 
@@ -101,12 +109,30 @@ impl CodeEditor {
         };
         frame.fill_text(canvas::Text {
             content: chevron.to_string(),
-            position: Point::new(number_area_width + 1.0, y + 2.0),
+            position: Point::new(margin_start + 1.0, y + 2.0),
             color: self.style.line_number_color,
             size: ctx.font_size.into(),
             font: ctx.font,
             ..canvas::Text::default()
         });
+    }
+
+    /// Whether `visual_line` shows a fold marker in the gutter.
+    ///
+    /// True for the first segment of a fold header when folding is enabled
+    /// and the [`crate::FoldMarkers`] mode shows it (always, never, or only
+    /// on gutter hover and collapsed lines).
+    pub(crate) fn shows_fold_marker(&self, visual_line: &VisualLine) -> bool {
+        self.folding_enabled
+            && visual_line.is_first_segment()
+            && folding::is_line_fold_header(
+                &self.buffer,
+                visual_line.logical_line,
+            )
+            && self.fold_markers.is_visible(
+                self.is_folded(visual_line.logical_line),
+                self.gutter_hovered.get(),
+            )
     }
 
     /// Draws a `⋯` marker after the text of a collapsed fold header, signalling

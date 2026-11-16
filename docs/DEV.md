@@ -141,7 +141,7 @@ iced-code-editor/
     │       ├── deletion.rs      # Backspace, Delete, delete-selection
     │       ├── navigation.rs    # Arrows, Home/End, Page Up/Down, goto position
     │       ├── clipboard.rs     # Cut/copy/paste messages
-    │       ├── mouse.rs         # Click, drag, double/triple click, context menu
+    │       ├── mouse.rs         # Click, Shift+Click, drag, double/triple click, context menu
     │       ├── multi_cursor.rs  # Alt+Click, add cursor above/below, next occurrence
     │       ├── line_ops.rs      # Move/duplicate line, toggle comment
     │       ├── history_ops.rs   # Undo/redo
@@ -152,6 +152,7 @@ iced-code-editor/
     │   ├── canvas.rs            # canvas::Program trait implementation
     │   ├── text.rs              # Glyph drawing, tab/whitespace expansion, guides
     │   ├── highlighting.rs      # Syntax resolution, per-line highlight cache, palettes
+    │   ├── token_colors.rs      # Scope-based TokenColors overrides
     │   ├── gutter.rs            # Line numbers, wrap indicators, fold chevrons
     │   ├── overlays.rs          # Selection/cursor/search highlight drawing
     │   ├── wrapping.rs          # Line wrapping (logical <-> visual lines)
@@ -567,18 +568,40 @@ enables it. It must be declared with `default-features = false, features =
 `onig` backend into a workspace that builds syntect with the pure-Rust
 `default-fancy` backend and targets WASM.
 
-The token palette is not fixed: `CodeEditor::resolve_syntax` picks
-`base16-ocean.light` or `base16-ocean.dark` from the lightness of the editor
-`Style`'s background (`theme::is_dark_background`). Because the per-line cache
-stores *resolved colors* rather than scopes, `set_theme` invalidates it. The
-rainbow-bracket cycle (`CodeEditor::bracket_pair_colors`) branches on the same
-predicate.
+The token palette is not fixed: `CodeEditor::resolve_syntax` uses
+`Style::syntax_theme_name` when it names a syntect bundled theme, and otherwise
+picks `base16-ocean.light` or `base16-ocean.dark` from the lightness of the
+editor `Style`'s background (`theme::is_dark_background`). An unknown name falls
+back to that automatic choice. Because the per-line cache stores *resolved
+colors* rather than scopes, `set_theme` invalidates it. The rainbow-bracket
+cycle (`CodeEditor::bracket_pair_colors`) branches on the same predicate.
 
 Resolution itself is memoized per editor in `ResolvedSyntax` (`caches.rs`).
 `find_syntax_by_extension` is a linear scan over every bundled grammar's
 extension list, and the canvas re-resolves on every frame. The memo is
-*self-keyed* on the syntax identifier and the background lightness rather than
-invalidated by hand, so `set_syntax`/`set_theme` cannot leave it stale.
+*self-keyed* on the syntax identifier, the background lightness and the
+requested theme name rather than invalidated by hand, so
+`set_syntax`/`set_theme` cannot leave it stale.
+
+**Legible colors.** Some themes express a scope as a *background* highlight:
+base16 paints `invalid.illegal` with the theme background as foreground and red
+behind it. Drawing only the foreground made half-typed code (a stray comma, an
+unmatched brace) vanish. `readable_color` (`render/highlighting.rs`) keeps the
+foreground when its luminance differs from the editor background by at least
+`MIN_CONTRAST` (0.12), else uses the style's background color (so invalid tokens
+read as red), else the editor's text color.
+
+**Token color overrides.** `Style::token_colors` (`TokenColors`) recolors token
+kinds by TextMate scope, independently of the theme. `render/token_colors.rs`
+replays each line's `ScopeStackOp`s alongside `RangedHighlightIterator`
+(`TokenColorizer`), so every highlighted range is matched against its scope
+stack: a key scope anywhere in the stack (`meta.mapping.key`,
+`support.type.property-name`, `entity.name.tag.yaml`, ...) wins, then any
+`comment` scope, then the innermost scope that is neither `meta.*` nor a
+`punctuation.definition` delimiter is matched against `string`,
+`constant.numeric`, `constant.language` and `punctuation`. When `TokenColors` is
+empty no scope bookkeeping runs at all. Overrides are used as given: they skip
+the contrast check, which is the host's choice.
 
 `CodeEditor::syntax` returns the identifier the host set; `syntax_name` returns
 the grammar it resolved to, including the `"Plain Text"` fallback. Status bars
@@ -603,6 +626,11 @@ let spans = self.highlighted_line_cached(logical_line, syntax, theme, syntax_set
   edited line down.
 - `highlight_line_spans()` (independent, single-line) is retained for tests and
   benchmarks.
+- Each content frame may parse at most `HIGHLIGHT_LINES_PER_FRAME` new lines
+  *and* spend at most `HIGHLIGHT_TIME_PER_FRAME` (8 ms). When a request cannot
+  be served, `highlight_catch_up_pending` is set and the canvas asks for the
+  next frame on `RedrawRequested`, so a large file finishes coloring while the
+  user is idle.
 
 See [Syntax Highlighting Optimization](#2-syntax-highlighting-optimization) for the
 full cache and invalidation strategy.
@@ -727,6 +755,22 @@ pub fn hidden_lines(regions: &[FoldRegion], collapsed: &HashSet<usize>) -> HashS
   fed to the `WrappingCalculator` so collapsed lines simply disappear from layout.
 - Trailing blank lines are trimmed from a region so a collapsed block does not swallow
   the gap before the next block; nested blocks each yield independent regions.
+
+**Fold markers and gutter layout.** `FoldMarkers` (`Always`, `OnGutterHover`,
+`Never`) decides when chevrons are drawn, and `FoldMarkerPosition` which side
+of the line numbers their column sits on. Every consumer reads the column
+extents from one place, `CodeEditor::gutter_columns()` (`metrics.rs`): chevron
+and number drawing (`render/gutter.rs`), fold clicks
+(`fold_header_at_point`), the gutter background width and the sticky-header
+row. `Never` makes `fold_margin_width()` return 0, so the column is freed (the
+visual-lines cache is keyed on the gutter width) and no click target remains.
+
+`OnGutterHover` needs the pointer position during `&self` canvas events, so
+`gutter_hovered` is a `Cell<bool>` updated by `update_gutter_hover`. It
+invalidates the content layer (where chevrons are drawn) only when the hover
+state flips in that mode. When the pointer leaves the canvas no message is
+published, so `handle_mouse_event` returns an explicit `request_redraw` to hide
+the markers. Collapsed headers keep their `▶` in every mode except `Never`.
 
 ### Sticky Scroll
 
@@ -980,6 +1024,17 @@ each surface has its own order. It exists so that
 is exhaustive by construction: a new variant that is not added to the array
 fails to compile against its declared length `[Self; 7]`. Adding a shared
 action therefore cannot silently skip one surface.
+
+**Event routing.** `iced_aw::ContextMenu` *captures* the right press before
+forwarding it to its underlay, and an iced `Stack` stops delivering a captured
+event after its topmost layer. The menu therefore wraps only the canvas
+scrollable (`with_context_menu` in `render/view.rs`), never the whole editor
+stack: wrapped around the stack, it hid the press from the canvas below the IME
+and dialog layers, so `ContextMenuRequested` was never published and the
+caret/selection handling for context clicks never ran. A scrollable forwards
+events to its content whether or not they were captured.
+`tests/context_menu_events.rs` checks the routing through the real widget tree
+with `iced_test`.
 
 **Availability** is read from `ActionContext`, a snapshot built by
 `CodeEditor::action_context()` (has a selection, history is non-empty, folding
@@ -1375,9 +1430,18 @@ pub fn request_focus(&self) {
 }
 ```
 
-**Automatic focus capture:**
+**Automatic focus capture and release:**
 
-- Mouse clicks inside an editor automatically capture focus
+- Mouse clicks inside an editor automatically capture focus. Every click
+  handler goes through `take_focus_from_click()` (`input/update/mouse.rs`),
+  which also clears `focus_locked`: a click is an explicit request for focus.
+- A left press *outside* the canvas publishes `Message::CanvasFocusLost` when
+  the editor holds canvas focus (`input/events.rs`). iced 0.14 delivers
+  keyboard events to every widget, so without this the editor kept consuming
+  keystrokes (and Ctrl+C/X/A) meant for a `text_input` the user had clicked.
+  The press is not captured: it belongs to the widget under the pointer.
+- `lose_focus()` remains for focus changes without a click (keyboard
+  navigation, programmatic focus).
 - First editor created receives focus by default
 
 **Keyboard event filtering:**
@@ -1428,8 +1492,17 @@ pub fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
 **Rendering:**
 
 - Every cursor with an active selection is rendered.
-- Single-line selection: a single rectangle.
-- Multi-line selection: three rectangles (first line, middle block, last line).
+- `selection_segments()` (`render/overlays.rs`) yields one
+  `(visual_index, column range)` segment per visual row of the selection,
+  clamped to the drawn window. The overlay layer redraws on every caret blink,
+  so selecting all of a 90k-line document used to queue 90,000 rectangles per
+  frame; only the visible rows are now drawn. The window is the same one used
+  by search highlights, and the overlay cache is cleared when it moves.
+
+**Shift+Click** (`handle_shift_click_msg`) keeps the primary selection's anchor
+(or the caret when nothing is selected), moves its far end to the click, drops
+extra cursors and starts a drag. In Vim mode the mouse release turns it into a
+Visual selection, as for a drag.
 
 ### Scroll-to-Cursor
 
@@ -1576,6 +1649,11 @@ fn recalculate_char_dimensions(&mut self, renderer: &Renderer) {
 - Widths are recalculated whenever font or font size changes
 - Uses actual font metrics from Iced's text measurement API
 - Fallback values ensure robustness (narrow = font_size/2, wide = font_size)
+- The wide measurement usually starts a fallback-font search (most code fonts
+  have no CJK glyphs), so it is cached process-wide per font and size
+  (`cached_wide_char_width`). Each entry stores the narrow width measured with
+  it; the cheap narrow glyph is measured every time, and a mismatch (typically
+  a font loaded after the first measurement) re-measures the wide glyph.
 
 #### Unicode Width Detection
 
@@ -1908,6 +1986,12 @@ let spans = self.highlighted_line_cached(logical_line, syntax, theme, syntax_set
 - Typing re-highlights only from the edited line down, not from the top of the file.
 - Character→byte conversions in the draw loop use `char_range_to_byte_range()` (single pass) instead of repeated `char_indices().nth()` (`O(n)` per boundary).
 - `highlight_line_spans()` (independent, single-line) is retained for tests and benchmarks.
+- Catch-up is bounded per content frame by `HIGHLIGHT_LINES_PER_FRAME` and by the
+  `HIGHLIGHT_TIME_PER_FRAME` wall-clock budget (8 ms, clock read every
+  `HIGHLIGHT_CLOCK_CHECK_INTERVAL` lines). A line count alone cannot bound
+  frame time: a debug build is about ten times slower than release. Only the
+  lines actually parsed are charged, and `highlight_catch_up_pending` schedules
+  the next frame until the target line is reached.
 
 **Future improvements:**
 
@@ -1928,6 +2012,12 @@ Lines live around a movable gap (see [TextBuffer](#2-textbuffer-buffermodrs)).
   part of the file. Consecutive typing does not pay it.
 - O(n) for inserting inside a line, where n is the *line* length — a `String`
   splice, unaffected by file size.
+- Pasting, and deleting a range, splice whole line segments (`insert_text_at`
+  and `delete_range_at` in `editing/command/edit.rs`), shared by
+  `InsertTextCommand` and `DeleteRangeCommand` and their undo. A
+  per-character loop rescans the line for a char-to-byte index on every
+  character, which made a 200k-character line (minified JSON) take 247 ms to
+  paste and 473 ms to undo; both now take well under a millisecond.
 
 **Sufficient for:**
 
@@ -2062,6 +2152,9 @@ anything it touches is genuinely reachable by a host application:
 
 - `vim_command_line.rs` (6), `vim_counted_commands.rs` (4),
   `vim_toggle_shortcut.rs` (3)
+- `context_menu_events.rs` (3): right-click routing through the real widget
+  tree with the `iced_test` simulator, plus a left-click control test proving
+  the harness delivers presses
 
 `simple-example/` is not a test, but it fails the build if the minimal
 embedding stops compiling, which serves a similar purpose.
@@ -2109,6 +2202,9 @@ Performance-critical hot paths are benchmarked with [criterion](https://github.c
 | `calculate_visual_lines_10k` | Line wrapping (`WrappingCalculator`) |
 | `compute_foldable_regions_10k` | Fold-region detection |
 | `find_matches_10k` | Search across the buffer |
+| `paste_source_20k_lines`, `paste_single_line_200k_chars` | Pasting through `InsertTextCommand` |
+| `undo_paste_*` | Undoing those pastes |
+| `new_editor_with_font_size` | Building a configured editor (glyph-width measurement) |
 
 **Feature gate:** These functions are internal, so they are exposed to the benchmark crate through the hidden `bench_support` module (`canvas_editor/bench_support.rs`, re-exported from `lib.rs`). Both the module and the `[[bench]]` target are gated behind the `bench` feature (`required-features = ["bench"]`), so the benchmarks are invisible to normal builds and to the public API.
 
@@ -2120,7 +2216,14 @@ cargo bench -p iced-code-editor --features bench
 
 # Run a single benchmark by name
 cargo bench -p iced-code-editor --features bench -- highlight_line_spans
+
+# Named baselines need the criterion target named explicitly
+cargo bench -p iced-code-editor --features bench --bench editor_benchmarks -- --save-baseline before
+cargo bench -p iced-code-editor --features bench --bench editor_benchmarks -- --baseline before
 ```
+
+Comparing against a baseline that lacks one of the selected benchmarks makes
+criterion panic, so filter the names (a regex after `--`) when the set changed.
 
 criterion stores results under `target/criterion/` and automatically reports the delta against the previous run, so the workflow is: benchmark once to establish a baseline, make a change, then benchmark again to see the regression or improvement. When `gnuplot` is unavailable, criterion falls back to the bundled `plotters` backend for the HTML reports.
 
@@ -2324,15 +2427,20 @@ actually mutates the buffer.
 
 ### 8. InsertTextCommand Cursor Override vs. Undo
 
-**Problem:** `InsertTextCommand::with_cursor_after()` (`editing/command/edit.rs`) lets a command
+**Problem (historical):** `InsertTextCommand::with_cursor_after()` (`editing/command/edit.rs`) lets a command
 override where the cursor rests after `execute()` — used by auto-close bracket
 insertion to leave the cursor *between* the two inserted characters instead of after
-them. But `InsertTextCommand::undo()` assumes the opposite: it walks backward from
+them. `InsertTextCommand::undo()` used to walk backward from
 `cursor_after`, deleting one character per step via `buffer.delete_char()` (a
 backspace-style delete of the character *before* the given column). That walk is only
 correct when `cursor_after` sits *after* the whole inserted string. Overriding it to a
-position *inside* the string (e.g. between `(` and `)`) makes undo delete the wrong
+position *inside* the string (e.g. between `(` and `)`) made undo delete the wrong
 character and leave one of the pair behind.
+
+**Now:** `undo()` removes the span from the insertion point to `insert_end` (the
+real end of the inserted text, independent of `cursor_after`) in one
+`delete_range_at` splice, so an overridden cursor can no longer corrupt undo.
+The per-character commands below are still the pattern in use.
 
 **Solution:** When the resting cursor must land inside the inserted text, don't use a
 single `InsertTextCommand` with an overridden cursor. Push one `InsertCharCommand` per

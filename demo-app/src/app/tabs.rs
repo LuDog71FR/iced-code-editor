@@ -7,7 +7,9 @@ use super::{DemoApp, Message};
 use crate::types::EditorId;
 use iced::Task;
 use iced_code_editor::Message as EditorMessage;
-use iced_code_editor::{CodeEditor, ContextMenuEntry, ContextMenuItem, theme};
+use iced_code_editor::{
+    CodeEditor, ContextMenuEntry, ContextMenuItem, FoldMarkers, theme,
+};
 use std::path::{Path, PathBuf};
 
 /// A single open editor tab.
@@ -103,7 +105,7 @@ impl DemoApp {
         #[cfg(target_arch = "wasm32")]
         let format_on_save = None;
 
-        CodeEditor::new(content, Self::UNTITLED_SYNTAX)
+        let mut editor = CodeEditor::new(content, Self::UNTITLED_SYNTAX)
             .with_custom_context_menu_entries(vec![
                 ContextMenuEntry::item(
                     "app.format_document",
@@ -116,7 +118,11 @@ impl DemoApp {
             .with_default_context_menu_enabled(true)
             .with_custom_command_palette_entries(Self::palette_entries(
                 format_on_save,
-            ))
+            ));
+        // Show the fold chevrons only while the pointer is over the gutter
+        // (collapsed blocks stay marked), keeping the gutter calm.
+        editor.set_fold_markers(FoldMarkers::OnGutterHover);
+        editor
     }
 
     /// Builds the palette commands this demo registers with every editor.
@@ -506,6 +512,12 @@ impl DemoApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_new_editor_shows_fold_markers_on_gutter_hover() {
+        let editor = DemoApp::new_editor("fn main() {\n    body();\n}");
+        assert_eq!(editor.fold_markers(), FoldMarkers::OnGutterHover);
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

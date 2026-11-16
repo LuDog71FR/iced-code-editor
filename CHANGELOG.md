@@ -7,7 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+Several of these changes port fixes and ideas first made in the
+[rustman](https://github.com/rust-man-org/rustman) fork of this crate.
+
+### Added
+
+- feat: **Shift+Click** extends the primary selection from its anchor (or from
+  the caret) to the clicked position. Successive Shift+clicks keep the same
+  anchor, dragging continues from it, and in Vim mode the result becomes a
+  Visual selection. New `Message::ShiftClick`.
+- feat: `FoldMarkers` (`Always`, `OnGutterHover`, `Never`) chooses when fold
+  chevrons are drawn, through `CodeEditor::set_fold_markers` /
+  `fold_markers`. `OnGutterHover` keeps collapsed blocks marked; `Never` frees
+  the column while keyboard and API folding keep working.
+- feat: `FoldMarkerPosition` (`BeforeLineNumbers`, `AfterLineNumbers`) puts
+  the fold-marker column on either side of the line numbers, through
+  `CodeEditor::set_fold_marker_position` / `fold_marker_position`.
+- feat: `Style::token_colors` (`TokenColors`) recolors keys, strings, numbers,
+  literals, comments and punctuation by TextMate scope, across grammars.
+- feat: `Style::syntax_theme_name` selects any syntect bundled theme for the
+  code tokens instead of the automatic `base16-ocean` dark/light pick.
+
+### Changed
+
+- **Breaking:** `Style` has two new public fields (`syntax_theme_name`,
+  `token_colors`), so a `Style { .. }` literal must set them; styles built
+  with `theme::from_iced_theme` are unaffected.
+- A press outside the editor now releases its keyboard focus, and clicking back
+  into it restores focus, so the host no longer has to call `lose_focus()`
+  when another widget is clicked.
+
+### Fixed
+
+- fix: the editor kept keyboard focus after a click on another widget, and
+  kept consuming keystrokes (and Ctrl+C/X/A) meant for it.
+- fix: right-clicks never reached the canvas, because the context menu wrapped
+  the whole editor stack and captured the press. The caret and selection
+  handling for context clicks now runs.
+- fix: tokens that a syntax theme styles as a background highlight (base16
+  `invalid.illegal`) were drawn in the background color, so half-typed code
+  such as a stray comma vanished. They now fall back to a legible color.
+- fix: syntax highlighting of a large document stopped once a frame's budget
+  ran out and only resumed on an unrelated redraw; the canvas now schedules
+  the frames needed to finish.
+
+### Performance
+
+- perf: pasting and undoing a paste splice whole line segments instead of one
+  character at a time: a 200k-character line pastes in about 0.05 ms instead
+  of 247 ms, and its undo takes about 0.01 ms instead of 473 ms.
+- perf: selection highlights are drawn only for visible rows; selecting all of
+  a 90k-line document no longer queues 90,000 rectangles per frame.
+- perf: wide-glyph (CJK) font measurements are cached per font and size
+  across editors, validated by a fresh narrow-glyph measurement; building a
+  configured editor is about 85% faster.
+- perf: syntax highlight catch-up is bounded by an 8 ms wall-clock budget per
+  frame in addition to the line budget, keeping debug builds responsive.
 
 ## [0.6.0] - 2026-11-16
 
