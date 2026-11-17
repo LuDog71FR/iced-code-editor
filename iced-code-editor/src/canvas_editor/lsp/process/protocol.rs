@@ -405,7 +405,7 @@ fn handle_publish_diagnostics(
                 start: state.text.to_char_position(diagnostic.range.start),
                 end: state.text.to_char_position(diagnostic.range.end),
             },
-            severity: diagnostic.severity,
+            ..diagnostic
         })
         .collect();
     drop(docs);
@@ -434,6 +434,11 @@ fn parse_publish_diagnostics(
             Some(Diagnostic {
                 range: extract_range(diagnostic.get("range")?)?,
                 severity: parse_diagnostic_severity(diagnostic.get("severity")),
+                message: diagnostic
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
             })
         })
         .collect();
@@ -1380,6 +1385,7 @@ mod tests {
                     diagnostics[0].severity,
                     DiagnosticSeverity::Warning
                 );
+                assert_eq!(diagnostics[0].message, "unused");
                 assert_eq!(
                     diagnostics[1].range.end,
                     LspPosition { line: 0, character: 1 }
@@ -1441,6 +1447,8 @@ mod tests {
             parse_publish_diagnostics(&params).expect("valid payload");
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Hint);
+        // A diagnostic without a message keeps an empty one.
+        assert_eq!(diagnostics[0].message, "");
     }
 
     #[test]

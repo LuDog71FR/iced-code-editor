@@ -1538,12 +1538,30 @@ Visual selection, as for a drag.
 (`draw_diagnostics`)
 
 `CodeEditor::set_diagnostics` replaces the list of `Diagnostic` values (an
-`LspRange` plus a `DiagnosticSeverity`). An identical list is ignored; any other
+`LspRange`, a `DiagnosticSeverity` and a `message`). An identical list is ignored; any other
 list clears `overlay_cache`. The types live in `canvas_editor/lsp/mod.rs` but do
 not depend on the `lsp-process` feature: any source can supply the list. With
 `LspProcessClient`, it comes from `LspEvent::Diagnostics` (see
 [Layer 2](#layer-2--lspprocessclient-canvas_editorlspprocessmodrs)); the host
 routes it to the editor whose `lsp_document_uri()` matches.
+
+**Hover messages.** `Diagnostic::contains` uses the same coverage rule as the
+underline: exclusive end, and an empty range covers the character at its start.
+`CodeEditor::diagnostics_at(position)` returns every covering diagnostic. The
+editor does not draw a tooltip itself; the demo app does it in
+`app/app_lsp.rs`:
+
+- `handle_lsp_hover_from_mouse` stores the exact pointer position
+  (`lsp_position_at_point`) in `LspHoverPending.pointer_position`, next to the
+  word-start anchor used for the server request.
+- When the hover delay ends, `process_lsp_hover_timers` formats the covering
+  diagnostics with `diagnostics_hover_markdown` ("**Error**: message", one
+  paragraph each), keeps the result in `lsp_hover_diagnostics` and shows it at
+  once, even when no server is attached.
+- On `LspEvent::Hover`, `combine_hover_text` puts the diagnostics first, then a
+  horizontal rule, then the server's text. An empty server reply keeps the
+  diagnostics instead of closing the tooltip.
+- `clear_lsp_hover` forgets `lsp_hover_diagnostics`.
 
 **Coordinates.** Ranges are in logical lines and *character* columns, with an
 exclusive end, like the rest of the editor. They are not UTF-16 offsets. The

@@ -38,7 +38,7 @@ Screenshot of the demo application:
 - **Search and replace** text
 - **Command palette** (`Ctrl+Shift+P`) listing every editor action, extensible with the host application's own commands
 - **Language Server Protocol** (LSP) support
-- **Diagnostic underlines** with severity colors, including wrapped lines
+- **Diagnostic underlines** with severity colors, including wrapped lines, and their messages on hover
 - **Auto indentation** with custom indent style
 - **Auto-closing brackets/quotes** with surround selection
 - **Matching bracket/quote highlight** — highlights the paired bracket or quote next to the cursor
@@ -1055,14 +1055,15 @@ server of your own).
 ```rust
 use iced_code_editor::{Diagnostic, DiagnosticSeverity, LspPosition, LspRange};
 
-editor.set_diagnostics(vec![Diagnostic {
+editor.set_diagnostics(vec![Diagnostic::new(
     // Zero-based line, character columns; the end is exclusive.
-    range: LspRange {
+    LspRange {
         start: LspPosition { line: 0, character: 4 },
         end: LspPosition { line: 0, character: 8 },
     },
-    severity: DiagnosticSeverity::Error,
-}]);
+    DiagnosticSeverity::Error,
+    "cannot find value `name` in this scope",
+)]);
 
 assert_eq!(editor.diagnostics().len(), 1);
 
@@ -1094,6 +1095,24 @@ for editor in &mut editors {
 
 Only documents opened through the client are reported. An empty list means the
 server cleared the document's diagnostics.
+
+To show the messages on hover, look up the diagnostics under the pointer and
+display them in your tooltip, for example above the server's hover text in the
+LSP overlay:
+
+```rust
+// On EditorMessage::MouseHover(point)
+if let Some(position) = editor.lsp_position_at_point(point) {
+    for diagnostic in editor.diagnostics_at(position) {
+        println!("{:?}: {}", diagnostic.severity, diagnostic.message);
+    }
+}
+```
+
+`diagnostics_at` returns every diagnostic whose range covers the position, in
+the order they were set. The demo app shows them in the hover tooltip, even
+when no language server is attached, and adds the server's hover text below a
+separator when it arrives.
 
 #### Supported servers
 

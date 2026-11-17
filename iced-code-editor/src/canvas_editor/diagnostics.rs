@@ -1,7 +1,7 @@
 //! Diagnostic ranges and their placement on visual lines.
 
 use crate::canvas_editor::CodeEditor;
-use crate::canvas_editor::lsp::Diagnostic;
+use crate::canvas_editor::lsp::{Diagnostic, LspPosition};
 use crate::canvas_editor::render::wrapping::VisualLine;
 
 impl CodeEditor {
@@ -19,14 +19,15 @@ impl CodeEditor {
     /// };
     ///
     /// let mut editor = CodeEditor::new("let answer = 42;", "rs");
-    /// let diagnostic = Diagnostic {
-    ///     range: LspRange {
+    /// let diagnostic = Diagnostic::new(
+    ///     LspRange {
     ///         start: LspPosition { line: 0, character: 4 },
     ///         end: LspPosition { line: 0, character: 10 },
     ///     },
-    ///     severity: DiagnosticSeverity::Warning,
-    /// };
-    /// editor.set_diagnostics(vec![diagnostic]);
+    ///     DiagnosticSeverity::Warning,
+    ///     "unused variable",
+    /// );
+    /// editor.set_diagnostics(vec![diagnostic.clone()]);
     /// assert_eq!(editor.diagnostics(), &[diagnostic]);
     /// ```
     pub fn set_diagnostics(&mut self, diagnostics: Vec<Diagnostic>) {
@@ -49,6 +50,41 @@ impl CodeEditor {
     /// ```
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
+    }
+
+    /// The diagnostics covering `position`, in the order they were set.
+    ///
+    /// `position` is in logical lines and character columns, as returned by
+    /// [`CodeEditor::lsp_position_at_point`]. Hosts use it to show the
+    /// messages of the diagnostics under the pointer.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{
+    ///     CodeEditor, Diagnostic, DiagnosticSeverity, LspPosition, LspRange,
+    /// };
+    ///
+    /// let mut editor = CodeEditor::new("let answer = 42;", "rs");
+    /// editor.set_diagnostics(vec![Diagnostic::new(
+    ///     LspRange {
+    ///         start: LspPosition { line: 0, character: 4 },
+    ///         end: LspPosition { line: 0, character: 10 },
+    ///     },
+    ///     DiagnosticSeverity::Warning,
+    ///     "unused variable",
+    /// )]);
+    ///
+    /// let hovered = editor.diagnostics_at(LspPosition { line: 0, character: 6 });
+    /// assert_eq!(hovered.len(), 1);
+    /// assert_eq!(hovered[0].message, "unused variable");
+    /// assert!(editor.diagnostics_at(LspPosition { line: 0, character: 0 }).is_empty());
+    /// ```
+    pub fn diagnostics_at(&self, position: LspPosition) -> Vec<&Diagnostic> {
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.contains(position))
+            .collect()
     }
 }
 
@@ -99,20 +135,62 @@ mod tests {
     };
 
     fn diagnostic(start: (u32, u32), end: (u32, u32)) -> Diagnostic {
-        Diagnostic {
-            range: LspRange {
+        Diagnostic::new(
+            LspRange {
                 start: LspPosition { line: start.0, character: start.1 },
                 end: LspPosition { line: end.0, character: end.1 },
             },
-            severity: DiagnosticSeverity::Error,
-        }
+            DiagnosticSeverity::Error,
+            "error",
+        )
+    }
+
+    fn at(line: u32, character: u32) -> LspPosition {
+        LspPosition { line, character }
+    }
+
+    #[test]
+    fn diagnostic_contains_spans_lines_with_exclusive_end() {
+        let multi = diagnostic((0, 8), (2, 3));
+        assert!(!multi.contains(at(0, 7)));
+        assert!(multi.contains(at(0, 8)));
+        assert!(multi.contains(at(1, 0)));
+        assert!(multi.contains(at(2, 2)));
+        assert!(!multi.contains(at(2, 3)));
+    }
+
+    #[test]
+    fn diagnostic_contains_empty_and_reversed_ranges() {
+        let empty = diagnostic((1, 4), (1, 4));
+        assert!(empty.contains(at(1, 4)));
+        assert!(!empty.contains(at(1, 5)));
+
+        let reversed = diagnostic((1, 6), (1, 2));
+        assert!(!reversed.contains(at(1, 4)));
+    }
+
+    #[test]
+    fn diagnostics_at_returns_every_covering_diagnostic_in_order() {
+        let mut editor = CodeEditor::new("let answer = 42;\n", "rs");
+        let outer = diagnostic((0, 0), (0, 16));
+        let inner = diagnostic((0, 4), (0, 10));
+        let elsewhere = diagnostic((0, 13), (0, 15));
+        editor.set_diagnostics(vec![
+            outer.clone(),
+            inner.clone(),
+            elsewhere.clone(),
+        ]);
+
+        assert_eq!(editor.diagnostics_at(at(0, 5)), vec![&outer, &inner]);
+        assert_eq!(editor.diagnostics_at(at(0, 14)), vec![&outer, &elsewhere]);
+        assert!(editor.diagnostics_at(at(1, 0)).is_empty());
     }
 
     #[test]
     fn diagnostics_are_replaced_and_cleared() {
         let mut editor = CodeEditor::new("let answer = 42;\n", "rs");
         let diagnostic = diagnostic((0, 4), (0, 10));
-        editor.set_diagnostics(vec![diagnostic]);
+        editor.set_diagnostics(vec![diagnostic.clone()]);
         assert_eq!(editor.diagnostics(), &[diagnostic]);
         editor.set_diagnostics(Vec::new());
         assert!(editor.diagnostics().is_empty());

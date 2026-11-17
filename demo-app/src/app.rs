@@ -180,6 +180,10 @@ pub struct DemoApp {
     lsp_hover_pending: Option<LspHoverPending>,
     #[cfg(not(target_arch = "wasm32"))]
     pub lsp_hover_hide_deadline: Option<Instant>,
+    /// Markdown of the diagnostics under the pointer, shown above the
+    /// server's hover text while the tooltip is up.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lsp_hover_diagnostics: Option<String>,
     #[cfg(not(target_arch = "wasm32"))]
     pub lsp_progress: HashMap<String, HashMap<String, LspProgress>>,
     /// Formatting request awaiting its reply, if any.
@@ -283,6 +287,8 @@ greet("World")
             lsp_hover_pending: None,
             #[cfg(not(target_arch = "wasm32"))]
             lsp_hover_hide_deadline: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            lsp_hover_diagnostics: None,
             #[cfg(not(target_arch = "wasm32"))]
             lsp_progress: HashMap::new(),
             #[cfg(not(target_arch = "wasm32"))]

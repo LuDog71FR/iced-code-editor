@@ -25,9 +25,9 @@ use iced::widget::Id;
 use iced::widget::operation::scroll_to;
 use iced::widget::scrollable;
 use iced_code_editor::{
-    ArrowDirection, LspDocument, LspEvent, LspLanguage, LspPosition,
-    LspProcessClient, Message as EditorMessage, lsp_language_for_extension,
-    lsp_language_for_path,
+    ArrowDirection, Diagnostic, DiagnosticSeverity, LspDocument, LspEvent,
+    LspLanguage, LspPosition, LspProcessClient, Message as EditorMessage,
+    lsp_language_for_extension, lsp_language_for_path,
 };
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -59,6 +59,9 @@ pub(super) struct LspHoverPending {
     pub(super) editor_id: EditorId,
     /// The position in the document where the hover was requested
     pub(super) position: LspPosition,
+    /// The exact position under the pointer, used to find the diagnostics
+    /// there (`position` is the start of the word)
+    pub(super) pointer_position: Option<LspPosition>,
     /// The screen coordinates where the hover tooltip should appear
     pub(super) point: Point,
     /// The time when this hover request should be executed (after delay)
@@ -88,6 +91,42 @@ fn virtual_uri_for_template(editor_id: EditorId, template: Template) -> String {
         name = "untitled".to_string();
     }
     format!("untitled://{}/{}.lua", editor_id_label(editor_id), name)
+}
+
+/// Formats the diagnostics under the pointer as Markdown for the hover
+/// tooltip, one paragraph per diagnostic with its severity in bold.
+///
+/// Returns `None` when there is nothing to show.
+fn diagnostics_hover_markdown(diagnostics: &[&Diagnostic]) -> Option<String> {
+    let paragraphs: Vec<String> = diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let label = match diagnostic.severity {
+                DiagnosticSeverity::Error => "Error",
+                DiagnosticSeverity::Warning => "Warning",
+                DiagnosticSeverity::Information => "Info",
+                DiagnosticSeverity::Hint => "Hint",
+            };
+            let message = diagnostic.message.trim();
+            if message.is_empty() {
+                format!("**{label}**")
+            } else {
+                format!("**{label}**: {message}")
+            }
+        })
+        .collect();
+    (!paragraphs.is_empty()).then(|| paragraphs.join("\n\n"))
+}
+
+/// Joins the diagnostics Markdown and the server's hover text, diagnostics
+/// first, separated by a horizontal rule. Either part may be missing.
+fn combine_hover_text(diagnostics: Option<&str>, hover: &str) -> String {
+    let hover = hover.trim();
+    match diagnostics {
+        Some(diagnostics) if hover.is_empty() => diagnostics.to_string(),
+        Some(diagnostics) => format!("{diagnostics}\n\n---\n\n{hover}"),
+        None => hover.to_string(),
+    }
 }
 
 /// Converts a filesystem path to a `file://` URI.
@@ -418,11 +457,14 @@ impl DemoApp {
         }
 
         // Find the text position at the mouse point
-        let anchor =
+        let (anchor, pointer_position) =
             if let Some(tab) = self.tabs.iter().find(|t| t.id == editor_id) {
-                tab.editor.lsp_hover_anchor_at_point(point)
+                (
+                    tab.editor.lsp_hover_anchor_at_point(point),
+                    tab.editor.lsp_position_at_point(point),
+                )
             } else {
-                None
+                (None, None)
             };
 
         let Some((position, anchor_point)) = anchor else {
@@ -456,6 +498,7 @@ impl DemoApp {
         self.lsp_hover_pending = Some(LspHoverPending {
             editor_id,
             position,
+            pointer_position,
             point: anchor_point,
             ready_at: Instant::now()
                 + Duration::from_millis(LSP_HOVER_REQUEST_DELAY_MS),
@@ -477,17 +520,33 @@ impl DemoApp {
         // Process pending hover request if the delay has passed
         if let Some(pending) = self.lsp_hover_pending.take() {
             if now >= pending.ready_at {
-                // Send hover request to the LSP server
-                let request_sent = if let Some(tab) =
+                // Collect the diagnostics under the pointer, then send the
+                // hover request to the LSP server
+                let (diagnostics, request_sent) = if let Some(tab) =
                     self.tabs.iter_mut().find(|t| t.id == pending.editor_id)
                 {
+                    let diagnostics =
+                        pending.pointer_position.and_then(|position| {
+                            diagnostics_hover_markdown(
+                                &tab.editor.diagnostics_at(position),
+                            )
+                        });
                     tab.editor.lsp_flush_pending_changes();
-                    tab.editor.lsp_request_hover_at_position(pending.position)
+                    let sent = tab
+                        .editor
+                        .lsp_request_hover_at_position(pending.position);
+                    (diagnostics, sent)
                 } else {
-                    false
+                    (None, false)
                 };
 
-                if request_sent {
+                self.lsp_hover_diagnostics = diagnostics;
+                if let Some(text) = &self.lsp_hover_diagnostics {
+                    // Shown at once: the server's text joins it on reply.
+                    self.lsp_overlay.set_hover_position(pending.point);
+                    self.lsp_overlay.show_hover(text.clone());
+                    self.lsp_overlay_editor = Some(pending.editor_id);
+                } else if request_sent {
                     self.lsp_overlay.set_hover_position(pending.point);
                     self.lsp_overlay_editor = Some(pending.editor_id);
                 } else {
@@ -514,6 +573,7 @@ impl DemoApp {
         self.lsp_hover_anchor = None;
         self.lsp_hover_pending = None;
         self.lsp_hover_hide_deadline = None;
+        self.lsp_hover_diagnostics = None;
 
         // Only clear overlay editor if completion is not visible
         if !self.lsp_overlay.completion_visible {
@@ -697,7 +757,11 @@ impl DemoApp {
                 Ok(event) => match event {
                     // Handle hover response from LSP server
                     LspEvent::Hover { text } => {
-                        if text.trim().is_empty() {
+                        let text = combine_hover_text(
+                            self.lsp_hover_diagnostics.as_deref(),
+                            &text,
+                        );
+                        if text.is_empty() {
                             self.clear_lsp_hover();
                         } else {
                             self.lsp_overlay.show_hover(text);
@@ -1014,14 +1078,109 @@ mod tests {
     impl iced_code_editor::LspClient for NullLspClient {}
 
     /// A one-character error diagnostic at the start of line 0.
-    fn error_at_start() -> iced_code_editor::Diagnostic {
-        iced_code_editor::Diagnostic {
-            range: iced_code_editor::LspRange {
+    fn error_at_start() -> Diagnostic {
+        Diagnostic::new(
+            iced_code_editor::LspRange {
                 start: LspPosition { line: 0, character: 0 },
                 end: LspPosition { line: 0, character: 1 },
             },
-            severity: iced_code_editor::DiagnosticSeverity::Error,
-        }
+            DiagnosticSeverity::Error,
+            "expected item",
+        )
+    }
+
+    #[test]
+    fn test_diagnostics_hover_markdown_labels_each_severity() {
+        let warning = Diagnostic::new(
+            error_at_start().range,
+            DiagnosticSeverity::Warning,
+            "  unused  ",
+        );
+        let hint = Diagnostic::new(
+            error_at_start().range,
+            DiagnosticSeverity::Hint,
+            "",
+        );
+        let error = error_at_start();
+
+        assert_eq!(
+            diagnostics_hover_markdown(&[&error, &warning, &hint]).as_deref(),
+            Some("**Error**: expected item\n\n**Warning**: unused\n\n**Hint**")
+        );
+        assert_eq!(diagnostics_hover_markdown(&[]), None);
+    }
+
+    #[test]
+    fn test_combine_hover_text_puts_diagnostics_first() {
+        assert_eq!(
+            combine_hover_text(Some("**Error**: x"), "fn main()"),
+            "**Error**: x\n\n---\n\nfn main()"
+        );
+        assert_eq!(
+            combine_hover_text(Some("**Error**: x"), "  "),
+            "**Error**: x"
+        );
+        assert_eq!(combine_hover_text(None, " docs "), "docs");
+        assert_eq!(combine_hover_text(None, ""), "");
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_process_lsp_hover_timers_shows_diagnostics_without_a_server() {
+        let (mut app, _) = DemoApp::new();
+        let editor_id = app.active_tab_id;
+        let position = LspPosition { line: 0, character: 0 };
+        let tab = app.tabs.iter_mut().find(|tab| tab.id == editor_id).unwrap();
+        tab.editor.set_diagnostics(vec![error_at_start()]);
+        app.lsp_hover_anchor = Some((editor_id, position));
+        app.lsp_hover_pending = Some(LspHoverPending {
+            editor_id,
+            position,
+            pointer_position: Some(position),
+            point: Point::new(10.0, 10.0),
+            ready_at: Instant::now() - Duration::from_millis(1),
+        });
+
+        app.process_lsp_hover_timers();
+
+        assert!(app.lsp_overlay.hover_visible);
+        assert_eq!(
+            app.lsp_overlay.hover_text.as_deref(),
+            Some("**Error**: expected item")
+        );
+        assert_eq!(app.lsp_overlay_editor, Some(editor_id));
+        // The anchor stays, so hovering the same word does not re-trigger.
+        assert!(app.lsp_hover_anchor.is_some());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_drain_lsp_events_hover_joins_pending_diagnostics() {
+        let (mut app, _) = DemoApp::new();
+        app.lsp_hover_diagnostics =
+            Some("**Error**: expected item".to_string());
+        let (tx, rx) = mpsc::channel();
+        app.lsp_events = Some(rx);
+        tx.send(LspEvent::Hover { text: String::new() }).unwrap();
+        tx.send(LspEvent::Hover { text: "fn main()".to_string() }).unwrap();
+
+        let _ = app.drain_lsp_events();
+
+        assert!(app.lsp_overlay.hover_visible);
+        assert_eq!(
+            app.lsp_overlay.hover_text.as_deref(),
+            Some("**Error**: expected item\n\n---\n\nfn main()")
+        );
+    }
+
+    #[test]
+    fn test_clear_lsp_hover_forgets_diagnostics() {
+        let (mut app, _) = DemoApp::new();
+        app.lsp_hover_diagnostics = Some("**Error**: x".to_string());
+
+        app.clear_lsp_hover();
+
+        assert!(app.lsp_hover_diagnostics.is_none());
     }
 
     #[test]
@@ -1198,6 +1357,7 @@ mod tests {
         app.lsp_hover_pending = Some(LspHoverPending {
             editor_id,
             position,
+            pointer_position: None,
             point: Point::new(10.0, 10.0),
             ready_at: Instant::now() - Duration::from_millis(1),
         });
@@ -1219,6 +1379,7 @@ mod tests {
         app.lsp_hover_pending = Some(LspHoverPending {
             editor_id,
             position,
+            pointer_position: None,
             point: Point::new(10.0, 10.0),
             ready_at: Instant::now() + Duration::from_secs(60),
         });

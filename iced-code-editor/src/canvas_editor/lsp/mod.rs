@@ -135,28 +135,87 @@ pub enum DiagnosticSeverity {
 /// A diagnostic range to underline in the editor.
 ///
 /// Passed to `CodeEditor::set_diagnostics`. The range uses logical lines and
-/// character columns (not UTF-16 offsets).
+/// character columns (not UTF-16 offsets). The message is what a host shows
+/// when the pointer hovers the range (see `CodeEditor::diagnostics_at`).
 ///
 /// # Example
 ///
 /// ```
 /// use iced_code_editor::{Diagnostic, DiagnosticSeverity, LspPosition, LspRange};
 ///
-/// let diagnostic = Diagnostic {
-///     range: LspRange {
+/// let diagnostic = Diagnostic::new(
+///     LspRange {
 ///         start: LspPosition { line: 2, character: 0 },
 ///         end: LspPosition { line: 2, character: 5 },
 ///     },
-///     severity: DiagnosticSeverity::Error,
-/// };
+///     DiagnosticSeverity::Error,
+///     "mismatched types",
+/// );
 /// assert_eq!(diagnostic.range.end.character, 5);
+/// assert_eq!(diagnostic.message, "mismatched types");
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     /// Range to underline, with an inclusive start and exclusive end.
     pub range: LspRange,
     /// Severity that determines the underline color.
     pub severity: DiagnosticSeverity,
+    /// Human-readable description of the problem. May be empty.
+    pub message: String,
+}
+
+impl Diagnostic {
+    /// Creates a diagnostic from its range, severity and message.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{Diagnostic, DiagnosticSeverity, LspPosition, LspRange};
+    ///
+    /// let at = LspPosition { line: 0, character: 3 };
+    /// let diagnostic = Diagnostic::new(
+    ///     LspRange { start: at, end: at },
+    ///     DiagnosticSeverity::Hint,
+    ///     "consider a shorter name",
+    /// );
+    /// assert_eq!(diagnostic.severity, DiagnosticSeverity::Hint);
+    /// ```
+    pub fn new(
+        range: LspRange,
+        severity: DiagnosticSeverity,
+        message: impl Into<String>,
+    ) -> Self {
+        Self { range, severity, message: message.into() }
+    }
+
+    /// Whether `position` lies on the characters this diagnostic underlines.
+    ///
+    /// The end is exclusive. An empty range covers the one character at its
+    /// start, which is the character the editor underlines for it. A reversed
+    /// range covers nothing.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{Diagnostic, DiagnosticSeverity, LspPosition, LspRange};
+    ///
+    /// let diagnostic = Diagnostic::new(
+    ///     LspRange {
+    ///         start: LspPosition { line: 0, character: 4 },
+    ///         end: LspPosition { line: 0, character: 8 },
+    ///     },
+    ///     DiagnosticSeverity::Error,
+    ///     "unknown name",
+    /// );
+    /// assert!(diagnostic.contains(LspPosition { line: 0, character: 4 }));
+    /// assert!(!diagnostic.contains(LspPosition { line: 0, character: 8 }));
+    /// ```
+    pub fn contains(&self, position: LspPosition) -> bool {
+        let key = |p: LspPosition| (p.line, p.character);
+        let (start, end, at) =
+            (key(self.range.start), key(self.range.end), key(position));
+        if start == end { at == start } else { start <= at && at < end }
+    }
 }
 
 /// A text change described by a range replacement.
