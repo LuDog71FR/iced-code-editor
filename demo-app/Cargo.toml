@@ -7,7 +7,6 @@ publish = false
 [dependencies]
 iced.workspace = true
 iced-code-editor = { path = "../iced-code-editor", features = ["lsp-process", "two-face"] }
-iced_aw = "0.14"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 opener = { version = "0.9", features = ["reveal"] }
