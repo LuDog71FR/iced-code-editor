@@ -35,15 +35,18 @@ Several of these changes port fixes and ideas first made in the
   `LspEvent::Diagnostics { uri, diagnostics }`, with columns converted from
   UTF-16 to characters, and advertises the `publishDiagnostics` capability.
   Diagnostics for a document the client has not opened are dropped.
-- feat: `Diagnostic` has a `message`, filled from the server's diagnostic by
-  `LspProcessClient`, and a `Diagnostic::new` constructor.
+- feat: `Diagnostic` has a `message` and an optional `source` (the tool that
+  reported it, such as `rustc` or `clippy`), both filled from the server's
+  diagnostic by `LspProcessClient`, a `Diagnostic::new` constructor and a
+  `with_source` builder.
   `CodeEditor::diagnostics_at(position)` and `Diagnostic::contains` find the
   diagnostics under a position, to show their messages on hover.
 - feat: `CodeEditor::lsp_document_uri` returns the URI of the document open
   with the LSP client, to route per-document events to the right editor.
 - feat(demo): the demo app underlines the diagnostics its language servers
   publish, and clears them when a tab detaches or opens another document. Their
-  messages appear in the hover tooltip, above the server's hover text.
+  messages appear in the hover tooltip with their source, above the server's
+  hover text.
 - feat: `register_syntaxes` adds `.sublime-syntax` definitions to the set every
   editor highlights with, for languages syntect and `two-face` do not ship. Call it
   at startup, before the first editor highlights text (the set is built once per

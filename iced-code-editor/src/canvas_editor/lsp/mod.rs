@@ -162,6 +162,9 @@ pub struct Diagnostic {
     pub severity: DiagnosticSeverity,
     /// Human-readable description of the problem. May be empty.
     pub message: String,
+    /// Tool that produced the diagnostic, such as `rustc` or `clippy`.
+    /// `None` when the source did not say.
+    pub source: Option<String>,
 }
 
 impl Diagnostic {
@@ -185,7 +188,30 @@ impl Diagnostic {
         severity: DiagnosticSeverity,
         message: impl Into<String>,
     ) -> Self {
-        Self { range, severity, message: message.into() }
+        Self { range, severity, message: message.into(), source: None }
+    }
+
+    /// Sets the tool that produced the diagnostic, such as `rustc` or
+    /// `clippy`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{Diagnostic, DiagnosticSeverity, LspPosition, LspRange};
+    ///
+    /// let at = LspPosition { line: 0, character: 0 };
+    /// let diagnostic = Diagnostic::new(
+    ///     LspRange { start: at, end: at },
+    ///     DiagnosticSeverity::Warning,
+    ///     "redundant clone",
+    /// )
+    /// .with_source("clippy");
+    /// assert_eq!(diagnostic.source.as_deref(), Some("clippy"));
+    /// ```
+    #[must_use]
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
     }
 
     /// Whether `position` lies on the characters this diagnostic underlines.

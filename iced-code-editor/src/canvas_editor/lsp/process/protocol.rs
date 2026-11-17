@@ -439,6 +439,11 @@ fn parse_publish_diagnostics(
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
+                source: diagnostic
+                    .get("source")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|source| !source.trim().is_empty())
+                    .map(String::from),
             })
         })
         .collect();
@@ -1351,7 +1356,8 @@ mod tests {
                     "end": { "line": 0, "character": 5 }
                 },
                 "severity": 2,
-                "message": "unused"
+                "message": "unused",
+                "source": "rustc"
             },
             {
                 "range": {
@@ -1386,6 +1392,8 @@ mod tests {
                     DiagnosticSeverity::Warning
                 );
                 assert_eq!(diagnostics[0].message, "unused");
+                assert_eq!(diagnostics[0].source.as_deref(), Some("rustc"));
+                assert_eq!(diagnostics[1].source, None);
                 assert_eq!(
                     diagnostics[1].range.end,
                     LspPosition { line: 0, character: 1 }

@@ -94,7 +94,9 @@ fn virtual_uri_for_template(editor_id: EditorId, template: Template) -> String {
 }
 
 /// Formats the diagnostics under the pointer as Markdown for the hover
-/// tooltip, one paragraph per diagnostic with its severity in bold.
+/// tooltip, one paragraph per diagnostic with its severity in bold, followed
+/// by its source in parentheses when the diagnostic names one
+/// (`**Warning** (clippy): message`).
 ///
 /// Returns `None` when there is nothing to show.
 fn diagnostics_hover_markdown(diagnostics: &[&Diagnostic]) -> Option<String> {
@@ -107,11 +109,17 @@ fn diagnostics_hover_markdown(diagnostics: &[&Diagnostic]) -> Option<String> {
                 DiagnosticSeverity::Information => "Info",
                 DiagnosticSeverity::Hint => "Hint",
             };
+            let heading = match diagnostic.source.as_deref().map(str::trim) {
+                Some(source) if !source.is_empty() => {
+                    format!("**{label}** ({source})")
+                }
+                _ => format!("**{label}**"),
+            };
             let message = diagnostic.message.trim();
             if message.is_empty() {
-                format!("**{label}**")
+                heading
             } else {
-                format!("**{label}**: {message}")
+                format!("{heading}: {message}")
             }
         })
         .collect();
@@ -1108,6 +1116,33 @@ mod tests {
             Some("**Error**: expected item\n\n**Warning**: unused\n\n**Hint**")
         );
         assert_eq!(diagnostics_hover_markdown(&[]), None);
+    }
+
+    #[test]
+    fn test_diagnostics_hover_markdown_shows_the_source() {
+        let clippy = Diagnostic::new(
+            error_at_start().range,
+            DiagnosticSeverity::Warning,
+            "redundant clone",
+        )
+        .with_source("clippy");
+        let blank_source = error_at_start().with_source("  ");
+        let no_message = Diagnostic::new(
+            error_at_start().range,
+            DiagnosticSeverity::Hint,
+            "",
+        )
+        .with_source("rustc");
+
+        assert_eq!(
+            diagnostics_hover_markdown(&[&clippy, &blank_source, &no_message])
+                .as_deref(),
+            Some(
+                "**Warning** (clippy): redundant clone\n\n\
+                 **Error**: expected item\n\n\
+                 **Hint** (rustc)"
+            )
+        );
     }
 
     #[test]

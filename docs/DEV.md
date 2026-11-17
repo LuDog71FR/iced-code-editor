@@ -1538,7 +1538,8 @@ Visual selection, as for a drag.
 (`draw_diagnostics`)
 
 `CodeEditor::set_diagnostics` replaces the list of `Diagnostic` values (an
-`LspRange`, a `DiagnosticSeverity` and a `message`). An identical list is ignored; any other
+`LspRange`, a `DiagnosticSeverity`, a `message` and an optional `source`,
+such as `rustc` or `clippy`). An identical list is ignored; any other
 list clears `overlay_cache`. The types live in `canvas_editor/lsp/mod.rs` but do
 not depend on the `lsp-process` feature: any source can supply the list. With
 `LspProcessClient`, it comes from `LspEvent::Diagnostics` (see
@@ -1555,8 +1556,9 @@ editor does not draw a tooltip itself; the demo app does it in
   (`lsp_position_at_point`) in `LspHoverPending.pointer_position`, next to the
   word-start anchor used for the server request.
 - When the hover delay ends, `process_lsp_hover_timers` formats the covering
-  diagnostics with `diagnostics_hover_markdown` ("**Error**: message", one
-  paragraph each), keeps the result in `lsp_hover_diagnostics` and shows it at
+  diagnostics with `diagnostics_hover_markdown` ("**Warning** (clippy):
+  message", one paragraph each; the parentheses are left out without a
+  source), keeps the result in `lsp_hover_diagnostics` and shows it at
   once, even when no server is attached.
 - On `LspEvent::Hover`, `combine_hover_text` puts the diagnostics first, then a
   horizontal rule, then the server's text. An empty server reply keeps the

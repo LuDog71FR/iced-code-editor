@@ -1063,7 +1063,9 @@ editor.set_diagnostics(vec![Diagnostic::new(
     },
     DiagnosticSeverity::Error,
     "cannot find value `name` in this scope",
-)]);
+)
+// Optional: the tool that reported it
+.with_source("rustc")]);
 
 assert_eq!(editor.diagnostics().len(), 1);
 
@@ -1104,13 +1106,16 @@ LSP overlay:
 // On EditorMessage::MouseHover(point)
 if let Some(position) = editor.lsp_position_at_point(point) {
     for diagnostic in editor.diagnostics_at(position) {
-        println!("{:?}: {}", diagnostic.severity, diagnostic.message);
+        // `source` names the tool that reported it, e.g. "rustc" or "clippy"
+        let source = diagnostic.source.as_deref().unwrap_or("unknown");
+        println!("{:?} ({source}): {}", diagnostic.severity, diagnostic.message);
     }
 }
 ```
 
 `diagnostics_at` returns every diagnostic whose range covers the position, in
-the order they were set. The demo app shows them in the hover tooltip, even
+the order they were set. `LspProcessClient` fills `message` and `source` from
+the server's diagnostic. The demo app shows them in the hover tooltip, even
 when no language server is attached, and adds the server's hover text below a
 separator when it arrives.
 
