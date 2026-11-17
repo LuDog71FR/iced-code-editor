@@ -333,23 +333,10 @@ impl CodeEditor {
             self.cursors.primary_position().0,
             self.cursors.primary_position().1,
         ) {
-            let vl = &visual_lines[cursor_visual];
-            let line_content = self.buffer.line(vl.logical_line);
-            let prefix_len =
-                self.cursors.primary_position().1.saturating_sub(vl.start_col);
-            let prefix_text: String = line_content
-                .chars()
-                .skip(vl.start_col)
-                .take(prefix_len)
-                .collect();
-            let cursor_x = self.gutter_width()
-                + 5.0
-                + crate::canvas_editor::measure_text_width(
-                    &prefix_text,
-                    self.full_char_width,
-                    self.char_width,
-                )
-                - self.horizontal_scroll_offset;
+            let cursor_x = self.caret_content_x(
+                &visual_lines[cursor_visual],
+                self.cursors.primary_position().1,
+            ) - self.horizontal_scroll_offset;
 
             // Calculate visual Y position relative to the viewport
             // We subtract viewport_scroll because the content is scrolled up/down

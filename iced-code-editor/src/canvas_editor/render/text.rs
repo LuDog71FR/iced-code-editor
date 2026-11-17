@@ -17,6 +17,7 @@ use crate::canvas_editor::IndentStyle;
 use crate::canvas_editor::features::{
     bracket_match, color_preview, indent_guides,
 };
+use crate::canvas_editor::virtual_text::{VirtualText, width_between};
 use crate::canvas_editor::{
     CodeEditor, TAB_WIDTH, measure_char_width, measure_text_width,
 };
@@ -107,6 +108,7 @@ fn swatch_belongs_to_segment(
 /// * `segment_start_col`: start column index of the target segment (e.g. highlight).
 /// * `segment_end_col`: end column index of the target segment.
 /// * `base_offset`: base X offset (usually gutter_width + padding).
+/// * `virtual_text`: `(column, width)` of the line's virtual text, sorted.
 ///
 /// # Returns
 ///
@@ -115,7 +117,8 @@ fn swatch_belongs_to_segment(
 /// # Remark
 ///
 /// This function handles CJK character widths correctly to keep highlights accurate.
-pub(super) fn calculate_segment_geometry(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn calculate_segment_geometry(
     line_content: &str,
     visual_start_col: usize,
     segment_start_col: usize,
@@ -123,6 +126,7 @@ pub(super) fn calculate_segment_geometry(
     base_offset: f32,
     full_char_width: f32,
     char_width: f32,
+    virtual_text: &[(usize, f32)],
 ) -> (f32, f32) {
     // Clamp the segment to the current visual line so callers can safely pass
     // logical selection/match columns without worrying about wrapping boundaries.
@@ -146,6 +150,25 @@ pub(super) fn calculate_segment_geometry(
         } else if i >= segment_start_col {
             segment_width += w;
         }
+    }
+
+    // Virtual text at the start column goes before a segment of text (a
+    // selection starts after an inlay hint), but after an empty one (the
+    // cursor stays before it).
+    let has_text = segment_start_col < segment_end_col;
+    prefix_width += width_between(
+        virtual_text,
+        visual_start_col,
+        segment_start_col,
+        has_text,
+    );
+    if has_text {
+        segment_width += width_between(
+            virtual_text,
+            segment_start_col + 1,
+            segment_end_col,
+            false,
+        );
     }
 
     (base_offset + prefix_width, segment_width)
@@ -269,137 +292,145 @@ impl CodeEditor {
         syntax_set: &SyntaxSet,
         syntax_theme: Option<&syntect::highlighting::Theme>,
     ) {
+        let line = visual_line.logical_line;
+        let line_content = self.buffer.line(line);
+        let line_len = self.buffer.line_len(line);
+        // The colored pieces of the segment, in column order.
+        let mut pieces: Vec<(usize, usize, iced::Color)> = Vec::new();
         if let (Some(syntax), Some(syntax_theme)) = (syntax_ref, syntax_theme) {
             // Reuse the memoized full-line spans; only the visible segment of
             // the (possibly wrapped) line is positioned and drawn here.
             let spans = self.highlighted_line_cached(
-                visual_line.logical_line,
+                line,
                 syntax,
                 syntax_theme,
                 syntax_set,
             );
-
-            let mut x_offset =
-                ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset;
             let mut char_pos = 0;
-
             for (color, text) in spans.iter() {
-                let text_len = text.chars().count();
-                let text_end = char_pos + text_len;
-
-                // Check if this token intersects with our segment
-                if text_end > visual_line.start_col
-                    && char_pos < visual_line.end_col
-                {
-                    // Calculate the intersection
-                    let segment_start = char_pos.max(visual_line.start_col);
-                    let segment_end = text_end.min(visual_line.end_col);
-
-                    let text_start_offset =
-                        segment_start.saturating_sub(char_pos);
-                    let text_end_offset =
-                        text_start_offset + (segment_end - segment_start);
-
-                    let (start_byte, end_byte) = char_range_to_byte_range(
-                        text,
-                        text_start_offset,
-                        text_end_offset,
-                    );
-
-                    let segment_text = &text[start_byte..end_byte];
-                    let display_text = if self.show_whitespace {
-                        expand_tabs_visible(segment_text, TAB_WIDTH)
-                    } else {
-                        expand_tabs(segment_text, TAB_WIDTH).into_owned()
-                    };
-                    let display_width = measure_text_width(
-                        &display_text,
-                        ctx.full_char_width,
-                        ctx.char_width,
-                    );
-
-                    if self.show_whitespace {
-                        let ws_color = self.style.whitespace_color;
-                        let mut seg_x = x_offset;
-                        for (is_ws, seg) in
-                            split_whitespace_segments(&display_text)
-                        {
-                            let seg_color =
-                                if is_ws { ws_color } else { *color };
-                            let seg_width = measure_text_width(
-                                seg,
-                                ctx.full_char_width,
-                                ctx.char_width,
-                            );
-                            draw_text_runs(
-                                frame,
-                                seg,
-                                Point::new(seg_x, y + 2.0),
-                                seg_color,
-                                ctx,
-                            );
-                            seg_x += seg_width;
-                        }
-                    } else {
-                        draw_text_runs(
-                            frame,
-                            &display_text,
-                            Point::new(x_offset, y + 2.0),
-                            *color,
-                            ctx,
-                        );
-                    }
-
-                    x_offset += display_width;
+                let text_end = char_pos + text.chars().count();
+                let start = char_pos.max(visual_line.start_col);
+                let end = text_end.min(visual_line.end_col);
+                if start < end {
+                    pieces.push((start, end, *color));
                 }
-
                 char_pos = text_end;
             }
-        } else {
-            // Fallback to plain text
-            let full_line_content = self.buffer.line(visual_line.logical_line);
-            let (start_byte, end_byte) = char_range_to_byte_range(
-                full_line_content,
+        } else if visual_line.start_col < visual_line.end_col {
+            pieces.push((
                 visual_line.start_col,
                 visual_line.end_col,
-            );
-            let line_segment = &full_line_content[start_byte..end_byte];
-            let display_text = if self.show_whitespace {
-                expand_tabs_visible(line_segment, TAB_WIDTH)
-            } else {
-                expand_tabs(line_segment, TAB_WIDTH).into_owned()
-            };
-            let base_x = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset;
-            if self.show_whitespace {
-                let ws_color = self.style.whitespace_color;
-                let text_color = self.style.text_color;
-                let mut seg_x = base_x;
-                for (is_ws, seg) in split_whitespace_segments(&display_text) {
-                    let seg_color = if is_ws { ws_color } else { text_color };
-                    let seg_width = measure_text_width(
-                        seg,
-                        ctx.full_char_width,
-                        ctx.char_width,
-                    );
-                    draw_text_runs(
-                        frame,
-                        seg,
-                        Point::new(seg_x, y + 2.0),
-                        seg_color,
-                        ctx,
-                    );
-                    seg_x += seg_width;
-                }
-            } else {
-                draw_text_runs(
+                self.style.text_color,
+            ));
+        }
+
+        // Virtual text goes before the character at its column; the one at
+        // the end of the line only on the line's last segment.
+        let virtual_text = self.virtual_text.on_line(line);
+        let mut next = virtual_text.partition_point(|item| {
+            item.column.min(line_len) < visual_line.start_col
+        });
+        let mut x = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset;
+        let y = y + 2.0;
+        for (start, end, color) in pieces {
+            let mut pos = start;
+            while let Some(item) = virtual_text.get(next)
+                && item.column.min(line_len) < end
+            {
+                let column = item.column.min(line_len).max(pos);
+                x += self.draw_text_piece(
                     frame,
-                    &display_text,
-                    Point::new(base_x, y + 2.0),
-                    self.style.text_color,
                     ctx,
+                    line_content,
+                    (pos, column),
+                    color,
+                    x,
+                    y,
                 );
+                x += Self::draw_virtual_text(frame, ctx, item, x, y);
+                pos = column;
+                next += 1;
+            }
+            x += self.draw_text_piece(
+                frame,
+                ctx,
+                line_content,
+                (pos, end),
+                color,
+                x,
+                y,
+            );
+        }
+        if visual_line.end_col >= line_len {
+            for item in &virtual_text[next.min(virtual_text.len())..] {
+                x += Self::draw_virtual_text(frame, ctx, item, x, y);
             }
         }
+    }
+
+    /// Draws the characters `cols` of `line_content` at `x`, expanding tabs
+    /// (and showing whitespace when enabled), and returns their width.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_piece(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext,
+        line_content: &str,
+        cols: (usize, usize),
+        color: iced::Color,
+        x: f32,
+        y: f32,
+    ) -> f32 {
+        if cols.0 >= cols.1 {
+            return 0.0;
+        }
+        let (start_byte, end_byte) =
+            char_range_to_byte_range(line_content, cols.0, cols.1);
+        let segment_text = &line_content[start_byte..end_byte];
+        let display_text = if self.show_whitespace {
+            expand_tabs_visible(segment_text, TAB_WIDTH)
+        } else {
+            expand_tabs(segment_text, TAB_WIDTH).into_owned()
+        };
+        let display_width = measure_text_width(
+            &display_text,
+            ctx.full_char_width,
+            ctx.char_width,
+        );
+        if self.show_whitespace {
+            let ws_color = self.style.whitespace_color;
+            let mut seg_x = x;
+            for (is_ws, seg) in split_whitespace_segments(&display_text) {
+                let seg_color = if is_ws { ws_color } else { color };
+                draw_text_runs(
+                    frame,
+                    seg,
+                    Point::new(seg_x, y),
+                    seg_color,
+                    ctx,
+                );
+                seg_x += measure_text_width(
+                    seg,
+                    ctx.full_char_width,
+                    ctx.char_width,
+                );
+            }
+        } else {
+            draw_text_runs(frame, &display_text, Point::new(x, y), color, ctx);
+        }
+        display_width
+    }
+
+    /// Draws one piece of virtual text at `x` and returns its width.
+    fn draw_virtual_text(
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext,
+        item: &VirtualText,
+        x: f32,
+        y: f32,
+    ) -> f32 {
+        draw_text_runs(frame, &item.text, Point::new(x, y), item.color, ctx);
+        measure_text_width(&item.text, ctx.full_char_width, ctx.char_width)
     }
 
     /// Draws the vertical indentation guides for `visual_line`.
@@ -512,6 +543,7 @@ impl CodeEditor {
                 ctx.gutter_width + 5.0,
                 ctx.full_char_width,
                 ctx.char_width,
+                &self.virtual_text_widths(visual_line.logical_line),
             );
             let border_position = Point::new(
                 x - ctx.horizontal_scroll_offset + SWATCH_GAP,
@@ -590,6 +622,7 @@ impl CodeEditor {
                 ctx.gutter_width + 5.0,
                 ctx.full_char_width,
                 ctx.char_width,
+                &self.virtual_text_widths(visual_line.logical_line),
             );
             frame.fill_text(canvas::Text {
                 content: ch.to_string(),
@@ -663,7 +696,14 @@ mod tests {
         // width("World") = 5 * CHAR_WIDTH
         let content = "Hello World";
         let (x, w) = calculate_segment_geometry(
-            content, 0, 6, 11, 0.0, FONT_SIZE, CHAR_WIDTH,
+            content,
+            0,
+            6,
+            11,
+            0.0,
+            FONT_SIZE,
+            CHAR_WIDTH,
+            &[],
         );
 
         let expected_x = CHAR_WIDTH * 6.0;
@@ -690,7 +730,14 @@ mod tests {
         // width("世界") = 2 * FONT_SIZE
         let content = "你好世界";
         let (x, w) = calculate_segment_geometry(
-            content, 0, 2, 4, 10.0, FONT_SIZE, CHAR_WIDTH,
+            content,
+            0,
+            2,
+            4,
+            10.0,
+            FONT_SIZE,
+            CHAR_WIDTH,
+            &[],
         );
 
         let expected_x = 10.0 + FONT_SIZE * 2.0;
@@ -717,7 +764,14 @@ mod tests {
         // width("你好") = 2 * FONT_SIZE
         let content = "Hi你好";
         let (x, w) = calculate_segment_geometry(
-            content, 0, 2, 4, 0.0, FONT_SIZE, CHAR_WIDTH,
+            content,
+            0,
+            2,
+            4,
+            0.0,
+            FONT_SIZE,
+            CHAR_WIDTH,
+            &[],
         );
 
         let expected_x = CHAR_WIDTH * 2.0;
@@ -739,7 +793,14 @@ mod tests {
     fn test_calculate_segment_geometry_empty_range() {
         let content = "Hello";
         let (x, w) = calculate_segment_geometry(
-            content, 0, 0, 0, 0.0, FONT_SIZE, CHAR_WIDTH,
+            content,
+            0,
+            0,
+            0,
+            0.0,
+            FONT_SIZE,
+            CHAR_WIDTH,
+            &[],
         );
         assert!((x - 0.0).abs() < f32::EPSILON);
         assert!((w - 0.0).abs() < f32::EPSILON);
@@ -755,7 +816,14 @@ mod tests {
         // segment width: 2 * CHAR_WIDTH
         let content = "0123456789";
         let (x, w) = calculate_segment_geometry(
-            content, 2, 3, 5, 5.0, FONT_SIZE, CHAR_WIDTH,
+            content,
+            2,
+            3,
+            5,
+            5.0,
+            FONT_SIZE,
+            CHAR_WIDTH,
+            &[],
         );
 
         let expected_x = 5.0 + CHAR_WIDTH * 1.0;
@@ -782,7 +850,14 @@ mod tests {
         // Segment should be empty.
         let content = "Hello";
         let (x, w) = calculate_segment_geometry(
-            content, 0, 10, 15, 0.0, FONT_SIZE, CHAR_WIDTH,
+            content,
+            0,
+            10,
+            15,
+            0.0,
+            FONT_SIZE,
+            CHAR_WIDTH,
+            &[],
         );
 
         let expected_x = CHAR_WIDTH * 5.0; // Width of "Hello"
@@ -809,7 +884,14 @@ mod tests {
 
         // Segment covering Emoji
         let (x, w) = calculate_segment_geometry(
-            content, 0, 1, 2, 0.0, FONT_SIZE, CHAR_WIDTH,
+            content,
+            0,
+            1,
+            2,
+            0.0,
+            FONT_SIZE,
+            CHAR_WIDTH,
+            &[],
         );
         let expected_x_emoji = CHAR_WIDTH; // 'A'
         let expected_w_emoji = FONT_SIZE; // '👋'
@@ -827,7 +909,14 @@ mod tests {
 
         // Segment covering Tab
         let (x_tab, w_tab) = calculate_segment_geometry(
-            content, 0, 2, 3, 0.0, FONT_SIZE, CHAR_WIDTH,
+            content,
+            0,
+            2,
+            3,
+            0.0,
+            FONT_SIZE,
+            CHAR_WIDTH,
+            &[],
         );
         let expected_x_tab = CHAR_WIDTH + FONT_SIZE; // 'A' + '👋'
         let expected_w_tab =
@@ -851,7 +940,14 @@ mod tests {
         // Should result in empty segment at start 5
         let content = "0123456789";
         let (x, w) = calculate_segment_geometry(
-            content, 0, 5, 3, 0.0, FONT_SIZE, CHAR_WIDTH,
+            content,
+            0,
+            5,
+            3,
+            0.0,
+            FONT_SIZE,
+            CHAR_WIDTH,
+            &[],
         );
 
         let expected_x = CHAR_WIDTH * 5.0;

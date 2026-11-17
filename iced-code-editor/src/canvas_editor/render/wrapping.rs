@@ -6,9 +6,10 @@
 
 use crate::buffer::TextBuffer;
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
+use crate::canvas_editor::virtual_text::width_between;
 use crate::canvas_editor::{compare_floats, measure_char_width};
 
 /// Represents a visual line segment in the editor.
@@ -69,6 +70,8 @@ pub struct WrappingCalculator {
     full_char_width: f32,
     /// Character width for narrow characters
     char_width: f32,
+    /// `(column, width)` of the virtual text of each line that has any.
+    virtual_text: HashMap<usize, Vec<(usize, f32)>>,
 }
 
 impl WrappingCalculator {
@@ -96,7 +99,24 @@ impl WrappingCalculator {
         full_char_width: f32,
         char_width: f32,
     ) -> Self {
-        Self { wrap_enabled, wrap_column, full_char_width, char_width }
+        Self {
+            wrap_enabled,
+            wrap_column,
+            full_char_width,
+            char_width,
+            virtual_text: HashMap::new(),
+        }
+    }
+
+    /// Counts the virtual text of each line (`(column, width)`, sorted) in the
+    /// width of its segments. Virtual text is never split, and the one at a
+    /// wrap point starts the next segment.
+    pub(crate) fn with_virtual_text(
+        mut self,
+        virtual_text: HashMap<usize, Vec<(usize, f32)>>,
+    ) -> Self {
+        self.virtual_text = virtual_text;
+        self
     }
 
     /// Calculates all visual lines from the text buffer.
@@ -178,14 +198,19 @@ impl WrappingCalculator {
             let mut segment_index = 0;
             let mut current_width = 0.0;
             let mut current_segment_start_col = 0;
+            let virtual_text = self
+                .virtual_text
+                .get(&logical_line)
+                .map_or(&[][..], Vec::as_slice);
 
             for (i, c) in line_content.chars().enumerate() {
-                // Compute pixel width for the current character
+                // Compute pixel width for the current character, with the
+                // virtual text drawn before it.
                 let char_width = measure_char_width(
                     c,
                     self.full_char_width,
                     self.char_width,
-                );
+                ) + width_between(virtual_text, i, i, true);
 
                 // If adding the current character exceeds wrap width, wrap at the previous char.
                 // Ensure at least one character per segment even if a single char exceeds wrap_width.

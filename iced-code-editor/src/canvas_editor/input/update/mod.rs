@@ -411,13 +411,7 @@ mod tests {
         let _ = editor.update(&Message::Enter);
         let incremental = editor.visual_lines_cached(800.0);
 
-        let calculator =
-            crate::canvas_editor::render::wrapping::WrappingCalculator::new(
-                editor.wrap_enabled,
-                editor.wrap_column,
-                editor.full_char_width,
-                editor.char_width,
-            );
+        let calculator = editor.wrapping_calculator();
         let expected = calculator.calculate_visual_lines(
             &editor.buffer,
             800.0,
