@@ -673,10 +673,22 @@ impl CodeEditor {
 
     /// Updates the compact extent of the document state represented by queued
     /// and already-flushed LSP changes.
+    ///
+    /// The extent is the document the server holds, which is
+    /// [`crate::buffer::TextBuffer::to_string`]: with a trailing newline, that
+    /// text has one more, empty line after the buffer's last one. A
+    /// full-document replacement that stopped before it would leave the old
+    /// newline after the new text.
     fn update_lsp_synced_extent(&mut self) {
-        self.lsp_synced_line_count = self.buffer.line_count();
-        self.lsp_synced_last_line_len =
-            self.buffer.line_len(self.lsp_synced_line_count.saturating_sub(1));
+        let line_count = self.buffer.line_count();
+        if self.buffer.has_trailing_newline() {
+            self.lsp_synced_line_count = line_count.saturating_add(1);
+            self.lsp_synced_last_line_len = 0;
+        } else {
+            self.lsp_synced_line_count = line_count;
+            self.lsp_synced_last_line_len =
+                self.buffer.line_len(line_count.saturating_sub(1));
+        }
     }
 
     /// Sets whether LSP support is enabled.
@@ -1149,5 +1161,80 @@ mod tests {
     fn test_lsp_request_formatting_is_a_noop_without_an_attached_client() {
         let mut editor = CodeEditor::new("hello", "rs");
         assert!(!editor.lsp_request_formatting());
+    }
+
+    /// Mirrors the document the way a server does: the text from
+    /// `did_open`, with every `did_change` applied to it.
+    #[derive(Default)]
+    struct MirrorLspClient {
+        text: Rc<RefCell<String>>,
+    }
+
+    /// Byte offset of an LSP position (ASCII text, so characters are bytes).
+    fn mirror_offset(text: &str, position: lsp::LspPosition) -> usize {
+        let mut offset = 0;
+        for (index, line) in text.split('\n').enumerate() {
+            if index == position.line as usize {
+                return offset + (position.character as usize).min(line.len());
+            }
+            offset += line.len() + 1;
+        }
+        text.len()
+    }
+
+    impl lsp::LspClient for MirrorLspClient {
+        fn did_open(&mut self, _document: &lsp::LspDocument, text: &str) {
+            *self.text.borrow_mut() = text.to_string();
+        }
+        fn did_change(
+            &mut self,
+            _document: &lsp::LspDocument,
+            changes: &[lsp::LspTextChange],
+        ) {
+            let mut text = self.text.borrow_mut();
+            for change in changes {
+                let start = mirror_offset(&text, change.range.start);
+                let end = mirror_offset(&text, change.range.end).max(start);
+                text.replace_range(start..end, &change.text);
+            }
+        }
+    }
+
+    #[test]
+    fn test_full_document_change_keeps_the_trailing_newline_once() {
+        // Enter goes out as an incremental change, which leaves the
+        // shadow text stale; the edit applied afterwards then falls back to
+        // replacing the whole document. Its range must reach the end of the
+        // document as the server holds it, past the trailing newline, or the
+        // server ends up with the newline twice.
+        for source in ["fn main() {\n    let t = 1;\n}\n", "fn main() {}"] {
+            let mirror = Rc::new(RefCell::new(String::new()));
+            let client = MirrorLspClient { text: Rc::clone(&mirror) };
+            let mut editor = CodeEditor::new(source, "rs");
+            editor.request_focus();
+            editor.attach_lsp(
+                Box::new(client),
+                lsp::LspDocument::new("file:///test.rs", "rust"),
+            );
+            assert_eq!(*mirror.borrow(), source);
+
+            let _ = editor.update(&Message::Enter);
+            assert_eq!(*mirror.borrow(), editor.buffer.to_string());
+            assert!(!editor.lsp_shadow_is_current, "{source:?}");
+
+            let applied = editor.apply_lsp_text_edits(&[lsp::LspTextChange {
+                range: lsp::LspRange {
+                    start: lsp::LspPosition { line: 0, character: 0 },
+                    end: lsp::LspPosition { line: 0, character: 0 },
+                },
+                text: "use std::fmt;\n\n".to_string(),
+            }]);
+            assert!(applied);
+            assert_eq!(
+                *mirror.borrow(),
+                editor.buffer.to_string(),
+                "{source:?}"
+            );
+        }
     }
 }
