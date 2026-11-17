@@ -217,6 +217,8 @@ pub enum EditorToggle {
     IndentGuides,
     /// Draws a color swatch next to each color literal.
     ColorPreviews,
+    /// Underlines diagnostics and shows their messages on hover.
+    Diagnostics,
     /// Highlights the bracket matching the one at the cursor.
     BracketMatchHighlight,
     /// Colors nested bracket pairs by nesting depth.
@@ -231,7 +233,7 @@ pub enum EditorToggle {
 
 impl EditorToggle {
     /// Every toggle, in the order the options panel displays them.
-    pub const ALL: [EditorToggle; 14] = [
+    pub const ALL: [EditorToggle; 15] = [
         EditorToggle::Wrap,
         EditorToggle::Folding,
         EditorToggle::AutoIndent,
@@ -241,6 +243,7 @@ impl EditorToggle {
         EditorToggle::ShowWhitespace,
         EditorToggle::IndentGuides,
         EditorToggle::ColorPreviews,
+        EditorToggle::Diagnostics,
         EditorToggle::BracketMatchHighlight,
         EditorToggle::BracketPairColorization,
         EditorToggle::StickyScroll,
@@ -260,6 +263,7 @@ impl EditorToggle {
             EditorToggle::ShowWhitespace => "Show whitespace",
             EditorToggle::IndentGuides => "Show indentation guides",
             EditorToggle::ColorPreviews => "Show color previews",
+            EditorToggle::Diagnostics => "Show diagnostics",
             EditorToggle::BracketMatchHighlight => "Highlight matching bracket",
             EditorToggle::BracketPairColorization => "Rainbow brackets",
             EditorToggle::StickyScroll => "Sticky scroll",
@@ -280,6 +284,7 @@ impl EditorToggle {
             EditorToggle::ShowWhitespace => editor.show_whitespace(),
             EditorToggle::IndentGuides => editor.show_indent_guides(),
             EditorToggle::ColorPreviews => editor.show_color_previews(),
+            EditorToggle::Diagnostics => editor.diagnostics_enabled(),
             EditorToggle::BracketMatchHighlight => {
                 editor.bracket_match_highlight_enabled()
             }
@@ -318,6 +323,9 @@ impl EditorToggle {
             }
             EditorToggle::ColorPreviews => {
                 editor.set_show_color_previews(enabled)
+            }
+            EditorToggle::Diagnostics => {
+                editor.set_diagnostics_enabled(enabled)
             }
             EditorToggle::BracketMatchHighlight => {
                 editor.set_bracket_match_highlight_enabled(enabled)

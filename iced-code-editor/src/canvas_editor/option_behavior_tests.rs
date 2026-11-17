@@ -76,6 +76,35 @@ fn editor_config_option_visual_toggles_round_trip() -> Result<(), &'static str>
 }
 
 #[test]
+fn editor_config_option_diagnostics_toggle_the_underline()
+-> Result<(), &'static str> {
+    use crate::canvas_editor::lsp::{
+        Diagnostic, DiagnosticSeverity, LspPosition, LspRange,
+    };
+
+    let renderer = renderer()?;
+    let mut editor = focused("let answer = 42;");
+    editor.set_diagnostics(vec![Diagnostic::new(
+        LspRange {
+            start: LspPosition { line: 0, character: 4 },
+            end: LspPosition { line: 0, character: 10 },
+        },
+        DiagnosticSeverity::Error,
+        "unused",
+    )]);
+    let underlined = drawing(&editor, &renderer, 1);
+
+    editor.set_diagnostics_enabled(false);
+    let hidden = drawing(&editor, &renderer, 1);
+    assert_ne!(underlined, hidden);
+
+    // The list is kept while disabled: enabling draws it again unchanged.
+    editor.set_diagnostics_enabled(true);
+    assert_eq!(underlined, drawing(&editor, &renderer, 1));
+    Ok(())
+}
+
+#[test]
 fn editor_config_option_folding_restores_hidden_lines() {
     let mut editor =
         CodeEditor::new("fn main() {\n    x();\n    y();\n}", "rs");

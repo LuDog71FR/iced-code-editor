@@ -138,6 +138,12 @@ bool_options! {
         default: "Shown by default.", ""
         builder: "Sets built-in context-menu visibility using the builder pattern.",
         "Whether to show the built-in actions";
+    diagnostics_enabled, set_diagnostics_enabled, with_diagnostics_enabled,
+        "Returns whether diagnostics are underlined and reported on hover.",
+        "`true` if diagnostics are shown, `false` otherwise",
+        default: "Enabled by default.", ""
+        builder: "Enables or disables diagnostics using the builder pattern.",
+        "Whether to underline and report diagnostics";
     folding_enabled, set_folding_enabled, with_folding_enabled,
         "Returns whether code folding is enabled.",
         "`true` if code folding is enabled, `false` otherwise",

@@ -54,6 +54,9 @@ impl CodeEditor {
 
     /// The diagnostics covering `position`, in the order they were set.
     ///
+    /// Always empty while diagnostics are disabled
+    /// ([`CodeEditor::set_diagnostics_enabled`]).
+    ///
     /// `position` is in logical lines and character columns, as returned by
     /// [`CodeEditor::lsp_position_at_point`]. Hosts use it to show the
     /// messages of the diagnostics under the pointer.
@@ -81,6 +84,9 @@ impl CodeEditor {
     /// assert!(editor.diagnostics_at(LspPosition { line: 0, character: 0 }).is_empty());
     /// ```
     pub fn diagnostics_at(&self, position: LspPosition) -> Vec<&Diagnostic> {
+        if !self.diagnostics_enabled {
+            return Vec::new();
+        }
         self.diagnostics
             .iter()
             .filter(|diagnostic| diagnostic.contains(position))
@@ -147,6 +153,20 @@ mod tests {
 
     fn at(line: u32, character: u32) -> LspPosition {
         LspPosition { line, character }
+    }
+
+    #[test]
+    fn disabling_diagnostics_hides_them_but_keeps_the_list() {
+        let mut editor = CodeEditor::new("let answer = 42;\n", "rs");
+        let error = diagnostic((0, 4), (0, 10));
+        editor.set_diagnostics_enabled(false);
+        // Set while disabled: stored, not reported.
+        editor.set_diagnostics(vec![error.clone()]);
+        assert!(editor.diagnostics_at(at(0, 5)).is_empty());
+        assert_eq!(editor.diagnostics(), std::slice::from_ref(&error));
+
+        editor.set_diagnostics_enabled(true);
+        assert_eq!(editor.diagnostics_at(at(0, 5)), vec![&error]);
     }
 
     #[test]

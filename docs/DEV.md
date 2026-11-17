@@ -115,7 +115,7 @@ iced-code-editor/
     ├── config.rs              # Builder-style set_*/with_*/getter configuration methods
     ├── bool_options.rs        # Macro generating the boolean options' getters/builders
     ├── focus.rs               # Editor focus management
-    ├── diagnostics.rs         # set_diagnostics/diagnostics + range-to-visual-line clipping
+    ├── diagnostics.rs         # set_diagnostics/diagnostics/diagnostics_at + range-to-visual-line clipping
     ├── bench_support.rs       # Criterion benchmark harness (feature: bench)
     ├── *_tests.rs             # Cross-module behavior tests (indent, wrap,
     │                          #   option, sticky, Unicode rendering)
@@ -1546,6 +1546,14 @@ not depend on the `lsp-process` feature: any source can supply the list. With
 [Layer 2](#layer-2--lspprocessclient-canvas_editorlspprocessmodrs)); the host
 routes it to the editor whose `lsp_document_uri()` matches.
 
+**Toggle.** `diagnostics_enabled` (default `true`, generated getter and builder
+in `bool_options.rs`, setter in `config.rs`) gates the *display* only:
+`draw_diagnostics` returns early and `diagnostics_at` returns an empty list.
+`set_diagnostics` keeps storing the list while it is off, like folding keeps
+`collapsed_folds`, so enabling it again shows the latest list without waiting
+for the server to republish. The setter clears `overlay_cache`, the layer that
+draws the underlines.
+
 **Hover messages.** `Diagnostic::contains` uses the same coverage rule as the
 underline: exclusive end, and an empty range covers the character at its start.
 `CodeEditor::diagnostics_at(position)` returns every covering diagnostic. The
@@ -1986,7 +1994,7 @@ Server configurations (command, arguments, language IDs) live in `lsp/process/co
 
 **UTF-16 conversion:** LSP uses UTF-16 character offsets while the editor works in UTF-8. `TextModel` inside `LspProcessClient` mirrors the document content and converts positions before every request (`to_utf16_position`), and back again for replies whose payload is in document coordinates (`to_char_position`, used by the formatting response). A pending request therefore records the document URI alongside its kind: a JSON-RPC response carries only the request id, so the mirror to translate against can only be found through that.
 
-**Server notifications:** `handle_server_notification` (`process/protocol.rs`) dispatches `$/progress` to `LspEvent::Progress` and `textDocument/publishDiagnostics` to `LspEvent::Diagnostics`. Diagnostic ranges are converted with the mirror of the document named by the notification's `uri`; a notification for a document the client has not opened is dropped, because its columns cannot be converted. A missing or unknown severity maps to `Error`, so a diagnostic is never hidden. An empty list is still emitted: it is how a server clears a document. The `initialize` request advertises `textDocument.publishDiagnostics`.
+**Server notifications:** `handle_server_notification` (`process/protocol.rs`) dispatches `$/progress` to `LspEvent::Progress` and `textDocument/publishDiagnostics` to `LspEvent::Diagnostics`. Diagnostic ranges are converted with the mirror of the document named by the notification's `uri`; a notification for a document the client has not opened is dropped, because its columns cannot be converted. A missing or unknown severity maps to `Error`, so a diagnostic is never hidden. `message` defaults to an empty string, and a blank or missing `source` becomes `None`. An entry without a valid range is skipped. An empty list is still emitted: it is how a server clears a document. The `initialize` request advertises `textDocument.publishDiagnostics`.
 
 ### Layer 3 — `LspOverlayState` + `view_lsp_overlay` (`canvas_editor/lsp/process/overlay.rs`)
 
@@ -2050,11 +2058,14 @@ would gain one empty line with every full replacement.
 ```
 User moves mouse  →  CodeEditor emits MouseHover(point)
                   →  App calls editor.lsp_hover_anchor_at_point()
+                     and editor.lsp_position_at_point() (exact pointer)
                   →  LspHoverPending queued (`LSP_HOVER_REQUEST_DELAY_MS` delay)
-                  →  Tick fires: editor.lsp_request_hover_at_position()
+                  →  Tick fires: editor.diagnostics_at(pointer) is formatted
+                     and shown at once when not empty
+                  →  editor.lsp_request_hover_at_position()
                   →  LspProcessClient sends hover request to server
                   →  Server replies → LspEvent::Hover { text }
-                  →  App calls overlay.show_hover(text)
+                  →  App calls overlay.show_hover(diagnostics + text)
                   →  view_lsp_overlay() renders the tooltip
 
 User types char   →  CodeEditor emits CharacterInput

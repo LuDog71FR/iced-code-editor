@@ -345,6 +345,10 @@ impl CodeEditor {
         use crate::canvas_editor::diagnostics::diagnostic_segment;
         use crate::canvas_editor::lsp::DiagnosticSeverity;
 
+        if !self.diagnostics_enabled {
+            return;
+        }
+
         for diagnostic in &self.diagnostics {
             let color = match diagnostic.severity {
                 DiagnosticSeverity::Error => self.style.diagnostic_error_color,

@@ -264,6 +264,9 @@ pub struct CodeEditor {
     pub(crate) show_indent_guides: bool,
     /// Whether inline color-preview swatches are drawn next to color literals.
     pub(crate) show_color_previews: bool,
+    /// Whether diagnostics are underlined and reported by `diagnostics_at`.
+    /// The list itself is kept while this is off.
+    pub(crate) diagnostics_enabled: bool,
     /// Whether the matching-bracket/quote-pair highlight overlay is enabled.
     pub(crate) bracket_match_highlight_enabled: bool,
     /// Whether bracket-pair colorization (rainbow brackets) is enabled.
@@ -782,6 +785,7 @@ impl CodeEditor {
             show_whitespace: true,
             show_indent_guides: true,
             show_color_previews: true,
+            diagnostics_enabled: true,
             bracket_match_highlight_enabled: true,
             bracket_pair_colorization_enabled: true,
             sticky_scroll_enabled: true,

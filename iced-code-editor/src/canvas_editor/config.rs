@@ -560,6 +560,49 @@ impl CodeEditor {
         }
     }
 
+    /// Enables or disables diagnostics.
+    ///
+    /// While disabled, no diagnostic is underlined and
+    /// [`CodeEditor::diagnostics_at`] returns nothing, so a host shows no
+    /// message on hover. The list passed to [`CodeEditor::set_diagnostics`] is
+    /// still stored and kept up to date, so enabling diagnostics again shows
+    /// the current list at once, without waiting for the source to publish
+    /// again. Toggling this setting clears the overlay cache to trigger an
+    /// immediate redraw.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to underline and report diagnostics
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{
+    ///     CodeEditor, Diagnostic, DiagnosticSeverity, LspPosition, LspRange,
+    /// };
+    ///
+    /// let mut editor = CodeEditor::new("let x = 1;", "rs");
+    /// let at = LspPosition { line: 0, character: 4 };
+    /// editor.set_diagnostics(vec![Diagnostic::new(
+    ///     LspRange { start: at, end: at },
+    ///     DiagnosticSeverity::Warning,
+    ///     "unused variable",
+    /// )]);
+    ///
+    /// editor.set_diagnostics_enabled(false);
+    /// assert!(editor.diagnostics_at(at).is_empty());
+    /// assert_eq!(editor.diagnostics().len(), 1); // still stored
+    ///
+    /// editor.set_diagnostics_enabled(true);
+    /// assert_eq!(editor.diagnostics_at(at).len(), 1);
+    /// ```
+    pub fn set_diagnostics_enabled(&mut self, enabled: bool) {
+        if self.diagnostics_enabled != enabled {
+            self.diagnostics_enabled = enabled;
+            self.overlay_cache.clear();
+        }
+    }
+
     /// Enables or disables sticky scroll.
     ///
     /// Sticky scroll pins the header lines of the blocks enclosing the topmost

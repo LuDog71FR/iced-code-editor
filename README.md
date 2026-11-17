@@ -927,7 +927,7 @@ if editor.bracket_pair_colorization_enabled() {
 
 ### Language Server Protocol (LSP)
 
-LSP support provides hover documentation, auto-completion, go-to-definition, and document formatting. It requires the `lsp-process` feature (not available on WASM):
+LSP support provides hover documentation, auto-completion, go-to-definition, document formatting, and diagnostics. It requires the `lsp-process` feature (not available on WASM):
 
 ```toml
 [dependencies]
@@ -1073,6 +1073,25 @@ assert_eq!(editor.diagnostics().len(), 1);
 editor.set_diagnostics(Vec::new());
 ```
 
+Diagnostics are **enabled by default** and can be turned off per editor. While
+disabled, nothing is underlined and `diagnostics_at` returns nothing, but the
+list is still stored: enabling them again shows the current diagnostics at once,
+without waiting for the server to publish again.
+
+```rust
+// Hide diagnostics (underlines and hover messages)
+editor.set_diagnostics_enabled(false);
+
+// Or use builder pattern during initialization
+let editor = CodeEditor::new("code", "rs")
+    .with_diagnostics_enabled(false);
+
+// Check current state
+if editor.diagnostics_enabled() {
+    println!("Diagnostics are shown");
+}
+```
+
 - Columns count characters, not UTF-16 code units.
 - The list replaces the previous one, and the editor does not move the ranges
   when the text is edited. Send a new list each time the source publishes one.
@@ -1194,6 +1213,8 @@ A full-featured demo application is included in the `demo-app` directory, showca
 - Modified state tracking
 - Clipboard operations
 - Full keyboard navigation
+- LSP integration: hover, completion, go-to-definition, format on save, and
+  diagnostic underlines whose messages and sources appear in the hover tooltip
 
 Run it with:
 

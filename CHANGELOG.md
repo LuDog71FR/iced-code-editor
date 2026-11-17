@@ -37,10 +37,16 @@ Several of these changes port fixes and ideas first made in the
   Diagnostics for a document the client has not opened are dropped.
 - feat: `Diagnostic` has a `message` and an optional `source` (the tool that
   reported it, such as `rustc` or `clippy`), both filled from the server's
-  diagnostic by `LspProcessClient`, a `Diagnostic::new` constructor and a
-  `with_source` builder.
+  diagnostic by `LspProcessClient`. Build one with `Diagnostic::new(range,
+  severity, message)` and the `with_source` builder. Because of the `String`
+  fields, `Diagnostic` is `Clone` but not `Copy`.
   `CodeEditor::diagnostics_at(position)` and `Diagnostic::contains` find the
   diagnostics under a position, to show their messages on hover.
+- feat: `CodeEditor::set_diagnostics_enabled` / `with_diagnostics_enabled` /
+  `diagnostics_enabled` turn diagnostics off per editor (enabled by default).
+  While off, nothing is underlined and `diagnostics_at` returns nothing; the
+  list is kept, so enabling them again shows it at once. The demo app has a
+  "Show diagnostics" toggle.
 - feat: `CodeEditor::lsp_document_uri` returns the URI of the document open
   with the LSP client, to route per-document events to the right editor.
 - feat(demo): the demo app underlines the diagnostics its language servers
