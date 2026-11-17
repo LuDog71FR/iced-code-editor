@@ -27,6 +27,15 @@ Several of these changes port fixes and ideas first made in the
   literals, comments and punctuation by TextMate scope, across grammars.
 - feat: `Style::syntax_theme_name` selects any syntect bundled theme for the
   code tokens instead of the automatic `base16-ocean` dark/light pick.
+- feat: `register_syntaxes` adds `.sublime-syntax` definitions to the set every
+  editor highlights with, for languages syntect and `two-face` do not ship. Call it
+  at startup, before the first editor highlights text (the set is built once per
+  process); later calls return `SyntaxRegistrationError::AlreadyBuilt`, and an
+  invalid definition returns `SyntaxRegistrationError::Parse` without registering
+  any. Registered syntaxes are chosen by `file_extensions` and looked up before the
+  bundled ones. They form a set of their own, so building it stays cheap: they
+  include each other by scope, not the bundled ones. With nothing registered,
+  highlighting is exactly as before.
 
 ### Changed
 
