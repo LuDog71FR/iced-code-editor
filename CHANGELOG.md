@@ -27,6 +27,19 @@ Several of these changes port fixes and ideas first made in the
   literals, comments and punctuation by TextMate scope, across grammars.
 - feat: `Style::syntax_theme_name` selects any syntect bundled theme for the
   code tokens instead of the automatic `base16-ocean` dark/light pick.
+- feat: diagnostic underlines with `CodeEditor::set_diagnostics` /
+  `diagnostics`. The new `Diagnostic` and `DiagnosticSeverity` types describe LSP
+  ranges and their severity; error, warning, information and hint colors come
+  from the active theme. Underlines follow visual lines when wrapping is on.
+- feat: `register_syntaxes` adds `.sublime-syntax` definitions to the set every
+  editor highlights with, for languages syntect and `two-face` do not ship. Call it
+  at startup, before the first editor highlights text (the set is built once per
+  process); later calls return `SyntaxRegistrationError::AlreadyBuilt`, and an
+  invalid definition returns `SyntaxRegistrationError::Parse` without registering
+  any. Registered syntaxes are chosen by `file_extensions` and looked up before the
+  bundled ones. They form a set of their own, so building it stays cheap: they
+  include each other by scope, not the bundled ones. With nothing registered,
+  highlighting is exactly as before.
 
 ### Changed
 
@@ -39,6 +52,10 @@ Several of these changes port fixes and ideas first made in the
 - style: the canvas editor's scrollbars are a 6 px pill in an 8 px rail, 2 px
   from the edge. The scroller is faint with the mouse away from the editor, plain
   over it and solid over the bar or while dragging.
+- **Breaking:** `Style` has four new public fields for the underline colors
+  (`diagnostic_error_color`, `diagnostic_warning_color`,
+  `diagnostic_information_color`, `diagnostic_hint_color`); styles built with
+  `theme::from_iced_theme` take them from the iced palette.
 
 ### Fixed
 

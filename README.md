@@ -38,6 +38,7 @@ Screenshot of the demo application:
 - **Search and replace** text
 - **Command palette** (`Ctrl+Shift+P`) listing every editor action, extensible with the host application's own commands
 - **Language Server Protocol** (LSP) support
+- **Diagnostic underlines** with severity colors, including wrapped lines
 - **Auto indentation** with custom indent style
 - **Auto-closing brackets/quotes** with surround selection
 - **Matching bracket/quote highlight** — highlights the paired bracket or quote next to the cursor
@@ -570,6 +571,24 @@ Object keys (JSON and YAML keys, object-literal keys) take the `key` color
 even though they are quoted strings. Tokens that a theme draws as a
 background highlight, such as invalid syntax in base16 themes, always fall
 back to a legible color, so half-typed code never disappears.
+
+### Adding syntaxes
+
+Languages that syntect (or `two-face`) does not ship can be added at startup, in Sublime Text's
+`.sublime-syntax` format. A registered syntax is picked by its `file_extensions`, like the bundled ones,
+and is looked up first, so it can also replace a bundled one. Registered syntaxes form a small set of
+their own (adding to the bundled set would re-link every bundled grammar, which takes hundreds of
+milliseconds): they can include each other by scope (`include: scope:source.zig`), so register the
+grammars a definition includes along with it.
+
+```rust
+// Before the first editor highlights text: the syntax set is built once per process.
+let zig = std::fs::read_to_string("syntaxes/zig.sublime-syntax")?;
+let zx = std::fs::read_to_string("syntaxes/zx.sublime-syntax")?; // includes scope:source.zig
+iced_code_editor::register_syntaxes([zig.as_str(), zx.as_str()])?;
+
+let editor = iced_code_editor::CodeEditor::new(source, "zx");
+```
 
 ### Getting and Setting Content
 
