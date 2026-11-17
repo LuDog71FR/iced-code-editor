@@ -20,7 +20,6 @@ None
 
 ### LSP / IntelliSense (completion, hover, go-to-definition, formatting already done)
 
-2. **Diagnostics display** (underlines + gutter + panel)
 3. **Find references** + **Rename symbol**
 4. **Signature help**
 5. **Code actions / quick fixes**
