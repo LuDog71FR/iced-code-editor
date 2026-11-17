@@ -84,6 +84,7 @@ pub mod bench_support;
 mod bool_options;
 mod caches;
 mod config;
+mod diagnostics;
 mod editing;
 pub(crate) mod features;
 mod focus;
@@ -229,6 +230,8 @@ pub struct CodeEditor {
         RefCell<Option<(u64, Rc<Vec<folding::FoldRegion>>)>>,
     /// Search state
     pub(crate) search_state: search::SearchState,
+    /// Diagnostic ranges underlined in the text.
+    pub(crate) diagnostics: Vec<lsp::Diagnostic>,
     /// Custom entries displayed before the built-in context-menu actions.
     custom_context_menu_entries: Vec<ContextMenuEntry>,
     /// Whether the built-in editing actions are shown in the context menu.
@@ -762,6 +765,7 @@ impl CodeEditor {
             fold_revision: 0,
             foldable_regions_cache: RefCell::new(None),
             search_state: search::SearchState::new(),
+            diagnostics: Vec::new(),
             custom_context_menu_entries: Vec::new(),
             default_context_menu_enabled: true,
             reveal_in_file_manager_enabled: false,

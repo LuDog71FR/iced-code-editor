@@ -99,12 +99,34 @@ impl LspDocument {
 /// };
 /// assert_eq!(range.end.character - range.start.character, 4);
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LspRange {
     /// Range start (inclusive).
     pub start: LspPosition,
     /// Range end (exclusive).
     pub end: LspPosition,
+}
+
+/// Severity of a diagnostic underline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSeverity {
+    /// An error that usually prevents the code from compiling or running.
+    Error,
+    /// A potential problem that does not necessarily stop execution.
+    Warning,
+    /// Additional information about the code.
+    Information,
+    /// A suggestion that is less prominent than a warning.
+    Hint,
+}
+
+/// A diagnostic range to underline in the editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Diagnostic {
+    /// Range to underline, with an inclusive start and exclusive end.
+    pub range: LspRange,
+    /// Severity that determines the underline color.
+    pub severity: DiagnosticSeverity,
 }
 
 /// A text change described by a range replacement.

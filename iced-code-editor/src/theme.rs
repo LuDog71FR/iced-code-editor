@@ -67,6 +67,14 @@ pub struct Style {
     /// Colors drawn over the syntax theme for common token kinds, matched by
     /// TextMate scope. The default overrides nothing.
     pub token_colors: TokenColors,
+    /// Underline color for error diagnostics
+    pub diagnostic_error_color: Color,
+    /// Underline color for warning diagnostics
+    pub diagnostic_warning_color: Color,
+    /// Underline color for information diagnostics
+    pub diagnostic_information_color: Color,
+    /// Underline color for hint diagnostics
+    pub diagnostic_hint_color: Color,
 }
 
 /// Colors that replace the syntax theme's for common token kinds.
@@ -305,6 +313,10 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         ime_preedit_background_color,
         syntax_theme_name: None,
         token_colors: TokenColors::default(),
+        diagnostic_error_color: palette.danger.base.color,
+        diagnostic_warning_color: palette.warning.base.color,
+        diagnostic_information_color: palette.primary.base.color,
+        diagnostic_hint_color: palette.secondary.base.color,
     }
 }
 
