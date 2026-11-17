@@ -91,6 +91,11 @@ Several of these changes port fixes and ideas first made in the
 - fix: tokens that a syntax theme styles as a background highlight (base16
   `invalid.illegal`) were drawn in the background color, so half-typed code
   such as a stray comma vanished. They now fall back to a legible color.
+- fix(demo): the language server of an opened file was started at the file's
+  own directory (`src/`), where it cannot find the project manifest. The demo
+  now uses the nearest ancestor holding a project file (`Cargo.toml`,
+  `package.json`, `pyproject.toml`, `go.mod`, ...), else the nearest `.git`
+  directory.
 - fix: when a buffer ended with a newline, a full-document LSP change (sent
   for example after `apply_lsp_text_edits`) stopped before the final empty line.
   The server's copy of the document gained one empty line at the end with

@@ -137,6 +137,38 @@ fn combine_hover_text(diagnostics: Option<&str>, hover: &str) -> String {
     }
 }
 
+/// Files whose presence marks the root of a project, for every language the
+/// demo starts a server for. The nearest one wins: in a Cargo workspace that is
+/// the member crate, and `rust-analyzer` resolves the workspace from there.
+const PROJECT_ROOT_MARKERS: [&str; 7] = [
+    "Cargo.toml",
+    "package.json",
+    "tsconfig.json",
+    "pyproject.toml",
+    "setup.py",
+    "go.mod",
+    ".luarc.json",
+];
+
+/// Finds the project root of `dir`: the nearest ancestor (or `dir` itself)
+/// holding a [`PROJECT_ROOT_MARKERS`] file, else the nearest one holding a
+/// `.git` entry. Returns `None` when neither exists.
+///
+/// A server started at a file's own directory (`src/`) cannot find the
+/// project manifest above it, which leaves it without the build information
+/// its diagnostics need.
+fn find_project_root(dir: &Path) -> Option<PathBuf> {
+    let has_marker = |candidate: &Path| {
+        PROJECT_ROOT_MARKERS.iter().any(|m| candidate.join(m).is_file())
+    };
+    dir.ancestors()
+        .find(|candidate| has_marker(candidate))
+        .or_else(|| {
+            dir.ancestors().find(|candidate| candidate.join(".git").exists())
+        })
+        .map(Path::to_path_buf)
+}
+
 /// Converts a filesystem path to a `file://` URI.
 ///
 /// Percent-encoding is delegated to [`Url`], so every character that is
@@ -282,8 +314,12 @@ impl DemoApp {
         self.set_lsp_server_for_editor(editor_id, None);
     }
 
-    /// Determines the root URI for LSP based on a path hint
-    /// Falls back to current working directory if the path is not within it
+    /// Determines the root URI for LSP based on a path hint.
+    ///
+    /// The project root of the hint's directory (see [`find_project_root`])
+    /// comes first. Without one, a directory inside the current working
+    /// directory maps to it, and any other directory is used as is. Without a
+    /// hint, the current working directory is the root.
     pub(super) fn lsp_root_uri_for_path(
         root_hint: Option<&Path>,
     ) -> Option<String> {
@@ -297,7 +333,9 @@ impl DemoApp {
                 }
             })
             .map(|hint_dir| {
-                if let Some(cwd) = &cwd
+                if let Some(root) = find_project_root(&hint_dir) {
+                    root
+                } else if let Some(cwd) = &cwd
                     && hint_dir.starts_with(cwd)
                 {
                     cwd.clone()
@@ -889,6 +927,60 @@ mod tests {
     // existing per-test allows in `history.rs`/`command.rs`.
     use super::*;
     use std::path::{Path, PathBuf};
+
+    /// A fresh, empty directory under the system temp dir, unique to `name`.
+    #[allow(clippy::unwrap_used)]
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("demo-app-root-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_find_project_root_picks_the_nearest_manifest() {
+        let workspace = scratch_dir("manifest");
+        let src = workspace.join("member/src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(workspace.join("Cargo.toml"), "").unwrap();
+        std::fs::write(workspace.join("member/Cargo.toml"), "").unwrap();
+
+        assert_eq!(find_project_root(&src), Some(workspace.join("member")));
+
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_find_project_root_falls_back_to_the_git_directory() {
+        let repo = scratch_dir("git");
+        let nested = repo.join("a/b");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+
+        assert_eq!(find_project_root(&nested), Some(repo.clone()));
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_lsp_root_uri_for_path_uses_the_project_root_of_a_file() {
+        let project = scratch_dir("uri");
+        let file = project.join("src/main.rs");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(project.join("Cargo.toml"), "").unwrap();
+        std::fs::write(&file, "fn main() {}").unwrap();
+
+        assert_eq!(
+            DemoApp::lsp_root_uri_for_path(Some(&file)),
+            Some(path_to_file_uri(&project))
+        );
+
+        let _ = std::fs::remove_dir_all(&project);
+    }
 
     #[test]
     fn test_file_uri_round_trip() {
