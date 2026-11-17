@@ -49,6 +49,9 @@ Several of these changes port fixes and ideas first made in the
 - A press outside the editor now releases its keyboard focus, and clicking back
   into it restores focus, so the host no longer has to call `lose_focus()`
   when another widget is clicked.
+- style: the canvas editor's scrollbars are a 6 px pill in an 8 px rail, 2 px
+  from the edge. The scroller is faint with the mouse away from the editor, plain
+  over it and solid over the bar or while dragging.
 - **Breaking:** `Style` has four new public fields for the underline colors
   (`diagnostic_error_color`, `diagnostic_warning_color`,
   `diagnostic_information_color`, `diagnostic_hint_color`); styles built with
