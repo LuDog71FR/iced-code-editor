@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.7.0] - 2026-11-17
+
 Several of these changes port fixes and ideas first made in the
 [rustman](https://github.com/rust-man-org/rustman) fork of this crate.
 
