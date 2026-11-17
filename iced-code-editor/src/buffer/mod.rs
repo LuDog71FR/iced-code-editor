@@ -309,6 +309,12 @@ impl TextBuffer {
     /// [`Self::to_string`] — the two feed the same LSP document sync, and a
     /// CRLF file must not have some change payloads joined with `\n` while
     /// the full-text sync path (via `to_string`) uses `\r\n`.
+    /// Whether the content ends with a line terminator, which
+    /// [`Self::to_string`] appends after the last line.
+    pub(crate) fn has_trailing_newline(&self) -> bool {
+        self.trailing_newline
+    }
+
     pub(crate) fn line_range_to_string(
         &self,
         start: usize,
