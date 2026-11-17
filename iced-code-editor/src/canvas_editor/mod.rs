@@ -91,11 +91,13 @@ mod focus;
 mod input;
 pub mod lsp;
 mod metrics;
+mod range_style;
 mod render;
 mod virtual_text;
 
 pub use features::context_menu::{ContextMenuEntry, ContextMenuItem};
 pub use features::vim::VimMode;
+pub use range_style::RangeStyle;
 pub use render::highlighting::{SyntaxRegistrationError, register_syntaxes};
 pub use virtual_text::VirtualText;
 #[derive(Debug, Clone)]
@@ -236,6 +238,8 @@ pub struct CodeEditor {
     pub(crate) diagnostics: Vec<lsp::Diagnostic>,
     /// Text drawn in the lines without being in the buffer (inlay hints).
     pub(crate) virtual_text: virtual_text::VirtualTextLayers,
+    /// Colors given to ranges of the text, by layer.
+    pub(crate) range_styles: range_style::RangeStyleLayers,
     /// Custom entries displayed before the built-in context-menu actions.
     custom_context_menu_entries: Vec<ContextMenuEntry>,
     /// Whether the built-in editing actions are shown in the context menu.
@@ -774,6 +778,7 @@ impl CodeEditor {
             search_state: search::SearchState::new(),
             diagnostics: Vec::new(),
             virtual_text: virtual_text::VirtualTextLayers::default(),
+            range_styles: range_style::RangeStyleLayers::default(),
             custom_context_menu_entries: Vec::new(),
             default_context_menu_enabled: true,
             reveal_in_file_manager_enabled: false,

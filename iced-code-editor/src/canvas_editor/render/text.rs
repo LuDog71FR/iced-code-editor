@@ -324,6 +324,11 @@ impl CodeEditor {
             ));
         }
 
+        let pieces = crate::canvas_editor::range_style::apply_range_styles(
+            pieces,
+            self.range_styles.on_line(line),
+        );
+
         // Virtual text goes before the character at its column; the one at
         // the end of the line only on the line's last segment.
         let virtual_text = self.virtual_text.on_line(line);

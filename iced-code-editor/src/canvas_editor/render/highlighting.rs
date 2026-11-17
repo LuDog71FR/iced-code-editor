@@ -25,7 +25,7 @@ use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
-use super::token_colors::TokenColorizer;
+use super::token_colors::{TokenColorizer, token_color_override};
 use crate::canvas_editor::{
     CodeEditor, HIGHLIGHT_CLOCK_CHECK_INTERVAL, HighlightCache, ResolvedSyntax,
 };
@@ -411,6 +411,38 @@ impl CodeEditor {
         ));
 
         (owner(syntax), syntax, theme)
+    }
+
+    /// The color this editor's syntax theme (with
+    /// [`crate::Style::token_colors`]) gives a TextMate scope such as
+    /// `"entity.name.function"`, to color [`crate::RangeStyle`]s like the
+    /// rest of the text.
+    ///
+    /// Returns `None` when the scope name is invalid, when the theme has no
+    /// rule for it (the syntax highlighting's color is then the right one),
+    /// or when its color would not stand out from the editor background.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert!(editor.scope_color("entity.name.function").is_some());
+    /// assert!(editor.scope_color("no.such.scope.anywhere").is_none());
+    /// ```
+    pub fn scope_color(&self, scope: &str) -> Option<Color> {
+        let scope = syntect::parsing::Scope::new(scope).ok()?;
+        if let Some(color) =
+            token_color_override(&self.style.token_colors, &[scope])
+        {
+            return Some(color);
+        }
+        let (_, _, theme) = self.resolve_syntax();
+        let foreground =
+            Highlighter::new(theme?).style_mod_for_stack(&[scope]).foreground?;
+        let color = color_from_syntect(foreground);
+        contrasts_with(color, self.style.background).then_some(color)
     }
 
     /// Returns the memoized syntax-highlighted spans for a logical line.

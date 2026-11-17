@@ -88,6 +88,15 @@ impl TokenScopes {
     }
 }
 
+/// The [`TokenColors`] override for a token whose scope stack (outermost
+/// first) is `stack`, or `None` to keep the theme's color.
+pub(super) fn token_color_override(
+    colors: &TokenColors,
+    stack: &[Scope],
+) -> Option<Color> {
+    TokenScopes::get()?.color(colors, stack)
+}
+
 /// Replays one line's scope operations alongside the highlighter, so each
 /// highlighted range can be matched against [`TokenColors`].
 pub(super) struct TokenColorizer<'a> {
