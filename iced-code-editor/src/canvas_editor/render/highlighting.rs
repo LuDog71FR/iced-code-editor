@@ -10,12 +10,15 @@
 
 use iced::Color;
 use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{
     HighlightState, Highlighter, RangedHighlightIterator, Style, ThemeSet,
 };
-use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
+use syntect::parsing::{
+    ParseState, ScopeStack, SyntaxDefinition, SyntaxReference, SyntaxSet,
+    SyntaxSetBuilder,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -30,6 +33,151 @@ use crate::canvas_editor::{
 /// Loading syntect's syntax definitions is expensive, so the set is built once
 /// per process and shared by every editor instance.
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+
+/// Definitions added with [`register_syntaxes`], waiting for [`EXTRA_SET`] to
+/// be built.
+static EXTRA_SYNTAXES: Mutex<Vec<SyntaxDefinition>> = Mutex::new(Vec::new());
+
+/// The registered syntaxes, in a set of their own (see [`register_syntaxes`]).
+/// Kept apart from [`SYNTAX_SET`] because adding to the bundled set means
+/// re-linking every bundled grammar, which costs hundreds of milliseconds.
+static EXTRA_SET: OnceLock<SyntaxSet> = OnceLock::new();
+
+/// Error returned by [`register_syntaxes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyntaxRegistrationError {
+    /// A definition is not a valid `.sublime-syntax` file. `index` is its
+    /// position in the input; nothing was registered.
+    Parse {
+        /// Position of the definition in the input.
+        index: usize,
+        /// The parser's message.
+        message: String,
+    },
+    /// An editor has already highlighted text, and the syntax set is built
+    /// once per process: register syntaxes before creating editors.
+    AlreadyBuilt,
+}
+
+impl std::fmt::Display for SyntaxRegistrationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Parse { index, message } => {
+                write!(f, "syntax definition {index}: {message}")
+            }
+            Self::AlreadyBuilt => write!(
+                f,
+                "the syntax set is already built; register syntaxes before \
+                 the first editor highlights text"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SyntaxRegistrationError {}
+
+/// Adds syntax definitions, in Sublime Text's `.sublime-syntax` format, to the
+/// set every editor highlights with.
+///
+/// A definition is chosen like the bundled ones, by the file extensions it
+/// lists (`file_extensions`) matching the editor's syntax name. Registered
+/// syntaxes are looked up before the bundled ones, so one can replace a bundled
+/// syntax; among registered ones claiming the same extension, the one
+/// registered last wins.
+///
+/// Registered syntaxes form a set of their own, which keeps building it cheap
+/// (adding to the bundled set would re-link every bundled grammar). They can
+/// include each other by scope (`include: scope:source.zig`), but not the
+/// bundled ones: register the grammars a definition includes along with it.
+/// An include that resolves to nothing is ignored.
+///
+/// The set is built once per process, the first time an editor highlights
+/// text, so call this before that, typically at startup. All or nothing: if
+/// one definition does not parse, none is registered.
+///
+/// # Errors
+///
+/// [`SyntaxRegistrationError::Parse`] for an invalid definition, and
+/// [`SyntaxRegistrationError::AlreadyBuilt`] when the set already exists.
+///
+/// # Example
+///
+/// ```
+/// let ini = r#"
+/// name: Tiny INI
+/// file_extensions: [tini]
+/// scope: source.tini
+/// contexts:
+///   main:
+///     - match: '^\[.*\]$'
+///       scope: entity.name.section.tini
+/// "#;
+/// iced_code_editor::register_syntaxes([ini]).expect("valid syntax");
+/// ```
+pub fn register_syntaxes<'a>(
+    definitions: impl IntoIterator<Item = &'a str>,
+) -> Result<(), SyntaxRegistrationError> {
+    register_into(&EXTRA_SET, &EXTRA_SYNTAXES, definitions)
+}
+
+/// [`register_syntaxes`] against an explicit set and queue (tests use their
+/// own, so they don't depend on the process-wide one).
+fn register_into<'a>(
+    set: &OnceLock<SyntaxSet>,
+    queue: &Mutex<Vec<SyntaxDefinition>>,
+    definitions: impl IntoIterator<Item = &'a str>,
+) -> Result<(), SyntaxRegistrationError> {
+    let parsed = definitions
+        .into_iter()
+        .enumerate()
+        .map(|(index, text)| {
+            SyntaxDefinition::load_from_str(text, true, None).map_err(|e| {
+                SyntaxRegistrationError::Parse { index, message: e.to_string() }
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    // Hold the queue while checking, so the set can't be built in between.
+    let mut queue = queue.lock().unwrap_or_else(|e| e.into_inner());
+    if set.get().is_some() {
+        return Err(SyntaxRegistrationError::AlreadyBuilt);
+    }
+    queue.extend(parsed);
+    Ok(())
+}
+
+/// The bundled syntaxes.
+fn bundled_syntax_set() -> SyntaxSet {
+    #[cfg(feature = "two-face")]
+    {
+        two_face::syntax::extra_newlines()
+    }
+    #[cfg(not(feature = "two-face"))]
+    {
+        SyntaxSet::load_defaults_newlines()
+    }
+}
+
+/// The registered syntaxes (see [`register_syntaxes`]), empty when none were.
+fn build_extra_set(queue: &Mutex<Vec<SyntaxDefinition>>) -> SyntaxSet {
+    let mut builder = SyntaxSetBuilder::new();
+    let definitions =
+        std::mem::take(&mut *queue.lock().unwrap_or_else(|e| e.into_inner()));
+    for definition in definitions {
+        builder.add(definition);
+    }
+    builder.build()
+}
+
+/// The registered syntax for an editor's syntax name, if any: the last one
+/// registered that lists it among its file extensions.
+fn find_registered<'a>(
+    set: &'a SyntaxSet,
+    name: &str,
+) -> Option<&'a SyntaxReference> {
+    set.syntaxes().iter().rev().find(|syntax| {
+        syntax.file_extensions.iter().any(|e| e.eq_ignore_ascii_case(name))
+    })
+}
 
 /// Syntect's bundled themes, loaded once per process (see [`SYNTAX_SET`]).
 static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
@@ -200,16 +348,16 @@ impl CodeEditor {
         Option<&'static SyntaxReference>,
         Option<&'static syntect::highlighting::Theme>,
     ) {
-        let syntax_set = SYNTAX_SET.get_or_init(|| {
-            #[cfg(feature = "two-face")]
-            {
-                two_face::syntax::extra_newlines()
-            }
-            #[cfg(not(feature = "two-face"))]
-            {
-                SyntaxSet::load_defaults_newlines()
-            }
-        });
+        let bundled = SYNTAX_SET.get_or_init(bundled_syntax_set);
+        let registered =
+            EXTRA_SET.get_or_init(|| build_extra_set(&EXTRA_SYNTAXES));
+        // A syntax is parsed with the set it belongs to.
+        let owner = |syntax: Option<&'static SyntaxReference>| {
+            let is_registered = syntax.is_some_and(|s| {
+                registered.syntaxes().iter().any(|r| std::ptr::eq(r, s))
+            });
+            if is_registered { registered } else { bundled }
+        };
 
         // Pair the token palette with the editor's own theme: a dark-tuned
         // palette on a light background leaves comments and strings unreadable.
@@ -222,7 +370,7 @@ impl CodeEditor {
         if let Some((syntax, theme)) = memo.as_ref().and_then(|resolved| {
             resolved.get(&self.syntax, dark_background, requested_theme)
         }) {
-            return (syntax_set, syntax, theme);
+            return (owner(syntax), syntax, theme);
         }
 
         let theme_set = THEME_SET.get_or_init(ThemeSet::load_defaults);
@@ -238,18 +386,21 @@ impl CodeEditor {
             .or_else(|| theme_set.themes.get(automatic_theme))
             .or_else(|| theme_set.themes.values().next());
 
-        // Normalize common language aliases/extensions used by consumers.
-        let syntax = match self.syntax.as_str() {
-            "python" => syntax_set.find_syntax_by_extension("py"),
-            "rust" => syntax_set.find_syntax_by_extension("rs"),
-            "javascript" => syntax_set.find_syntax_by_extension("js"),
-            "htm" => syntax_set.find_syntax_by_extension("html"),
-            "svg" => syntax_set.find_syntax_by_extension("xml"),
-            "markdown" => syntax_set.find_syntax_by_extension("md"),
-            "text" => Some(syntax_set.find_syntax_plain_text()),
-            _ => syntax_set.find_syntax_by_extension(self.syntax.as_str()),
-        }
-        .or(Some(syntax_set.find_syntax_plain_text()));
+        // Registered syntaxes first, then the bundled ones, normalizing common
+        // language aliases/extensions used by consumers.
+        let syntax_set = bundled;
+        let syntax = find_registered(registered, &self.syntax)
+            .or_else(|| match self.syntax.as_str() {
+                "python" => syntax_set.find_syntax_by_extension("py"),
+                "rust" => syntax_set.find_syntax_by_extension("rs"),
+                "javascript" => syntax_set.find_syntax_by_extension("js"),
+                "htm" => syntax_set.find_syntax_by_extension("html"),
+                "svg" => syntax_set.find_syntax_by_extension("xml"),
+                "markdown" => syntax_set.find_syntax_by_extension("md"),
+                "text" => Some(syntax_set.find_syntax_plain_text()),
+                _ => syntax_set.find_syntax_by_extension(self.syntax.as_str()),
+            })
+            .or(Some(syntax_set.find_syntax_plain_text()));
 
         *memo = Some(ResolvedSyntax::new(
             &self.syntax,
@@ -259,7 +410,7 @@ impl CodeEditor {
             theme,
         ));
 
-        (syntax_set, syntax, theme)
+        (owner(syntax), syntax, theme)
     }
 
     /// Returns the memoized syntax-highlighted spans for a logical line.
@@ -678,5 +829,111 @@ mod tests {
             sequential_color, independent_color,
             "a line inside a block comment must be colored as a comment"
         );
+    }
+
+    const TINY: &str = r#"
+name: Tiny
+file_extensions: [tiny]
+scope: source.tiny
+contexts:
+  main:
+    - match: '\bhello\b'
+      scope: keyword.tiny
+"#;
+
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn registered_syntaxes_are_found_by_extension() {
+        let set = OnceLock::new();
+        let queue = Mutex::new(Vec::new());
+        register_into(&set, &queue, [TINY]).expect("valid");
+        let built = set.get_or_init(|| build_extra_set(&queue));
+        assert!(queue.lock().unwrap().is_empty(), "the queue is consumed");
+
+        let tiny = find_registered(built, "TINY").expect("registered");
+        assert_eq!(tiny.name, "Tiny");
+        assert!(find_registered(built, "rs").is_none());
+
+        let spans = highlight_line_spans(
+            "say hello",
+            tiny,
+            &syntect::highlighting::Theme::default(),
+            built,
+        );
+        let texts: Vec<_> = spans.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(texts.concat(), "say hello");
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn registered_syntaxes_include_each_other_and_the_last_one_wins() {
+        let host = r#"
+name: Host
+file_extensions: [host]
+scope: source.host
+contexts:
+  main:
+    - include: scope:source.tiny
+"#;
+        let newer_tiny = TINY.replace("name: Tiny", "name: Newer Tiny");
+        let set = OnceLock::new();
+        let queue = Mutex::new(Vec::new());
+        register_into(&set, &queue, [TINY, host, newer_tiny.as_str()])
+            .expect("valid");
+        let built = set.get_or_init(|| build_extra_set(&queue));
+        assert_eq!(find_registered(built, "tiny").unwrap().name, "Newer Tiny");
+
+        let host = find_registered(built, "host").unwrap();
+        let mut state = ParseState::new(host);
+        let ops = state.parse_line("hello\n", built).expect("parses");
+        assert!(!ops.is_empty(), "the included grammar colors the word");
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn invalid_definitions_and_late_registration_are_rejected() {
+        let set = OnceLock::new();
+        let queue = Mutex::new(Vec::new());
+        let error = register_into(&set, &queue, [TINY, "name: [unclosed"])
+            .expect_err("invalid");
+        assert!(matches!(
+            error,
+            SyntaxRegistrationError::Parse { index: 1, .. }
+        ));
+        assert!(queue.lock().unwrap().is_empty(), "all or nothing");
+
+        set.get_or_init(|| build_extra_set(&queue));
+        assert_eq!(
+            register_into(&set, &queue, [TINY]),
+            Err(SyntaxRegistrationError::AlreadyBuilt)
+        );
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn an_include_of_a_missing_syntax_does_not_panic() {
+        let dangling = r#"
+name: Dangling
+file_extensions: [dangling]
+scope: source.dangling
+contexts:
+  main:
+    - include: scope:source.rust
+    - match: '\bok\b'
+      scope: keyword.dangling
+"#;
+        let set = OnceLock::new();
+        let queue = Mutex::new(Vec::new());
+        register_into(&set, &queue, [dangling]).expect("valid");
+        let built = set.get_or_init(|| build_extra_set(&queue));
+        let syntax = find_registered(built, "dangling").expect("registered");
+        let mut state = ParseState::new(syntax);
+        let _ = state.parse_line("ok then\n", built);
+    }
+
+    #[test]
+    fn with_nothing_registered_the_extra_set_is_empty() {
+        let queue = Mutex::new(Vec::new());
+        assert!(build_extra_set(&queue).syntaxes().is_empty());
     }
 }

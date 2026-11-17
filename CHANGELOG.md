@@ -31,6 +31,15 @@ Several of these changes port fixes and ideas first made in the
   `diagnostics`. The new `Diagnostic` and `DiagnosticSeverity` types describe LSP
   ranges and their severity; error, warning, information and hint colors come
   from the active theme. Underlines follow visual lines when wrapping is on.
+- feat: `register_syntaxes` adds `.sublime-syntax` definitions to the set every
+  editor highlights with, for languages syntect and `two-face` do not ship. Call it
+  at startup, before the first editor highlights text (the set is built once per
+  process); later calls return `SyntaxRegistrationError::AlreadyBuilt`, and an
+  invalid definition returns `SyntaxRegistrationError::Parse` without registering
+  any. Registered syntaxes are chosen by `file_extensions` and looked up before the
+  bundled ones. They form a set of their own, so building it stays cheap: they
+  include each other by scope, not the bundled ones. With nothing registered,
+  highlighting is exactly as before.
 
 ### Changed
 
