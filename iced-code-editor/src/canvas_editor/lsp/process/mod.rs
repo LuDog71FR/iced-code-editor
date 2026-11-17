@@ -106,6 +106,7 @@ pub(super) fn emit(events: &mpsc::SyncSender<LspEvent>, event: LspEvent) {
 ///         LspEvent::Completion { items } => drop(items),
 ///         LspEvent::Definition { uri, .. } => drop(uri),
 ///         LspEvent::Formatting { edits, .. } => drop(edits),
+///         LspEvent::Diagnostics { diagnostics, .. } => drop(diagnostics),
 ///         LspEvent::Progress { done, .. } => drop(done),
 ///         LspEvent::Log { message, .. } => drop(message),
 ///     }
@@ -140,6 +141,20 @@ pub enum LspEvent {
         ///
         /// [`CodeEditor::apply_lsp_text_edits`]: crate::CodeEditor::apply_lsp_text_edits
         edits: Vec<LspTextChange>,
+    },
+    /// Diagnostics published by the LSP server for one document.
+    ///
+    /// Each notification replaces the previous list for that document; an
+    /// empty list clears it. Pass the list to
+    /// [`CodeEditor::set_diagnostics`] on the editor showing `uri`. Only
+    /// documents opened through this client are reported.
+    ///
+    /// [`CodeEditor::set_diagnostics`]: crate::CodeEditor::set_diagnostics
+    Diagnostics {
+        /// URI of the document the diagnostics belong to.
+        uri: String,
+        /// Diagnostics in the document's own character coordinates.
+        diagnostics: Vec<crate::canvas_editor::lsp::Diagnostic>,
     },
     /// Progress notification from the LSP server.
     Progress {
@@ -351,6 +366,7 @@ impl LspProcessClient {
                             params,
                             &events_reader,
                             &server_key_reader,
+                            &documents_reader,
                         );
                     }
                 }
@@ -403,6 +419,9 @@ impl LspProcessClient {
                         },
                         "formatting": {
                             "dynamicRegistration": false
+                        },
+                        "publishDiagnostics": {
+                            "relatedInformation": false
                         }
                     },
                     "window": {

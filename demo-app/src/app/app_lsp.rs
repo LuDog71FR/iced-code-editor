@@ -229,6 +229,8 @@ impl DemoApp {
     pub(super) fn detach_lsp_for_editor(&mut self, editor_id: EditorId) {
         if let Some(editor) = self.get_editor(editor_id) {
             editor.detach_lsp();
+            // The server that published them no longer tracks this document.
+            editor.set_diagnostics(Vec::new());
         }
         self.set_lsp_server_for_editor(editor_id, None);
     }
@@ -336,6 +338,9 @@ impl DemoApp {
         // If the correct LSP server is already attached, just open a new document
         if self.lsp_server_for_editor(editor_id) == Some(language.server_key) {
             if let Some(editor) = self.get_editor(editor_id) {
+                // The previous document's diagnostics do not apply to the new
+                // one; the server publishes its own after `didOpen`.
+                editor.set_diagnostics(Vec::new());
                 editor.lsp_open_document(LspDocument::new(
                     uri,
                     language.language_id,
@@ -651,6 +656,23 @@ impl DemoApp {
         Task::none()
     }
 
+    /// Passes published diagnostics to every editor whose LSP document is
+    /// `uri`.
+    ///
+    /// Diagnostics for a document no tab shows are ignored: the server keeps
+    /// publishing for documents that were closed in the meantime.
+    fn apply_lsp_diagnostics(
+        &mut self,
+        uri: &str,
+        diagnostics: &[iced_code_editor::Diagnostic],
+    ) {
+        for tab in &mut self.tabs {
+            if tab.editor.lsp_document_uri() == Some(uri) {
+                tab.editor.set_diagnostics(diagnostics.to_vec());
+            }
+        }
+    }
+
     /// Drains and processes pending LSP events from the event channel.
     ///
     /// Handles hover responses and completion items from the LSP server, up to
@@ -717,6 +739,10 @@ impl DemoApp {
                     // Handle formatting edits from LSP server
                     LspEvent::Formatting { uri, edits } => {
                         formatting.push((uri, edits));
+                    }
+                    // Underline the diagnostics in the editor showing `uri`
+                    LspEvent::Diagnostics { uri, diagnostics } => {
+                        self.apply_lsp_diagnostics(&uri, &diagnostics);
                     }
                     // Handle progress notification from LSP server
                     LspEvent::Progress {
@@ -980,6 +1006,65 @@ mod tests {
 
         assert!(!app.lsp_overlay.hover_visible);
         assert!(app.lsp_hover_anchor.is_none());
+    }
+
+    /// An LSP client that ignores every call, to give an editor a document.
+    struct NullLspClient;
+
+    impl iced_code_editor::LspClient for NullLspClient {}
+
+    /// A one-character error diagnostic at the start of line 0.
+    fn error_at_start() -> iced_code_editor::Diagnostic {
+        iced_code_editor::Diagnostic {
+            range: iced_code_editor::LspRange {
+                start: LspPosition { line: 0, character: 0 },
+                end: LspPosition { line: 0, character: 1 },
+            },
+            severity: iced_code_editor::DiagnosticSeverity::Error,
+        }
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_drain_lsp_events_diagnostics_reach_the_matching_editor() {
+        let (mut app, _) = DemoApp::new();
+        let active = app.active_tab_id;
+        let tab = app.tabs.iter_mut().find(|tab| tab.id == active).unwrap();
+        tab.editor.attach_lsp(
+            Box::new(NullLspClient),
+            LspDocument::new("file:///tmp/main.rs", "rust"),
+        );
+        let (tx, rx) = mpsc::channel();
+        app.lsp_events = Some(rx);
+        tx.send(LspEvent::Diagnostics {
+            uri: "file:///tmp/other.rs".to_string(),
+            diagnostics: vec![error_at_start()],
+        })
+        .unwrap();
+        tx.send(LspEvent::Diagnostics {
+            uri: "file:///tmp/main.rs".to_string(),
+            diagnostics: vec![error_at_start()],
+        })
+        .unwrap();
+
+        let _ = app.drain_lsp_events();
+
+        let tab = app.tabs.iter().find(|tab| tab.id == active).unwrap();
+        assert_eq!(tab.editor.diagnostics(), &[error_at_start()]);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_detach_lsp_for_editor_clears_diagnostics() {
+        let (mut app, _) = DemoApp::new();
+        let active = app.active_tab_id;
+        let tab = app.tabs.iter_mut().find(|tab| tab.id == active).unwrap();
+        tab.editor.set_diagnostics(vec![error_at_start()]);
+
+        app.detach_lsp_for_editor(active);
+
+        let tab = app.tabs.iter().find(|tab| tab.id == active).unwrap();
+        assert!(tab.editor.diagnostics().is_empty());
     }
 
     #[test]

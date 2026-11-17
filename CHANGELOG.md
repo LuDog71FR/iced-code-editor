@@ -31,6 +31,14 @@ Several of these changes port fixes and ideas first made in the
   `diagnostics`. The new `Diagnostic` and `DiagnosticSeverity` types describe LSP
   ranges and their severity; error, warning, information and hint colors come
   from the active theme. Underlines follow visual lines when wrapping is on.
+- feat: `LspProcessClient` forwards `textDocument/publishDiagnostics` as the new
+  `LspEvent::Diagnostics { uri, diagnostics }`, with columns converted from
+  UTF-16 to characters, and advertises the `publishDiagnostics` capability.
+  Diagnostics for a document the client has not opened are dropped.
+- feat: `CodeEditor::lsp_document_uri` returns the URI of the document open
+  with the LSP client, to route per-document events to the right editor.
+- feat(demo): the demo app underlines the diagnostics its language servers
+  publish, and clears them when a tab detaches or opens another document.
 - feat: `register_syntaxes` adds `.sublime-syntax` definitions to the set every
   editor highlights with, for languages syntect and `two-face` do not ship. Call it
   at startup, before the first editor highlights text (the set is built once per
@@ -56,6 +64,8 @@ Several of these changes port fixes and ideas first made in the
   (`diagnostic_error_color`, `diagnostic_warning_color`,
   `diagnostic_information_color`, `diagnostic_hint_color`); styles built with
   `theme::from_iced_theme` take them from the iced palette.
+- **Breaking:** `LspEvent` has a new `Diagnostics` variant, so an exhaustive
+  `match` on it needs a new arm.
 
 ### Fixed
 

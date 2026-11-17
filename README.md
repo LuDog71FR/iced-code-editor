@@ -1016,6 +1016,9 @@ overlay.show_hover(text);
 
 // On LspEvent::Completion
 overlay.set_completions(items, cursor_position);
+
+// On LspEvent::Diagnostics (see "Diagnostic underlines" below)
+editor.set_diagnostics(diagnostics);
 ```
 
 #### Formatting the document
@@ -1067,17 +1070,30 @@ assert_eq!(editor.diagnostics().len(), 1);
 editor.set_diagnostics(Vec::new());
 ```
 
-- Columns count characters, not UTF-16 code units: convert positions received
-  from a language server first.
+- Columns count characters, not UTF-16 code units.
 - The list replaces the previous one, and the editor does not move the ranges
   when the text is edited. Send a new list each time the source publishes one.
-- `LspProcessClient` does not forward `textDocument/publishDiagnostics`: the
-  host is responsible for collecting diagnostics and passing them in.
 - Underlines follow wrapped lines. An empty range underlines one character.
 - The colors come from `Style::diagnostic_error_color`,
   `diagnostic_warning_color`, `diagnostic_information_color` and
   `diagnostic_hint_color`. `theme::from_iced_theme` takes them from the danger,
   warning, primary and secondary colors of the iced palette.
+
+With `LspProcessClient`, the server's `textDocument/publishDiagnostics`
+notifications arrive as `LspEvent::Diagnostics`, already converted to character
+columns. Route each one to the editor that has the document open:
+
+```rust
+// On LspEvent::Diagnostics { uri, diagnostics }
+for editor in &mut editors {
+    if editor.lsp_document_uri() == Some(uri.as_str()) {
+        editor.set_diagnostics(diagnostics.clone());
+    }
+}
+```
+
+Only documents opened through the client are reported. An empty list means the
+server cleared the document's diagnostics.
 
 #### Supported servers
 

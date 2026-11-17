@@ -19,10 +19,14 @@ use serde_json::json;
 use super::pending::{LspRequestKind, PendingRequest};
 use super::text_model::DocumentState;
 use super::{LspEvent, LspPosition, LspRange};
-use crate::canvas_editor::lsp::LspTextChange;
+use crate::canvas_editor::lsp::{
+    Diagnostic, DiagnosticSeverity, LspTextChange,
+};
 
 /// JSON-RPC method name for server-push progress notifications.
 const METHOD_PROGRESS: &str = "$/progress";
+/// JSON-RPC method name for server-push diagnostics of one document.
+const METHOD_PUBLISH_DIAGNOSTICS: &str = "textDocument/publishDiagnostics";
 /// JSON-RPC method name sent by the server when it creates a work-done token.
 const METHOD_WORK_DONE_PROGRESS_CREATE: &str = "window/workDoneProgress/create";
 /// Progress `kind` value that signals the end of a work-done sequence.
@@ -312,20 +316,36 @@ pub(super) fn handle_client_response(
     }
 }
 
-/// Handles a server-initiated notification (e.g. `$/progress`).
+/// Handles a server-initiated notification.
 ///
-/// Parses the progress payload and emits a [`LspEvent::Progress`].
-/// Notifications for unknown methods are silently ignored.
+/// `$/progress` emits a [`LspEvent::Progress`] and
+/// `textDocument/publishDiagnostics` a [`LspEvent::Diagnostics`].
+/// Notifications for other methods are silently ignored.
+///
+/// `documents` is the client's mirror of every open document, needed to turn
+/// the UTF-16 columns of diagnostics into character offsets.
 pub(super) fn handle_server_notification(
     method: &str,
     params: &serde_json::Value,
     events: &mpsc::SyncSender<LspEvent>,
     server_key: &str,
+    documents: &Arc<Mutex<HashMap<String, DocumentState>>>,
 ) {
-    if method != METHOD_PROGRESS {
-        return;
+    match method {
+        METHOD_PROGRESS => handle_progress(params, events, server_key),
+        METHOD_PUBLISH_DIAGNOSTICS => {
+            handle_publish_diagnostics(params, events, documents);
+        }
+        _ => {}
     }
+}
 
+/// Parses a `$/progress` payload and emits a [`LspEvent::Progress`].
+fn handle_progress(
+    params: &serde_json::Value,
+    events: &mpsc::SyncSender<LspEvent>,
+    server_key: &str,
+) {
     let Some(token) = params.get("token").and_then(|t| {
         t.as_str()
             .map(String::from)
@@ -360,9 +380,82 @@ pub(super) fn handle_server_notification(
     );
 }
 
+/// Parses a `textDocument/publishDiagnostics` payload and emits a
+/// [`LspEvent::Diagnostics`] in the editor's character coordinates.
+///
+/// Diagnostics for a document the client has not opened are dropped: without
+/// its mirror, UTF-16 columns cannot be converted, and no editor shows that
+/// document anyway. An empty list is still emitted, since it clears the
+/// diagnostics of the document.
+fn handle_publish_diagnostics(
+    params: &serde_json::Value,
+    events: &mpsc::SyncSender<LspEvent>,
+    documents: &Arc<Mutex<HashMap<String, DocumentState>>>,
+) {
+    let Some((uri, diagnostics)) = parse_publish_diagnostics(params) else {
+        return;
+    };
+
+    let docs = documents.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(state) = docs.get(&uri) else { return };
+    let diagnostics = diagnostics
+        .into_iter()
+        .map(|diagnostic| Diagnostic {
+            range: LspRange {
+                start: state.text.to_char_position(diagnostic.range.start),
+                end: state.text.to_char_position(diagnostic.range.end),
+            },
+            severity: diagnostic.severity,
+        })
+        .collect();
+    drop(docs);
+
+    super::emit(events, LspEvent::Diagnostics { uri, diagnostics });
+}
+
 // =============================================================================
 // LSP Response Parsing Functions
 // =============================================================================
+
+/// Parses the `uri` and `diagnostics` of a `publishDiagnostics` payload.
+///
+/// Positions stay in the server's UTF-16 coordinates. An entry without a valid
+/// range is skipped. Returns `None` when the URI or the diagnostics array is
+/// missing.
+fn parse_publish_diagnostics(
+    params: &serde_json::Value,
+) -> Option<(String, Vec<Diagnostic>)> {
+    let uri = params.get("uri")?.as_str()?.to_string();
+    let diagnostics = params
+        .get("diagnostics")?
+        .as_array()?
+        .iter()
+        .filter_map(|diagnostic| {
+            Some(Diagnostic {
+                range: extract_range(diagnostic.get("range")?)?,
+                severity: parse_diagnostic_severity(diagnostic.get("severity")),
+            })
+        })
+        .collect();
+    Some((uri, diagnostics))
+}
+
+/// Maps an LSP `DiagnosticSeverity` number (1 to 4) to a
+/// [`DiagnosticSeverity`].
+///
+/// The specification lets the client choose when the severity is missing;
+/// this client treats a missing or unknown value as an error, so that it is
+/// never hidden.
+fn parse_diagnostic_severity(
+    value: Option<&serde_json::Value>,
+) -> DiagnosticSeverity {
+    match value.and_then(serde_json::Value::as_u64) {
+        Some(2) => DiagnosticSeverity::Warning,
+        Some(3) => DiagnosticSeverity::Information,
+        Some(4) => DiagnosticSeverity::Hint,
+        _ => DiagnosticSeverity::Error,
+    }
+}
 
 /// Parses hover text from an LSP hover response.
 fn parse_hover_text(result: &serde_json::Value) -> Option<String> {
@@ -1179,6 +1272,7 @@ mod tests {
             &params,
             &events_tx,
             "lua-ls",
+            &no_documents(),
         );
 
         match events_rx.try_recv().expect("expected a Progress event") {
@@ -1205,6 +1299,7 @@ mod tests {
             &params,
             &events_tx,
             "rust-analyzer",
+            &no_documents(),
         );
 
         match events_rx.try_recv().expect("expected a Progress event") {
@@ -1222,7 +1317,160 @@ mod tests {
             &params,
             &events_tx,
             "server",
+            &no_documents(),
         );
         assert!(events_rx.try_recv().is_err());
+    }
+
+    // -------------------------------------------------------------------------
+    // textDocument/publishDiagnostics
+    // -------------------------------------------------------------------------
+
+    /// A `publishDiagnostics` payload for `file:///test.rs`.
+    fn diagnostics_params(
+        diagnostics: &serde_json::Value,
+    ) -> serde_json::Value {
+        serde_json::json!({ "uri": "file:///test.rs", "diagnostics": diagnostics })
+    }
+
+    #[test]
+    #[allow(clippy::expect_used, clippy::panic)]
+    fn test_publish_diagnostics_converts_utf16_columns_and_severity() {
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
+        // The rocket is two UTF-16 units but one character, so the server's
+        // columns 3..5 are the editor's columns 2..4.
+        let params = diagnostics_params(&serde_json::json!([
+            {
+                "range": {
+                    "start": { "line": 0, "character": 3 },
+                    "end": { "line": 0, "character": 5 }
+                },
+                "severity": 2,
+                "message": "unused"
+            },
+            {
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 0, "character": 2 }
+                },
+                "message": "no severity"
+            }
+        ]));
+
+        handle_server_notification(
+            METHOD_PUBLISH_DIAGNOSTICS,
+            &params,
+            &events_tx,
+            "server",
+            &documents_with("🚀abc"),
+        );
+
+        match events_rx.try_recv().expect("expected a Diagnostics event") {
+            LspEvent::Diagnostics { uri, diagnostics } => {
+                assert_eq!(uri, "file:///test.rs");
+                assert_eq!(diagnostics.len(), 2);
+                assert_eq!(
+                    diagnostics[0].range,
+                    LspRange {
+                        start: LspPosition { line: 0, character: 2 },
+                        end: LspPosition { line: 0, character: 4 },
+                    }
+                );
+                assert_eq!(
+                    diagnostics[0].severity,
+                    DiagnosticSeverity::Warning
+                );
+                assert_eq!(
+                    diagnostics[1].range.end,
+                    LspPosition { line: 0, character: 1 }
+                );
+                assert_eq!(diagnostics[1].severity, DiagnosticSeverity::Error);
+            }
+            _ => panic!("expected LspEvent::Diagnostics"),
+        }
+    }
+
+    #[test]
+    #[allow(clippy::expect_used, clippy::panic)]
+    fn test_publish_diagnostics_empty_list_is_emitted() {
+        // An empty list is how a server clears a document's diagnostics.
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
+        handle_server_notification(
+            METHOD_PUBLISH_DIAGNOSTICS,
+            &diagnostics_params(&serde_json::json!([])),
+            &events_tx,
+            "server",
+            &documents_with("abc"),
+        );
+
+        match events_rx.try_recv().expect("expected a Diagnostics event") {
+            LspEvent::Diagnostics { diagnostics, .. } => {
+                assert!(diagnostics.is_empty());
+            }
+            _ => panic!("expected LspEvent::Diagnostics"),
+        }
+    }
+
+    #[test]
+    fn test_publish_diagnostics_without_a_mirror_emits_nothing() {
+        let (events_tx, events_rx) = mpsc::sync_channel::<LspEvent>(16);
+        handle_server_notification(
+            METHOD_PUBLISH_DIAGNOSTICS,
+            &diagnostics_params(&serde_json::json!([])),
+            &events_tx,
+            "server",
+            &no_documents(),
+        );
+        assert!(events_rx.try_recv().is_err());
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_parse_publish_diagnostics_skips_entries_without_a_range() {
+        let params = diagnostics_params(&serde_json::json!([
+            { "message": "no range", "severity": 1 },
+            {
+                "range": {
+                    "start": { "line": 1, "character": 0 },
+                    "end": { "line": 1, "character": 1 }
+                },
+                "severity": 4
+            }
+        ]));
+        let (_, diagnostics) =
+            parse_publish_diagnostics(&params).expect("valid payload");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Hint);
+    }
+
+    #[test]
+    fn test_parse_publish_diagnostics_requires_uri_and_array() {
+        assert!(
+            parse_publish_diagnostics(
+                &serde_json::json!({ "diagnostics": [] })
+            )
+            .is_none()
+        );
+        assert!(
+            parse_publish_diagnostics(
+                &serde_json::json!({ "uri": "file:///a.rs" })
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn test_parse_diagnostic_severity_maps_lsp_numbers() {
+        let severity =
+            |value: serde_json::Value| parse_diagnostic_severity(Some(&value));
+        assert_eq!(severity(serde_json::json!(1)), DiagnosticSeverity::Error);
+        assert_eq!(severity(serde_json::json!(2)), DiagnosticSeverity::Warning);
+        assert_eq!(
+            severity(serde_json::json!(3)),
+            DiagnosticSeverity::Information
+        );
+        assert_eq!(severity(serde_json::json!(4)), DiagnosticSeverity::Hint);
+        assert_eq!(severity(serde_json::json!(9)), DiagnosticSeverity::Error);
+        assert_eq!(parse_diagnostic_severity(None), DiagnosticSeverity::Error);
     }
 }

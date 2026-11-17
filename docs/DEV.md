@@ -1540,8 +1540,10 @@ Visual selection, as for a drag.
 `CodeEditor::set_diagnostics` replaces the list of `Diagnostic` values (an
 `LspRange` plus a `DiagnosticSeverity`). An identical list is ignored; any other
 list clears `overlay_cache`. The types live in `canvas_editor/lsp/mod.rs` but do
-not depend on the `lsp-process` feature, and the process client does not handle
-`textDocument/publishDiagnostics`: the host supplies the list.
+not depend on the `lsp-process` feature: any source can supply the list. With
+`LspProcessClient`, it comes from `LspEvent::Diagnostics` (see
+[Layer 2](#layer-2--lspprocessclient-canvas_editorlspprocessmodrs)); the host
+routes it to the editor whose `lsp_document_uri()` matches.
 
 **Coordinates.** Ranges are in logical lines and *character* columns, with an
 exclusive end, like the rest of the editor. They are not UTF-16 offsets. The
@@ -1954,6 +1956,7 @@ pub enum LspEvent {
     Completion { items: Vec<String> },
     Definition { uri: String, range: LspRange },
     Formatting { uri: String, edits: Vec<LspTextChange> },
+    Diagnostics { uri: String, diagnostics: Vec<Diagnostic> },
     Progress { token, server_key, title, message, percentage, done },
     Log { server_key, message },
 }
@@ -1962,6 +1965,8 @@ pub enum LspEvent {
 Server configurations (command, arguments, language IDs) live in `lsp/process/config.rs` and are keyed by a short string such as `"lua-language-server"` or `"rust-analyzer"`.
 
 **UTF-16 conversion:** LSP uses UTF-16 character offsets while the editor works in UTF-8. `TextModel` inside `LspProcessClient` mirrors the document content and converts positions before every request (`to_utf16_position`), and back again for replies whose payload is in document coordinates (`to_char_position`, used by the formatting response). A pending request therefore records the document URI alongside its kind: a JSON-RPC response carries only the request id, so the mirror to translate against can only be found through that.
+
+**Server notifications:** `handle_server_notification` (`process/protocol.rs`) dispatches `$/progress` to `LspEvent::Progress` and `textDocument/publishDiagnostics` to `LspEvent::Diagnostics`. Diagnostic ranges are converted with the mirror of the document named by the notification's `uri`; a notification for a document the client has not opened is dropped, because its columns cannot be converted. A missing or unknown severity maps to `Error`, so a diagnostic is never hidden. An empty list is still emitted: it is how a server clears a document. The `initialize` request advertises `textDocument.publishDiagnostics`.
 
 ### Layer 3 — `LspOverlayState` + `view_lsp_overlay` (`canvas_editor/lsp/process/overlay.rs`)
 
@@ -2045,6 +2050,13 @@ User saves file   →  App calls editor.lsp_request_formatting()
                   →  App writes the formatted file to disk
                   (a server that does not answer in time is given up on,
                    and the file is written unformatted)
+
+Server analyses  →  publishDiagnostics notification
+                  →  LspProcessClient converts UTF-16 columns with the mirror
+                  →  LspEvent::Diagnostics { uri, diagnostics }
+                  →  App finds the tab whose editor.lsp_document_uri() == uri
+                  →  editor.set_diagnostics(diagnostics)
+                  →  overlay layer draws the wavy underlines
 ```
 
 ## Performance Considerations

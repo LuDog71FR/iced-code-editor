@@ -735,6 +735,23 @@ impl CodeEditor {
         self.lsp_enabled
     }
 
+    /// URI of the document this editor has open with its LSP client.
+    ///
+    /// `None` until a document is attached or opened. Hosts use it to route
+    /// per-document server events, such as diagnostics, to the right editor.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert_eq!(editor.lsp_document_uri(), None);
+    /// ```
+    pub fn lsp_document_uri(&self) -> Option<&str> {
+        self.lsp_document.as_ref().map(|document| document.uri.as_str())
+    }
+
     /// Initiates a "Go to Definition" request for the symbol at the current cursor position.
     ///
     /// This method converts the current cursor coordinates into an LSP-compatible position
@@ -1032,6 +1049,23 @@ mod tests {
         assert_eq!(document.version, 1);
         assert_eq!(text, "hello");
         assert_eq!(calls.borrow().as_slice(), ["did_open"]);
+    }
+
+    #[test]
+    fn test_lsp_document_uri_follows_attach_and_detach() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let client = RecordingLspClient { calls: Rc::clone(&calls) };
+        let mut editor = CodeEditor::new("hello", "rs");
+        assert_eq!(editor.lsp_document_uri(), None);
+
+        editor.attach_lsp(
+            Box::new(client),
+            lsp::LspDocument::new("file:///test.rs", "rust"),
+        );
+        assert_eq!(editor.lsp_document_uri(), Some("file:///test.rs"));
+
+        editor.detach_lsp();
+        assert_eq!(editor.lsp_document_uri(), None);
     }
 
     #[test]
