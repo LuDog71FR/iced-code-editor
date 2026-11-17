@@ -33,6 +33,8 @@
    - [Cursor Blinking](#cursor-blinking)
    - [Focus Management](#focus-management)
    - [Selection Rendering](#selection-rendering)
+   - [Diagnostic Underlines](#diagnostic-underlines)
+   - [Scrollbars](#scrollbars)
    - [Scroll-to-Cursor](#scroll-to-cursor)
    - [Internationalization (i18n)](#internationalization-i18n)
    - [CJK and Asian Character Support](#cjk-and-asian-character-support)
@@ -42,6 +44,7 @@
    - [Layer 2 — `LspProcessClient` (`canvas_editor/lsp/process/mod.rs`)](#layer-2--lspprocessclient-canvas_editorlspprocessmodrs)
    - [Layer 3 — `LspOverlayState` + `view_lsp_overlay` (`canvas_editor/lsp/process/overlay.rs`)](#layer-3--lspoverlaystate--view_lsp_overlay-canvas_editorlspprocessoverlayrs)
    - [Applying server edits (`canvas_editor/lsp/edits.rs`)](#applying-server-edits-canvas_editorlspeditsrs)
+   - [Document synchronization (`canvas_editor/lsp/sync.rs`)](#document-synchronization-canvas_editorlspsyncrs)
    - [Event flow](#event-flow)
 6. [Performance Considerations](#performance-considerations)
    - [Canvas Caching](#1-canvas-caching)
@@ -112,6 +115,7 @@ iced-code-editor/
     ├── config.rs              # Builder-style set_*/with_*/getter configuration methods
     ├── bool_options.rs        # Macro generating the boolean options' getters/builders
     ├── focus.rs               # Editor focus management
+    ├── diagnostics.rs         # set_diagnostics/diagnostics + range-to-visual-line clipping
     ├── bench_support.rs       # Criterion benchmark harness (feature: bench)
     ├── *_tests.rs             # Cross-module behavior tests (indent, wrap,
     │                          #   option, sticky, Unicode rendering)
@@ -154,10 +158,10 @@ iced-code-editor/
     │   ├── highlighting.rs      # Syntax resolution, per-line highlight cache, palettes
     │   ├── token_colors.rs      # Scope-based TokenColors overrides
     │   ├── gutter.rs            # Line numbers, wrap indicators, fold chevrons
-    │   ├── overlays.rs          # Selection/cursor/search highlight drawing
+    │   ├── overlays.rs          # Selection/cursor/search highlight, diagnostic underline drawing
     │   ├── wrapping.rs          # Line wrapping (logical <-> visual lines)
     │   ├── search_focus_tests.rs # Search toolbar focus/layout tests
-    │   └── view.rs              # Iced UI view construction
+    │   └── view.rs              # Iced UI view construction, pill scrollbar styling
     ├── features/                # Optional editor features
     │   ├── mod.rs
     │   ├── actions.rs            # SharedAction, ActionContext, shortcut hint strings
@@ -227,6 +231,7 @@ pub struct CodeEditor {
     bracket_pair_colorization_enabled: bool, // Rainbow-bracket depth coloring
     indent_style: IndentStyle,           // Spaces(n) or Tab
     search_state: search::SearchState,   // Search/replace state
+    diagnostics: Vec<lsp::Diagnostic>,   // Ranges drawn with a wavy underline
     lsp_client: Option<Box<dyn LspClient>>, // Optional LSP connection
     highlight_cache: RefCell<Option<HighlightCache>>, // Sequential span cache
     bracket_depth_cache: RefCell<BracketDepthCache>, // Sequential nesting-depth cache
@@ -334,7 +339,11 @@ The `from_iced_theme()` function automatically extracts colors from any Iced the
 - **Gutter**: Uses `palette.background.weak` for subtle distinction
 - **Line Numbers**: Intelligently dimmed/blended based on theme darkness
 - **Current Line**: Subtle highlight using `palette.primary.weak` with transparency
-- **Scrollbar**: Uses `palette.secondary.weak` for visibility
+- **Scrollbar**: Uses `palette.secondary.weak` for visibility (see
+  [Scrollbars](#scrollbars) for the opacity rules)
+- **Diagnostics**: `palette.danger.base` (error), `palette.warning.base`
+  (warning), `palette.primary.base` (information), `palette.secondary.base`
+  (hint)
 
 **Color Helpers:**
 
@@ -485,8 +494,9 @@ changes do not invalidate the expensive text geometry:
   selection stays smooth. Cleared only when the buffer, syntax, theme, or layout
   (wrap/fold) changes.
 - **`overlay_cache`** — cursor and current-line highlight, selection rectangles,
-  search-match highlights and IME preedit decorations. Cleared on every cursor
-  blink, selection drag and search update.
+  search-match highlights, diagnostic underlines and IME preedit decorations.
+  Cleared on every cursor blink, selection drag, search update and
+  `set_diagnostics` call that changes the list.
 
 ```rust
 self.content_cache.clear();  // buffer / layout changed
@@ -602,6 +612,24 @@ stack: a key scope anywhere in the stack (`meta.mapping.key`,
 `constant.numeric`, `constant.language` and `punctuation`. When `TokenColors` is
 empty no scope bookkeeping runs at all. Overrides are used as given: they skip
 the contrast check, which is the host's choice.
+
+**Registered syntaxes.** `register_syntaxes` (`render/highlighting.rs`) adds
+`.sublime-syntax` definitions for languages that syntect and `two-face` do not
+ship. Definitions are parsed at once (an invalid one returns
+`SyntaxRegistrationError::Parse` and none is kept) and queued in
+`EXTRA_SYNTAXES`. The first editor that highlights builds two process-wide
+sets, each once: `SYNTAX_SET` (the bundled grammars) and `EXTRA_SET` (the
+registered ones). A call after that returns
+`SyntaxRegistrationError::AlreadyBuilt`.
+
+The registered syntaxes form a set of their own on purpose. Adding them to the
+bundled set with `SyntaxSet::into_builder` re-links every bundled grammar: about
+400 ms in release, against about 20 ms to load the bundled set alone. The
+consequence: a registered syntax can include another registered syntax by
+scope, but not a bundled one. Resolution looks up `EXTRA_SET` by file extension
+first, so a registered syntax also replaces a bundled one that claims the same
+extension. A syntax is always parsed with the set that owns it. With nothing
+registered, highlighting is the same as before.
 
 `CodeEditor::syntax` returns the identifier the host set; `syntax_name` returns
 the grammar it resolved to, including the `"Plain Text"` fallback. Status bars
@@ -1504,6 +1532,53 @@ pub fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
 extra cursors and starts a drag. In Vim mode the mouse release turns it into a
 Visual selection, as for a drag.
 
+### Diagnostic Underlines
+
+**Location:** `canvas_editor/diagnostics.rs`, `render/overlays.rs`
+(`draw_diagnostics`)
+
+`CodeEditor::set_diagnostics` replaces the list of `Diagnostic` values (an
+`LspRange` plus a `DiagnosticSeverity`). An identical list is ignored; any other
+list clears `overlay_cache`. The types live in `canvas_editor/lsp/mod.rs` but do
+not depend on the `lsp-process` feature, and the process client does not handle
+`textDocument/publishDiagnostics`: the host supplies the list.
+
+**Coordinates.** Ranges are in logical lines and *character* columns, with an
+exclusive end, like the rest of the editor. They are not UTF-16 offsets. The
+editor does not shift them when the text is edited; the host sends a new list.
+
+**Rendering.** `draw_diagnostics` runs in the overlay layer, for the visible
+visual lines only. `diagnostic_segment` clips a range to one visual line:
+
+- a line inside a multi-line range is underlined from its `start_col` to its
+  `end_col`, so the underline follows wrapping;
+- a reversed range (start after end) draws nothing;
+- an empty range underlines the one character at its position, or the start of
+  an empty line.
+
+The x position and width come from `calculate_segment_geometry`, the helper
+that selection rectangles also use, so CJK wide characters are measured the
+same way. The color comes from the four `Style::diagnostic_*_color` fields.
+
+### Scrollbars
+
+**Location:** `render/view.rs` (`canvas_scrollbar`, `scroller_alpha`,
+`canvas_scrollbar_style`)
+
+Both canvas scrollbars are an 8 px rail (`SCROLLBAR_WIDTH`) with a 6 px pill
+scroller (`SCROLLER_WIDTH`), 2 px from the editor edge (`SCROLLBAR_MARGIN`).
+The scroller color is `Style::scroller_color`; `scroller_alpha` scales its alpha
+from the `scrollable::Status`:
+
+| Status | Alpha factor |
+| --- | --- |
+| `Active` (pointer away from the editor) | 0.6 |
+| `Hovered` over the editor | 1.0 |
+| `Hovered` over this scrollbar, or `Dragged` | 1 / 0.6, clamped to opaque |
+
+The corner radius is larger than the scroller width; the renderer caps it at
+half the width, which gives the pill shape.
+
 ### Scroll-to-Cursor
 
 **Auto-scrolling:** Cursor always stays visible
@@ -1921,6 +1996,29 @@ The batch becomes one `CompositeCommand` (a `DeleteRangeCommand` plus an `Insert
 - positions are clamped onto the buffer, with a line past the last one folding onto the *end* of the last line — the shape a whole-document format reply uses;
 - the cursor keeps its `(line, column)`, clamped, and any selection is dropped;
 - an **overlapping** batch is refused outright (returns `false`, buffer untouched): LSP forbids it, and applying one would silently corrupt the text.
+
+### Document synchronization (`canvas_editor/lsp/sync.rs`)
+
+Changes are queued in `lsp_pending_changes` and flushed to `did_change` by
+`lsp_flush_pending_changes`. Two paths fill the queue:
+
+- `enqueue_incremental_lsp_change` sends a bounded line-range replacement
+  captured before a normal editor command (typing, Enter, ...). To stay
+  O(edit size), it does not rewrite the shadow copy `lsp_shadow_text`; it marks
+  the shadow stale (`lsp_shadow_is_current = false`).
+- `enqueue_lsp_change` serializes the buffer. With a current shadow, it sends
+  the diff from `compute_text_change`. With a stale shadow (for example
+  `apply_lsp_text_edits` right after typing), it sends one change that replaces
+  the whole document. That range ends at the *synced extent*:
+  `lsp_synced_line_count` and `lsp_synced_last_line_len`, updated by
+  `update_lsp_synced_extent` after every queued change.
+
+The extent must describe the document the server holds, which is
+`TextBuffer::to_string()`. When the buffer has a trailing newline, that text
+has one more, empty line after the buffer's last line. The extent then ends at
+that line (`line_count + 1`, length 0). If it stopped at the buffer's last line,
+the old final newline would survive after the new text, and the server's copy
+would gain one empty line with every full replacement.
 
 ### Event flow
 

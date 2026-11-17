@@ -6,6 +6,29 @@ use crate::canvas_editor::render::wrapping::VisualLine;
 
 impl CodeEditor {
     /// Replaces the diagnostic ranges underlined by the editor.
+    ///
+    /// Columns count characters, not UTF-16 code units, and the end is
+    /// exclusive. The ranges are not moved when the text is edited: pass a new
+    /// list whenever the diagnostics change. An empty list clears them.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::{
+    ///     CodeEditor, Diagnostic, DiagnosticSeverity, LspPosition, LspRange,
+    /// };
+    ///
+    /// let mut editor = CodeEditor::new("let answer = 42;", "rs");
+    /// let diagnostic = Diagnostic {
+    ///     range: LspRange {
+    ///         start: LspPosition { line: 0, character: 4 },
+    ///         end: LspPosition { line: 0, character: 10 },
+    ///     },
+    ///     severity: DiagnosticSeverity::Warning,
+    /// };
+    /// editor.set_diagnostics(vec![diagnostic]);
+    /// assert_eq!(editor.diagnostics(), &[diagnostic]);
+    /// ```
     pub fn set_diagnostics(&mut self, diagnostics: Vec<Diagnostic>) {
         if self.diagnostics == diagnostics {
             return;
@@ -15,6 +38,15 @@ impl CodeEditor {
     }
 
     /// The diagnostic ranges currently underlined by the editor.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced_code_editor::CodeEditor;
+    ///
+    /// let editor = CodeEditor::new("fn main() {}", "rs");
+    /// assert!(editor.diagnostics().is_empty());
+    /// ```
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
     }

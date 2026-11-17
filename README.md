@@ -29,7 +29,7 @@ Screenshot of the demo application:
 - **Text selection** via mouse drag, Shift+Click and keyboard shortcuts
 - **Clipboard operations** (copy, paste)
 - **Undo/Redo** with smart command grouping and configurable history
-- **Custom scrollbars** with themed styling
+- **Custom scrollbars** — thin, themed pill scrollers that stay faint until the pointer comes near
 - **Focus management** for multiple editors — a click outside an editor releases its keyboard focus
 - **Native Iced theme support** - Automatically adapts to all 23+ built-in Iced themes
 - **Line wrapping** to split long lines
@@ -1042,6 +1042,43 @@ have been applied. Give that wait a deadline: a server that never answers must
 not be able to swallow the save. The demo app does this with a two-second
 timeout, after which it writes the file unformatted.
 
+#### Diagnostic underlines
+
+The editor draws a wavy underline under each diagnostic range, colored by
+severity. The types are always available: the `lsp-process` feature is not
+required, so diagnostics can come from any source (a compiler, a linter, a
+server of your own).
+
+```rust
+use iced_code_editor::{Diagnostic, DiagnosticSeverity, LspPosition, LspRange};
+
+editor.set_diagnostics(vec![Diagnostic {
+    // Zero-based line, character columns; the end is exclusive.
+    range: LspRange {
+        start: LspPosition { line: 0, character: 4 },
+        end: LspPosition { line: 0, character: 8 },
+    },
+    severity: DiagnosticSeverity::Error,
+}]);
+
+assert_eq!(editor.diagnostics().len(), 1);
+
+// Clear them
+editor.set_diagnostics(Vec::new());
+```
+
+- Columns count characters, not UTF-16 code units: convert positions received
+  from a language server first.
+- The list replaces the previous one, and the editor does not move the ranges
+  when the text is edited. Send a new list each time the source publishes one.
+- `LspProcessClient` does not forward `textDocument/publishDiagnostics`: the
+  host is responsible for collecting diagnostics and passing them in.
+- Underlines follow wrapped lines. An empty range underlines one character.
+- The colors come from `Style::diagnostic_error_color`,
+  `diagnostic_warning_color`, `diagnostic_information_color` and
+  `diagnostic_hint_color`. `theme::from_iced_theme` takes them from the danger,
+  warning, primary and secondary colors of the iced palette.
+
 #### Supported servers
 
 Out of the box, the following servers are supported (the binary must be on `$PATH`):
@@ -1082,6 +1119,7 @@ Each theme automatically provides:
 - Appropriate text selection colors
 - Themed cursor appearance
 - Custom scrollbar styling
+- Diagnostic underline colors per severity
 - Subtle current line highlighting
 
 The editor intelligently adapts colors from the Iced theme palette for optimal code readability.

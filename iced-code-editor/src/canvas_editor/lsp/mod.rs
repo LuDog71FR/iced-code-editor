@@ -108,6 +108,18 @@ pub struct LspRange {
 }
 
 /// Severity of a diagnostic underline.
+///
+/// It selects the underline color among the `Style::diagnostic_*_color`
+/// fields.
+///
+/// # Example
+///
+/// ```
+/// use iced_code_editor::DiagnosticSeverity;
+///
+/// let severity = DiagnosticSeverity::Hint;
+/// assert_ne!(severity, DiagnosticSeverity::Error);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSeverity {
     /// An error that usually prevents the code from compiling or running.
@@ -121,6 +133,24 @@ pub enum DiagnosticSeverity {
 }
 
 /// A diagnostic range to underline in the editor.
+///
+/// Passed to `CodeEditor::set_diagnostics`. The range uses logical lines and
+/// character columns (not UTF-16 offsets).
+///
+/// # Example
+///
+/// ```
+/// use iced_code_editor::{Diagnostic, DiagnosticSeverity, LspPosition, LspRange};
+///
+/// let diagnostic = Diagnostic {
+///     range: LspRange {
+///         start: LspPosition { line: 2, character: 0 },
+///         end: LspPosition { line: 2, character: 5 },
+///     },
+///     severity: DiagnosticSeverity::Error,
+/// };
+/// assert_eq!(diagnostic.range.end.character, 5);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Diagnostic {
     /// Range to underline, with an inclusive start and exclusive end.
