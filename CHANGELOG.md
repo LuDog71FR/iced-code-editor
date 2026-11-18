@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.7.1] - 2026-11-18
+
 ### Added
 
 - feat: virtual text, such as LSP inlay hints, with `CodeEditor::set_virtual_text`
