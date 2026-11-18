@@ -13,8 +13,9 @@ use super::cursor_set;
 use crate::buffer::TextBuffer;
 use crate::canvas_editor::features::vim::VimMotion;
 use crate::canvas_editor::render::wrapping::{VisualLine, WrappingCalculator};
+use crate::canvas_editor::virtual_text::width_between;
 use crate::canvas_editor::{
-    ArrowDirection, CodeEditor, Message, measure_char_width, measure_text_width,
+    ArrowDirection, CodeEditor, Message, measure_char_width,
 };
 /// Maps a cursor's column onto the visual row it is moving to.
 ///
@@ -500,6 +501,7 @@ impl CodeEditor {
 
         let mut current_width = 0.0;
         let mut col_offset = 0;
+        let virtual_text = self.virtual_text_widths(visual_line.logical_line);
 
         // Iterate the visual slice directly to avoid allocating a temporary String.
         for c in line_content
@@ -507,6 +509,13 @@ impl CodeEditor {
             .skip(visual_line.start_col)
             .take(visual_line.end_col - visual_line.start_col)
         {
+            // Virtual text before this character: both of its sides are the
+            // same column, so a click on it puts the cursor there.
+            let col = visual_line.start_col + col_offset;
+            current_width += width_between(&virtual_text, col, col, true);
+            if current_width > x_in_text {
+                break;
+            }
             let char_width =
                 measure_char_width(c, self.full_char_width, self.char_width);
 
@@ -661,20 +670,7 @@ impl CodeEditor {
         let h_task = if !self.wrap_enabled {
             // Compute cursor content-space X position
             let cursor_content_x = if let Some(visual_idx) = cursor_visual {
-                let vl = &visual_lines[visual_idx];
-                let line_content = self.buffer.line(vl.logical_line);
-                let prefix: String = line_content
-                    .chars()
-                    .skip(vl.start_col)
-                    .take(pos.1.saturating_sub(vl.start_col))
-                    .collect();
-                self.gutter_width()
-                    + 5.0
-                    + measure_text_width(
-                        &prefix,
-                        self.full_char_width,
-                        self.char_width,
-                    )
+                self.caret_content_x(&visual_lines[visual_idx], pos.1)
             } else {
                 self.gutter_width() + 5.0
             };
@@ -808,21 +804,7 @@ impl CodeEditor {
         let visual_lines = self.visual_lines_cached(self.viewport_width);
         let visual_index =
             WrappingCalculator::logical_to_visual(&visual_lines, line, col)?;
-        let visual_line = &visual_lines[visual_index];
-        let line_content = self.buffer.line(visual_line.logical_line);
-        let prefix_len = col.saturating_sub(visual_line.start_col);
-        let prefix_text: String = line_content
-            .chars()
-            .skip(visual_line.start_col)
-            .take(prefix_len)
-            .collect();
-        let x = self.gutter_width()
-            + 5.0
-            + measure_text_width(
-                &prefix_text,
-                self.full_char_width,
-                self.char_width,
-            );
+        let x = self.caret_content_x(&visual_lines[visual_index], col);
         let y = visual_index as f32 * self.line_height;
         Some(iced::Point::new(x, y))
     }

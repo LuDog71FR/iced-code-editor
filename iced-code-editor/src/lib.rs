@@ -261,7 +261,7 @@ pub use canvas_editor::lsp::{
 };
 pub use canvas_editor::{
     ArrowDirection, CodeEditor, CommandHistory, ContextMenuEntry,
-    ContextMenuItem, IndentStyle, Message, VimMode,
+    ContextMenuItem, IndentStyle, Message, VimMode, VirtualText,
 };
 pub use canvas_editor::{SyntaxRegistrationError, register_syntaxes};
 pub use i18n::{Language, Translations};

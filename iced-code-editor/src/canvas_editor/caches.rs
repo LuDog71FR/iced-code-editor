@@ -9,9 +9,9 @@ use syntect::highlighting::{HighlightState, Theme};
 use syntect::parsing::{ParseState, SyntaxReference};
 
 use crate::buffer::TextBuffer;
+use crate::canvas_editor::CodeEditor;
 use crate::canvas_editor::features::bracket_match;
 use crate::canvas_editor::render::wrapping;
-use crate::canvas_editor::{CodeEditor, measure_text_width};
 
 /// Memoized outcome of resolving an editor's syntax identifier and theme to a
 /// syntect grammar and token palette.
@@ -99,6 +99,7 @@ pub(crate) struct VisualLinesKey {
     fold_revision: u64,
     full_char_width_bits: u32,
     char_width_bits: u32,
+    virtual_text_revision: u64,
 }
 
 pub(crate) struct VisualLinesCache {
@@ -321,13 +322,7 @@ impl CodeEditor {
             .is_none_or(|existing| existing.revision != self.buffer_revision)
         {
             let line_widths: Vec<f32> = (0..self.buffer.line_count())
-                .map(|line| {
-                    measure_text_width(
-                        self.buffer.line(line),
-                        self.full_char_width,
-                        self.char_width,
-                    )
-                })
+                .map(|line| self.line_display_width(line))
                 .collect();
             let mut width_counts = BTreeMap::new();
             for width in &line_widths {
@@ -379,6 +374,7 @@ impl CodeEditor {
             fold_revision: self.fold_revision,
             full_char_width_bits: self.full_char_width.to_bits(),
             char_width_bits: self.char_width.to_bits(),
+            virtual_text_revision: self.virtual_text.revision,
         };
 
         let mut cache = self.visual_lines_cache.borrow_mut();
@@ -389,12 +385,7 @@ impl CodeEditor {
         }
 
         let hidden = self.hidden_lines_set();
-        let wrapping_calc = wrapping::WrappingCalculator::new(
-            self.wrap_enabled,
-            self.wrap_column,
-            self.full_char_width,
-            self.char_width,
-        );
+        let wrapping_calc = self.wrapping_calculator();
         let visual_lines = wrapping_calc.calculate_visual_lines(
             &self.buffer,
             viewport_width,
@@ -470,12 +461,7 @@ impl CodeEditor {
             .visual_lines
             .partition_point(|visual| visual.logical_line < old_end_line);
 
-        let wrapping_calc = wrapping::WrappingCalculator::new(
-            self.wrap_enabled,
-            self.wrap_column,
-            self.full_char_width,
-            self.char_width,
-        );
+        let wrapping_calc = self.wrapping_calculator();
         let changed_visual_lines = wrapping_calc.calculate_visual_lines_range(
             &self.buffer,
             f32::from_bits(cache.key.viewport_width_bits),
@@ -555,13 +541,7 @@ impl CodeEditor {
         };
         let old_widths = cache.line_widths[start_line..old_end_line].to_vec();
         let new_widths: Vec<f32> = (start_line..new_end_line)
-            .map(|line| {
-                measure_text_width(
-                    self.buffer.line(line),
-                    self.full_char_width,
-                    self.char_width,
-                )
-            })
+            .map(|line| self.line_display_width(line))
             .collect();
 
         for width in old_widths {

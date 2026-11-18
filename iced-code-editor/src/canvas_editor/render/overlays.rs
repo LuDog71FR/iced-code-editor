@@ -75,6 +75,7 @@ impl CodeEditor {
             ctx.gutter_width + 5.0,
             ctx.full_char_width,
             ctx.char_width,
+            &self.virtual_text_widths(vl.logical_line),
         );
         let x_start = x_start - ctx.horizontal_scroll_offset;
         frame.fill_rectangle(
@@ -382,6 +383,7 @@ impl CodeEditor {
                     ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset,
                     ctx.full_char_width,
                     ctx.char_width,
+                    &self.virtual_text_widths(visual_line.logical_line),
                 );
                 let width = width.max(ctx.char_width);
                 let baseline =
@@ -457,6 +459,7 @@ impl CodeEditor {
                     ctx.gutter_width + 5.0,
                     ctx.full_char_width,
                     ctx.char_width,
+                    &self.virtual_text_widths(vl.logical_line),
                 );
                 let cursor_x = cursor_x_content - ctx.horizontal_scroll_offset;
                 let cursor_y = cursor_visual as f32 * ctx.line_height;
@@ -638,6 +641,7 @@ impl CodeEditor {
                 ctx.gutter_width + 5.0,
                 ctx.full_char_width,
                 ctx.char_width,
+                &self.virtual_text_widths(vl.logical_line),
             );
             let cursor_x = cursor_x_content - ctx.horizontal_scroll_offset;
             let cursor_y = cursor_visual as f32 * ctx.line_height;
@@ -712,6 +716,7 @@ impl CodeEditor {
                                 - ctx.horizontal_scroll_offset,
                             ctx.full_char_width,
                             ctx.char_width,
+                            &self.virtual_text_widths(line),
                         );
 
                         let y = idx as f32 * ctx.line_height + ctx.line_height; // Underline at bottom
