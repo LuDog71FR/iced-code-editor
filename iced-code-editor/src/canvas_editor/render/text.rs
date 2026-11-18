@@ -17,7 +17,7 @@ use crate::canvas_editor::IndentStyle;
 use crate::canvas_editor::features::{
     bracket_match, color_preview, indent_guides,
 };
-use crate::canvas_editor::virtual_text::{VirtualText, width_between};
+use crate::canvas_editor::virtual_text::{LineRun, VirtualText, width_between};
 use crate::canvas_editor::{
     CodeEditor, TAB_WIDTH, measure_char_width, measure_text_width,
 };
@@ -294,10 +294,10 @@ impl CodeEditor {
     ) {
         let line = visual_line.logical_line;
         let line_content = self.buffer.line(line);
-        let line_len = self.buffer.line_len(line);
-        // The colored pieces of the segment, in column order.
-        let mut pieces: Vec<(usize, usize, iced::Color)> = Vec::new();
-        if let (Some(syntax), Some(syntax_theme)) = (syntax_ref, syntax_theme) {
+        let cols = (visual_line.start_col, visual_line.end_col);
+        let runs = if let (Some(syntax), Some(syntax_theme)) =
+            (syntax_ref, syntax_theme)
+        {
             // Reuse the memoized full-line spans; only the visible segment of
             // the (possibly wrapped) line is positioned and drawn here.
             let spans = self.highlighted_line_cached(
@@ -306,70 +306,28 @@ impl CodeEditor {
                 syntax_theme,
                 syntax_set,
             );
-            let mut char_pos = 0;
-            for (color, text) in spans.iter() {
-                let text_end = char_pos + text.chars().count();
-                let start = char_pos.max(visual_line.start_col);
-                let end = text_end.min(visual_line.end_col);
-                if start < end {
-                    pieces.push((start, end, *color));
-                }
-                char_pos = text_end;
-            }
-        } else if visual_line.start_col < visual_line.end_col {
-            pieces.push((
-                visual_line.start_col,
-                visual_line.end_col,
-                self.style.text_color,
-            ));
-        }
+            self.line_runs(line, Some(spans.as_slice()), cols)
+        } else {
+            self.line_runs(line, None, cols)
+        };
 
-        let pieces = crate::canvas_editor::range_style::apply_range_styles(
-            pieces,
-            self.range_styles.on_line(line),
-        );
-
-        // Virtual text goes before the character at its column; the one at
-        // the end of the line only on the line's last segment.
-        let virtual_text = self.virtual_text.on_line(line);
-        let mut next = virtual_text.partition_point(|item| {
-            item.column.min(line_len) < visual_line.start_col
-        });
         let mut x = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset;
         let y = y + 2.0;
-        for (start, end, color) in pieces {
-            let mut pos = start;
-            while let Some(item) = virtual_text.get(next)
-                && item.column.min(line_len) < end
-            {
-                let column = item.column.min(line_len).max(pos);
-                x += self.draw_text_piece(
+        for run in runs {
+            x += match run {
+                LineRun::Text { start, end, color } => self.draw_text_piece(
                     frame,
                     ctx,
                     line_content,
-                    (pos, column),
+                    (start, end),
                     color,
                     x,
                     y,
-                );
-                x += Self::draw_virtual_text(frame, ctx, item, x, y);
-                pos = column;
-                next += 1;
-            }
-            x += self.draw_text_piece(
-                frame,
-                ctx,
-                line_content,
-                (pos, end),
-                color,
-                x,
-                y,
-            );
-        }
-        if visual_line.end_col >= line_len {
-            for item in &virtual_text[next.min(virtual_text.len())..] {
-                x += Self::draw_virtual_text(frame, ctx, item, x, y);
-            }
+                ),
+                LineRun::Virtual(item) => {
+                    Self::draw_virtual_text(frame, ctx, item, x, y)
+                }
+            };
         }
     }
 

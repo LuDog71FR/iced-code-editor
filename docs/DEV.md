@@ -34,6 +34,8 @@
    - [Focus Management](#focus-management)
    - [Selection Rendering](#selection-rendering)
    - [Diagnostic Underlines](#diagnostic-underlines)
+   - [Virtual Text](#virtual-text)
+   - [Range Styles](#range-styles)
    - [Scrollbars](#scrollbars)
    - [Scroll-to-Cursor](#scroll-to-cursor)
    - [Internationalization (i18n)](#internationalization-i18n)
@@ -116,6 +118,8 @@ iced-code-editor/
     ├── bool_options.rs        # Macro generating the boolean options' getters/builders
     ├── focus.rs               # Editor focus management
     ├── diagnostics.rs         # set_diagnostics/diagnostics/diagnostics_at + range-to-visual-line clipping
+    ├── virtual_text.rs        # Layers of text drawn in a line outside the buffer (inlay hints)
+    ├── range_style.rs         # Layers of colors over the syntax highlighting (semantic tokens)
     ├── bench_support.rs       # Criterion benchmark harness (feature: bench)
     ├── *_tests.rs             # Cross-module behavior tests (indent, wrap,
     │                          #   option, sticky, Unicode rendering)
@@ -232,6 +236,9 @@ pub struct CodeEditor {
     indent_style: IndentStyle,           // Spaces(n) or Tab
     search_state: search::SearchState,   // Search/replace state
     diagnostics: Vec<lsp::Diagnostic>,   // Ranges drawn with a wavy underline
+    virtual_text: VirtualTextLayers,     // Text drawn in lines, outside the buffer
+    virtual_text_enabled: bool,          // Shows or hides that text; layers are kept
+    range_styles: RangeStyleLayers,      // Colors drawn over the syntax highlighting
     lsp_client: Option<Box<dyn LspClient>>, // Optional LSP connection
     highlight_cache: RefCell<Option<HighlightCache>>, // Sequential span cache
     bracket_depth_cache: RefCell<BracketDepthCache>, // Sequential nesting-depth cache
@@ -491,12 +498,13 @@ changes do not invalidate the expensive text geometry:
 
 - **`content_cache`** — syntax-highlighted glyphs and the line-number gutter.
   Intentionally kept stable across cursor/selection movement, so mouse-drag
-  selection stays smooth. Cleared only when the buffer, syntax, theme, or layout
-  (wrap/fold) changes.
+  selection stays smooth. Cleared only when the buffer, syntax, theme, layout
+  (wrap/fold), virtual text or range styles change.
 - **`overlay_cache`** — cursor and current-line highlight, selection rectangles,
   search-match highlights, diagnostic underlines and IME preedit decorations.
-  Cleared on every cursor blink, selection drag, search update and
-  `set_diagnostics` call that changes the list.
+  Cleared on every cursor blink, selection drag, search update,
+  `set_diagnostics` call that changes the list and virtual text change, since
+  virtual text moves the x position of everything after it.
 
 ```rust
 self.content_cache.clear();  // buffer / layout changed
@@ -556,7 +564,7 @@ exists rather than a preference for macros:
 - **The generated example *asserts* the default** rather than stating it in
   prose the way the hand-written getters did. A default that changes now fails
   a doctest instead of quietly contradicting its own documentation. That is a
-  meaningful share of the 256 doctests.
+  meaningful share of the doctests.
 
 The doc shape is stated once in the macro, so an option cannot arrive with a
 section missing — which matters under `missing_docs = "deny"` and the project's
@@ -748,11 +756,14 @@ pub struct VisualLine {
   wrapping is on. The value is kept while wrapping is off.
 - **Folding-aware**: logical lines hidden by collapsed folds produce no visual lines
   (the `hidden` set is passed in — see [Code Folding](#code-folding)).
+- **Virtual-text-aware**: displayed [virtual text](#virtual-text) counts in the width
+  of the character it is drawn with. `CodeEditor::wrapping_calculator()` builds the
+  calculator with these widths, so every caller wraps the same way.
 - `logical_to_visual()` maps a buffer position to its visual line for cursor placement.
 
 The result is memoized in `visual_lines_cache`, keyed by buffer revision, viewport
-and gutter width, wrap settings, fold revision and font metrics, so wrapping is only
-recomputed when one of those inputs changes.
+and gutter width, wrap settings, fold revision, font metrics and virtual text
+revision, so wrapping is only recomputed when one of those inputs changes.
 
 ### Code Folding
 
@@ -847,9 +858,9 @@ a deeply nested block would bury the code the reader is looking at.
 **Rendering** is a widget layer, not canvas geometry: `create_sticky_scroll_layer`
 stacks a `Column` of header rows over the editor, each row a `MouseArea`
 publishing `Message::StickyScrollJump(line)`. Each header reuses
-`highlighted_line_cached()` and the same tab expansion as the canvas text
-layer, so a pinned header is visually identical to the line it mirrors. The
-fold margin is deliberately left empty — a chevron there would invite a click
+`highlighted_line_cached()`, `CodeEditor::line_runs` and the same tab expansion
+as the canvas text layer, so a pinned header shows the text, range styles and
+virtual text of the line it mirrors. The fold margin is deliberately left empty — a chevron there would invite a click
 that does nothing.
 
 **Clicking a header must account for the layer itself.** The sticky layer is
@@ -1590,6 +1601,89 @@ The x position and width come from `calculate_segment_geometry`, the helper
 that selection rectangles also use, so CJK wide characters are measured the
 same way. The color comes from the four `Style::diagnostic_*_color` fields.
 
+### Virtual Text
+
+**Location:** `canvas_editor/virtual_text.rs` (`line_runs`), `render/text.rs`
+(`calculate_segment_geometry`, `draw_virtual_text`), `render/wrapping.rs`,
+`render/view.rs` (`create_sticky_header_row`)
+
+`VirtualText { line, column, text, color }` is text drawn before the character
+at `column` without being in the buffer. `set_virtual_text(layer, items)`
+replaces one named layer, so inlay hints and debug values can change
+independently. An empty list removes the layer, and an identical list is
+ignored.
+
+`VirtualTextLayers` keeps the items per layer in a `BTreeMap`, and rebuilds a
+per-line index sorted by column. On the same column, layers come in name order
+and items in the order given. Each change bumps `revision`, which is part of
+`VisualLinesKey`, and clears `max_content_width_cache`, `content_cache` and
+`overlay_cache`.
+
+**One geometry rule.** Column-to-x conversions go through
+`calculate_segment_geometry`, which receives the line's `(column, width)` pairs
+from `virtual_text_widths` (columns clamped to the line length):
+
+- an empty segment, such as the cursor, stays *before* the text at its column;
+- a segment with characters, such as a selection or a search match, starts
+  *after* it.
+
+The other measurements count the virtual text too:
+
+| Consumer | Behavior |
+| --- | --- |
+| Text drawing and sticky headers (`CodeEditor::line_runs`) | Splits the colored pieces at each column |
+| Click hit test (`editing/cursor.rs`) | Both sides of a piece map to the same column |
+| Wrapping (`WrappingCalculator::with_virtual_text`) | A piece is never split; the piece at a wrap point starts the next row; a piece at the end of the line counts in the width of the last character, so both wrap together |
+| Widest line (`line_display_width`) | Adds the width of every piece |
+| Scroll-to-cursor and IME position (`caret_content_x`) | Use the cursor rule above |
+
+**Toggle.** `virtual_text_enabled` (default `true`, generated getter and builder
+in `bool_options.rs`, setter in `config.rs`) gates the *display* only. Every
+consumer reads the items through `displayed_virtual_text`, which returns nothing
+while the option is off, so layout and drawing behave as if no item existed.
+`set_virtual_text` keeps storing the layers. The setter calls
+`invalidate_virtual_text_layout`, which bumps `revision` and clears the caches.
+
+**Limits.** Positions do not follow edits; the owner replaces its layer. A piece
+wider than a whole row extends past the wrap width, because virtual text is
+never split.
+
+**Demo.** The **Decorations** template (`demo-app/src/decorations.rs`) derives
+hints and [range styles](#range-styles) from the text, and replaces both layers
+after each editor event and theme change, as a host does with a language server.
+Selecting it sets the wrap column to 60, so a hint at the end of a line wraps
+visibly. The **Show inlay hints** option (`EditorToggle::VirtualText`) drives
+`set_virtual_text_enabled`.
+
+### Range Styles
+
+**Location:** `canvas_editor/range_style.rs`, `render/text.rs`,
+`render/highlighting.rs` (`scope_color`)
+
+`RangeStyle { line, start, end, color }` recolors the character columns
+`start..end` of a logical line. `set_range_styles(layer, styles)` follows the
+same layer model as [Virtual Text](#virtual-text). Empty ranges are dropped from
+the per-line index.
+
+A style never changes a width, so the cursor, selection, hit testing and
+wrapping need no update, and no layout cache is involved. A change only clears
+`content_cache`.
+
+**Rendering.** `CodeEditor::line_runs` first collects the `(start, end, color)`
+pieces of a visual line from the syntax highlighting. `apply_range_styles` then
+applies each style in paint order and splits a piece where a style starts or
+ends inside it. Later styles therefore win: layers in name order, then styles in
+the order given. `merge_virtual_text` places virtual text between the resulting
+pieces. The canvas and the sticky headers draw the same `LineRun` list. When
+visible whitespace is on, canvas whitespace glyphs keep
+`Style::whitespace_color`.
+
+**`scope_color(scope)`** lets a host color its ranges like the rest of the text.
+It checks `Style::token_colors` first, and returns that override as given. It
+then asks the resolved syntax theme, and returns `None` when the theme has no
+foreground for the scope or when that color does not contrast with the editor
+background.
+
 ### Scrollbars
 
 **Location:** `render/view.rs` (`canvas_scrollbar`, `scroller_alpha`,
@@ -1644,6 +1738,12 @@ pub(crate) fn scroll_to_cursor(&self) -> Task<Message> {
 The same rule governs paging: `page_up()` / `page_down()` move by
 `viewport_height / line_height` **visual rows**, not logical lines
 (`editing/cursor.rs`). Any new viewport arithmetic belongs in visual-row space.
+
+**Horizontal position.** Without wrapping, `scroll_to_cursor()` takes the cursor's
+x from `caret_content_x()`, which counts displayed
+[virtual text](#virtual-text). The IME position uses the same method. Measuring
+the characters before the cursor alone would place the caret too far left on a
+line with inlay hints.
 
 **Smart margins:** 2 rows of padding to prevent cursor at edge
 
@@ -2229,11 +2329,11 @@ notice the regression exists at the right level.
 
 | Level | Where | Count | Answers |
 |---|---|---|---|
-| Unit | `#[cfg(test)] mod tests` beside the code | 811 | Is this function correct? |
-| Doctest | `# Example` blocks on public items | 256 | Is the documented usage real and still compiling? |
-| Handler | `demo-app/src/{app,ui}` tests | 79 | Does `update()` do the right thing with this `Message`? |
+| Unit | `#[cfg(test)] mod tests` beside the code | 885 | Is this function correct? |
+| Doctest | `# Example` blocks on public items | 283 | Is the documented usage real and still compiling? |
+| Handler | `demo-app/src` tests outside `ui_tests/` | 99 | Does `update()` do the right thing with this `Message`? |
 | Interface | `demo-app/src/ui_tests/` | 82 | Does any widget actually *emit* that `Message`? |
-| Integration | `iced-code-editor/tests/` | 13 | Does the public API work from outside the crate? |
+| Integration | `iced-code-editor/tests/` | 16 | Does the public API work from outside the crate? |
 
 ### Unit Tests
 
@@ -2316,7 +2416,7 @@ cursor to line 30 instead of leaving it at 0 before the host-passthrough fix.
 ### Running Tests
 
 ```bash
-# Run all tests: 811 unit + 161 demo-app + 13 integration + 256 doctests
+# Run all tests: 885 unit + 181 demo-app + 16 integration + 283 doctests
 cargo test --workspace --all-features
 
 # Run with output
@@ -2419,6 +2519,12 @@ self.overlay_cache.clear();
 // Buffer / syntax / theme / wrap / fold changed → both layers
 self.content_cache.clear();
 self.overlay_cache.clear();
+
+// Range styles changed → colors only, the text layer alone
+self.content_cache.clear();
+
+// Virtual text changed or toggled → both layers and the layout caches
+self.invalidate_virtual_text_layout();
 ```
 
 ### 3. Command History Grouping

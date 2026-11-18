@@ -48,7 +48,8 @@ fn lsp_language_for_template(template: Template) -> Option<LspLanguage> {
         Template::Empty
         | Template::HelloWorld
         | Template::Fibonacci
-        | Template::Factorial => "lua",
+        | Template::Factorial
+        | Template::Decorations => "lua",
     })
 }
 

@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use iced::Color;
 
+use crate::canvas_editor::range_style::apply_range_styles;
 use crate::canvas_editor::render::text::calculate_segment_geometry;
 use crate::canvas_editor::render::wrapping::{VisualLine, WrappingCalculator};
 use crate::canvas_editor::{CodeEditor, measure_text_width};
@@ -27,6 +28,60 @@ pub struct VirtualText {
     pub color: Color,
 }
 
+/// One run of a line as it is displayed, in drawing order.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum LineRun<'a> {
+    /// The buffer characters of the columns `start..end`, in one color.
+    Text {
+        /// First character column of the run.
+        start: usize,
+        /// Character column after the run (exclusive).
+        end: usize,
+        /// Color of the characters.
+        color: Color,
+    },
+    /// One piece of virtual text.
+    Virtual(&'a VirtualText),
+}
+
+/// Places `virtual_text` (sorted by column) between the colored `pieces` of
+/// the columns `cols` of a line.
+///
+/// Virtual text goes before the character at its column. The one at the end
+/// of the line goes after the last piece, on the segment reaching that end.
+fn merge_virtual_text<'a>(
+    pieces: Vec<(usize, usize, Color)>,
+    virtual_text: &'a [VirtualText],
+    line_len: usize,
+    cols: (usize, usize),
+) -> Vec<LineRun<'a>> {
+    let column = |item: &VirtualText| item.column.min(line_len);
+    let mut next = virtual_text.partition_point(|item| column(item) < cols.0);
+    let mut runs = Vec::with_capacity(pieces.len());
+    let push_text = |runs: &mut Vec<LineRun<'a>>, start, end, color| {
+        if start < end {
+            runs.push(LineRun::Text { start, end, color });
+        }
+    };
+    for (start, end, color) in pieces {
+        let mut pos = start;
+        while let Some(item) = virtual_text.get(next)
+            && column(item) < end
+        {
+            let at = column(item).max(pos);
+            push_text(&mut runs, pos, at, color);
+            runs.push(LineRun::Virtual(item));
+            pos = at;
+            next += 1;
+        }
+        push_text(&mut runs, pos, end, color);
+    }
+    if cols.1 >= line_len {
+        runs.extend(virtual_text[next..].iter().map(LineRun::Virtual));
+    }
+    runs
+}
+
 /// The virtual text of every layer, and the same items by line for drawing.
 #[derive(Debug, Default)]
 pub(crate) struct VirtualTextLayers {
@@ -34,7 +89,7 @@ pub(crate) struct VirtualTextLayers {
     /// Every item, by line, sorted by column (a stable sort: on the same
     /// column, layers in name order and items in the order they were given).
     by_line: HashMap<usize, Vec<VirtualText>>,
-    /// Bumped on every change, for the layout caches.
+    /// Bumped whenever the displayed text changes, for the layout caches.
     pub(crate) revision: u64,
 }
 
@@ -47,7 +102,6 @@ impl VirtualTextLayers {
         for items in self.by_line.values_mut() {
             items.sort_by_key(|item| item.column);
         }
-        self.revision = self.revision.wrapping_add(1);
     }
 
     pub(crate) fn on_line(&self, line: usize) -> &[VirtualText] {
@@ -79,9 +133,25 @@ impl CodeEditor {
             self.virtual_text.layers.insert(layer, items);
         }
         self.virtual_text.rebuild();
+        self.invalidate_virtual_text_layout();
+    }
+
+    /// Drops everything computed from the displayed virtual text.
+    pub(crate) fn invalidate_virtual_text_layout(&mut self) {
+        self.virtual_text.revision = self.virtual_text.revision.wrapping_add(1);
         *self.max_content_width_cache.borrow_mut() = None;
         self.content_cache.clear();
         self.overlay_cache.clear();
+    }
+
+    /// The virtual text displayed on `line`: none while it is hidden
+    /// ([`CodeEditor::set_virtual_text_enabled`]).
+    fn displayed_virtual_text(&self, line: usize) -> &[VirtualText] {
+        if self.virtual_text_enabled {
+            self.virtual_text.on_line(line)
+        } else {
+            &[]
+        }
     }
 
     /// Removes the virtual text of one layer.
@@ -94,10 +164,45 @@ impl CodeEditor {
         self.virtual_text.layers.get(layer).map_or(&[], Vec::as_slice)
     }
 
+    /// The runs displayed for the columns `cols` of `line`: the syntax `spans`
+    /// of the whole line (the plain text color without them), recolored by
+    /// the range styles, with the virtual text between them.
+    ///
+    /// The canvas and the sticky-scroll headers both draw these runs, so a
+    /// pinned header looks like the line it mirrors.
+    pub(crate) fn line_runs(
+        &self,
+        line: usize,
+        spans: Option<&[(Color, String)]>,
+        cols: (usize, usize),
+    ) -> Vec<LineRun<'_>> {
+        let mut pieces = Vec::new();
+        if let Some(spans) = spans {
+            let mut char_pos = 0;
+            for (color, text) in spans {
+                let text_end = char_pos + text.chars().count();
+                let start = char_pos.max(cols.0);
+                let end = text_end.min(cols.1);
+                if start < end {
+                    pieces.push((start, end, *color));
+                }
+                char_pos = text_end;
+            }
+        } else if cols.0 < cols.1 {
+            pieces.push((cols.0, cols.1, self.style.text_color));
+        }
+        merge_virtual_text(
+            apply_range_styles(pieces, self.range_styles.on_line(line)),
+            self.displayed_virtual_text(line),
+            self.buffer.line_len(line),
+            cols,
+        )
+    }
+
     /// `(column, width)` of the virtual text on `line`, sorted by column, with
     /// columns clamped to the line length.
     pub(crate) fn virtual_text_widths(&self, line: usize) -> Vec<(usize, f32)> {
-        let items = self.virtual_text.on_line(line);
+        let items = self.displayed_virtual_text(line);
         if items.is_empty() {
             return Vec::new();
         }
@@ -162,8 +267,7 @@ impl CodeEditor {
             self.full_char_width,
             self.char_width,
         ) + self
-            .virtual_text
-            .on_line(line)
+            .displayed_virtual_text(line)
             .iter()
             .map(|item| {
                 measure_text_width(
@@ -312,6 +416,127 @@ mod tests {
         let cols: Vec<_> =
             rows.iter().map(|r| (r.start_col, r.end_col)).collect();
         assert_eq!(cols, vec![(0, 3), (3, 5), (5, 8)]);
+    }
+
+    #[test]
+    fn a_hint_at_the_end_of_the_line_wraps_with_the_last_character() {
+        let mut editor = CodeEditor::new("abcde", "rs");
+        editor.set_wrap_enabled(true);
+        editor.set_wrap_column(Some(6));
+
+        // 5 columns of text + 4 of hint do not fit in 6: `e` moves to the
+        // second row and takes the hint with it.
+        editor.set_virtual_text("hints", vec![hint(0, 5, "1234")]);
+        let rows = editor.visual_lines_cached(800.0);
+        let cols: Vec<_> =
+            rows.iter().map(|r| (r.start_col, r.end_col)).collect();
+        assert_eq!(cols, vec![(0, 4), (4, 5)]);
+        // The cursor at the end of the line stays on the hint's row.
+        assert_eq!(WrappingCalculator::logical_to_visual(&rows, 0, 5), Some(1));
+
+        // A hint that fits changes nothing.
+        editor.set_virtual_text("hints", vec![hint(0, 5, "1")]);
+        let rows = editor.visual_lines_cached(800.0);
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn runs_place_virtual_text_between_the_colored_pieces() {
+        const RED: Color = Color::from_rgb(1.0, 0.0, 0.0);
+        let text = |start, end| LineRun::Text { start, end, color: RED };
+        let middle = hint(0, 2, "m");
+        let end = hint(0, 4, "e");
+        let items = [middle.clone(), end.clone()];
+        let pieces = vec![(0, 4, RED)];
+
+        assert_eq!(
+            merge_virtual_text(pieces, &items, 4, (0, 4)),
+            vec![
+                text(0, 2),
+                LineRun::Virtual(&middle),
+                text(2, 4),
+                LineRun::Virtual(&end),
+            ]
+        );
+        // A segment that stops before the end of the line leaves the last
+        // hint to the segment reaching it.
+        assert_eq!(
+            merge_virtual_text(vec![(0, 2, RED)], &items, 4, (0, 2)),
+            vec![text(0, 2)]
+        );
+        assert_eq!(
+            merge_virtual_text(vec![(2, 4, RED)], &items, 4, (2, 4)),
+            vec![LineRun::Virtual(&middle), text(2, 4), LineRun::Virtual(&end),]
+        );
+        // An empty line only has its hints.
+        assert_eq!(
+            merge_virtual_text(Vec::new(), &items[1..], 0, (0, 0)),
+            vec![LineRun::Virtual(&end)]
+        );
+    }
+
+    #[test]
+    fn line_runs_show_range_styles_and_virtual_text() {
+        const RED: Color = Color::from_rgb(1.0, 0.0, 0.0);
+        const BLUE: Color = Color::from_rgb(0.0, 0.0, 1.0);
+        let mut editor = CodeEditor::new("abcd", "rs");
+        let end = hint(0, 4, "!");
+        editor.set_virtual_text("hints", vec![end.clone()]);
+        editor.set_range_styles(
+            "semantic",
+            vec![crate::RangeStyle { line: 0, start: 1, end: 3, color: BLUE }],
+        );
+
+        let spans = vec![(RED, "abcd".to_string())];
+        assert_eq!(
+            editor.line_runs(0, Some(&spans), (0, 4)),
+            vec![
+                LineRun::Text { start: 0, end: 1, color: RED },
+                LineRun::Text { start: 1, end: 3, color: BLUE },
+                LineRun::Text { start: 3, end: 4, color: RED },
+                LineRun::Virtual(&end),
+            ]
+        );
+
+        // Without syntax spans, the plain text color is the base.
+        let plain = editor.style.text_color;
+        assert_eq!(
+            editor.line_runs(0, None, (0, 1)),
+            vec![LineRun::Text { start: 0, end: 1, color: plain }]
+        );
+    }
+
+    #[test]
+    fn hidden_virtual_text_takes_no_space_and_is_kept() {
+        let mut editor = CodeEditor::new("abcde", "rs");
+        editor.set_wrap_enabled(true);
+        editor.set_wrap_column(Some(6));
+        let plain_width = editor.max_content_width();
+        let shown = hint(0, 5, "1234");
+        editor.set_virtual_text("hints", vec![shown.clone()]);
+        assert_eq!(editor.visual_lines_cached(800.0).len(), 2);
+
+        editor.set_virtual_text_enabled(false);
+        assert_eq!(editor.visual_lines_cached(800.0).len(), 1, "no wrap");
+        assert!(editor.virtual_text_widths(0).is_empty());
+        assert!((editor.max_content_width() - plain_width).abs() < 0.01);
+        assert_eq!(
+            editor.line_runs(0, None, (0, 5)).len(),
+            1,
+            "only the buffer text is drawn"
+        );
+        assert_eq!(editor.virtual_text("hints"), std::slice::from_ref(&shown));
+
+        // A layer replaced while hidden is the one shown afterwards.
+        let replaced = hint(0, 5, "12345");
+        editor.set_virtual_text("hints", vec![replaced.clone()]);
+        editor.set_virtual_text_enabled(true);
+        assert_eq!(editor.visual_lines_cached(800.0).len(), 2);
+        assert!(
+            editor
+                .line_runs(0, None, (4, 5))
+                .contains(&LineRun::Virtual(&replaced))
+        );
     }
 
     #[test]

@@ -7,7 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- feat: virtual text, such as LSP inlay hints, with `CodeEditor::set_virtual_text`
+  / `clear_virtual_text` / `virtual_text` and the new `VirtualText` type. The text
+  is drawn before the character at its column and pushes the rest of the line to
+  the right, but it is never in the buffer: the cursor steps over it, and copy,
+  `content()` and the LSP sync do not see it. Each source keeps its own named
+  layer. Positions do not follow edits, so the owner replaces its layer after a
+  change. ([#46](https://github.com/LuDog71FR/iced-code-editor/pull/46))
+- feat: range styles, such as LSP semantic tokens, with
+  `CodeEditor::set_range_styles` / `clear_range_styles` / `range_styles` and the
+  new `RangeStyle` type. A style recolors a range of a line over the syntax
+  highlighting and never changes a width. Where styles overlap, layers later in
+  name order win, then later styles within a layer.
+  ([#48](https://github.com/LuDog71FR/iced-code-editor/pull/48))
+- feat: `CodeEditor::scope_color` returns the color that the syntax theme and
+  `Style::token_colors` give a TextMate scope such as `entity.name.function`, so
+  a host can color its ranges like the rest of the text.
+  ([#48](https://github.com/LuDog71FR/iced-code-editor/pull/48))
+- feat: `CodeEditor::set_virtual_text_enabled` / `with_virtual_text_enabled` /
+  `virtual_text_enabled` show or hide virtual text per editor (shown by default).
+  While hidden it takes no space, and its layers are kept.
+- feat(demo): the **Decorations** template shows inlay hints and semantic colors
+  derived from the text. The demo replaces both layers after each editor event
+  and when the theme changes. A "Show inlay hints" option hides the hints.
+
+### Fixed
+
+- fix: virtual text at the end of a line was left out of the wrap width and
+  could extend past it. It now wraps together with the last character.
+- fix: sticky scroll headers ignored virtual text and range styles. They now
+  show them like the line they pin.
+
+### Security
+
+- build: `iced-code-editor` enables only the `context_menu` feature of `iced_aw`,
+  and `demo-app` drops its unused `iced_aw` dependency. `chrono`, flagged as
+  unmaintained by RUSTSEC-2026-0543, leaves `Cargo.lock` with three other crates.
+  ([#47](https://github.com/LuDog71FR/iced-code-editor/pull/47))
 
 ## [0.7.0] - 2026-11-17
 

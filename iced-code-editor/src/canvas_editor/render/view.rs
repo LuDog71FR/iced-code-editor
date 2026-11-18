@@ -12,12 +12,14 @@ use iced_aw::ContextMenu;
 
 use super::text::{expand_tabs, expand_tabs_visible};
 use super::wrapping::{self, WrappingCalculator};
+use crate::buffer::text_utils::char_range_to_byte_range;
 use crate::canvas_editor::features::command_palette::dialog as command_palette_dialog;
 use crate::canvas_editor::features::context_menu;
 use crate::canvas_editor::features::goto_line::dialog as goto_line_dialog;
 use crate::canvas_editor::features::search::dialog as search_dialog;
 use crate::canvas_editor::features::sticky_scroll;
 use crate::canvas_editor::input::ime_requester::ImeRequester;
+use crate::canvas_editor::virtual_text::LineRun;
 use crate::canvas_editor::{CodeEditor, Message, TAB_WIDTH};
 use std::rc::Rc;
 
@@ -413,15 +415,25 @@ impl CodeEditor {
 
         let spans =
             self.highlighted_line_cached(line, syntax, theme, syntax_set);
+        let line_content = self.buffer.line(line);
+        let cols = (0, self.buffer.line_len(line));
         let mut code = Row::new();
-        for (color, content) in spans.iter() {
-            let color = *color;
-            // Match the canvas text layer, so a pinned header shows the same
-            // whitespace glyphs as the line it mirrors.
-            let content = if self.show_whitespace {
-                expand_tabs_visible(content, TAB_WIDTH)
-            } else {
-                expand_tabs(content, TAB_WIDTH).into_owned()
+        for run in self.line_runs(line, Some(spans.as_slice()), cols) {
+            let (content, color) = match run {
+                LineRun::Text { start, end, color } => {
+                    let (start_byte, end_byte) =
+                        char_range_to_byte_range(line_content, start, end);
+                    let content = &line_content[start_byte..end_byte];
+                    // Match the canvas text layer, so a pinned header shows
+                    // the same whitespace glyphs as the line it mirrors.
+                    let content = if self.show_whitespace {
+                        expand_tabs_visible(content, TAB_WIDTH)
+                    } else {
+                        expand_tabs(content, TAB_WIDTH).into_owned()
+                    };
+                    (content, color)
+                }
+                LineRun::Virtual(item) => (item.text.clone(), item.color),
             };
             // Unicode headers need the same fallback as the canvas text layer.
             let span_font =

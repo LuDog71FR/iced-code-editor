@@ -13,6 +13,7 @@
 //! `application` builder needs one `fn(&mut DemoApp, Message) ->
 //! Task<Message>` regardless of how the handlers behind it are organized.
 
+use crate::decorations;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::EditorToggle;
 use crate::types::{EditorId, FontOption, Template};
@@ -237,6 +238,7 @@ greet("World")
             editor,
             file_path: None,
             is_dirty: false,
+            decorated: false,
             #[cfg(not(target_arch = "wasm32"))]
             lsp_server_key: None,
         };
@@ -482,8 +484,16 @@ greet("World")
         editor.set_reveal_in_file_manager_enabled(false);
         *current_file = None;
 
+        let decorated = template == Template::Decorations;
+        if decorated {
+            decorations::enable(editor);
+        } else {
+            decorations::disable(editor);
+        }
+
         if let Some(tab) = self.get_tab(editor_id) {
             tab.is_dirty = false;
+            tab.decorated = decorated;
         }
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -803,6 +813,7 @@ greet("World")
                     editor,
                     file_path: None,
                     is_dirty: false,
+                    decorated: false,
                     #[cfg(not(target_arch = "wasm32"))]
                     lsp_server_key: None,
                 };

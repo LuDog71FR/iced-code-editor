@@ -10,6 +10,7 @@
 //! This layout is designed to test overflow and z-index issues.
 
 mod app;
+mod decorations;
 mod file_ops;
 mod log_highlighter;
 mod types;

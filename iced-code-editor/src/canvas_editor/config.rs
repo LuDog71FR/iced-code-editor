@@ -603,6 +603,42 @@ impl CodeEditor {
         }
     }
 
+    /// Shows or hides virtual text, such as inlay hints.
+    ///
+    /// While hidden, virtual text takes no space: lines are drawn, wrapped and
+    /// measured as if it did not exist. The layers passed to
+    /// [`CodeEditor::set_virtual_text`] are still stored and kept up to date,
+    /// so showing virtual text again displays the current layers at once.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to display virtual text
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iced::Color;
+    /// use iced_code_editor::{CodeEditor, VirtualText};
+    ///
+    /// let mut editor = CodeEditor::new("let total = 1;", "rs");
+    /// editor.set_virtual_text("inlay-hints", vec![VirtualText {
+    ///     line: 0,
+    ///     column: 9,
+    ///     text: ": u32".to_string(),
+    ///     color: Color::from_rgb(0.5, 0.5, 0.5),
+    /// }]);
+    ///
+    /// editor.set_virtual_text_enabled(false);
+    /// assert!(!editor.virtual_text_enabled());
+    /// assert_eq!(editor.virtual_text("inlay-hints").len(), 1); // still stored
+    /// ```
+    pub fn set_virtual_text_enabled(&mut self, enabled: bool) {
+        if self.virtual_text_enabled != enabled {
+            self.virtual_text_enabled = enabled;
+            self.invalidate_virtual_text_layout();
+        }
+    }
+
     /// Enables or disables sticky scroll.
     ///
     /// Sticky scroll pins the header lines of the blocks enclosing the topmost

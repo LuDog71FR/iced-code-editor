@@ -4,6 +4,7 @@
 //! whether the tab bar overflows the window width.
 
 use super::{DemoApp, Message};
+use crate::decorations;
 use crate::types::EditorId;
 use iced::Task;
 use iced_code_editor::Message as EditorMessage;
@@ -22,6 +23,8 @@ pub struct EditorTab {
     pub file_path: Option<PathBuf>,
     /// Whether the tab has unsaved changes.
     pub is_dirty: bool,
+    /// Whether the tab shows the "Decorations" template's hints and colors.
+    pub decorated: bool,
     /// Key of the LSP server currently attached to this tab, if any.
     #[cfg(not(target_arch = "wasm32"))]
     pub lsp_server_key: Option<&'static str>,
@@ -293,6 +296,7 @@ impl DemoApp {
                 editor,
                 file_path: path.cloned(),
                 is_dirty: false,
+                decorated: false,
                 #[cfg(not(target_arch = "wasm32"))]
                 lsp_server_key: None,
             };
@@ -308,6 +312,11 @@ impl DemoApp {
             // A reused tab may still be highlighting the previous file's
             // language, so this has to run for reused and fresh tabs alike.
             tab.editor.set_syntax(&syntax);
+            // A reused tab no longer holds the template it was decorated for.
+            if tab.decorated {
+                decorations::disable(&mut tab.editor);
+                tab.decorated = false;
+            }
         }
 
         target_tab_id
@@ -427,6 +436,10 @@ impl DemoApp {
                 .map(move |e| Message::EditorEvent(editor_id, e));
 
             tab.is_dirty = tab.editor.is_modified();
+            // Positions do not follow edits: the owner replaces its layers.
+            if tab.decorated {
+                decorations::apply(&mut tab.editor);
+            }
             // Check overflow if dirty state changed (adds/removes '*')
             // We can't easily know if it changed here without checking previous state,
             // but is_dirty is cheap to check.

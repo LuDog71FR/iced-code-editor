@@ -39,6 +39,8 @@ Screenshot of the demo application:
 - **Command palette** (`Ctrl+Shift+P`) listing every editor action, extensible with the host application's own commands
 - **Language Server Protocol** (LSP) support
 - **Diagnostic underlines** with severity colors, including wrapped lines, and their messages on hover
+- **Virtual text** — text drawn inside a line without being in the buffer, such as LSP inlay hints, and hidden per editor on demand
+- **Range styles** — host-defined colors over the syntax highlighting, such as LSP semantic tokens
 - **Auto indentation** with custom indent style
 - **Auto-closing brackets/quotes** with surround selection
 - **Matching bracket/quote highlight** — highlights the paired bracket or quote next to the cursor
@@ -846,7 +848,7 @@ if editor.sticky_scroll_enabled() {
 }
 ```
 
-At most five headers are pinned at once, so a deeply nested block cannot bury the code being read. Enclosing blocks are detected from **indentation**, exactly like code folding: the feature needs no language grammar and works on any file, but it follows how the file is indented rather than how it parses. Only the detection is shared — the two features are independently toggled, so `set_folding_enabled(false)` removes the fold chevrons and leaves the pinned headers in place. Pinned headers keep the syntax colors of the code they mirror, reusing the per-line highlight cache, and stay anchored to the gutter instead of following the horizontal scroll, so they remain readable when a long line is scrolled sideways.
+At most five headers are pinned at once, so a deeply nested block cannot bury the code being read. Enclosing blocks are detected from **indentation**, exactly like code folding: the feature needs no language grammar and works on any file, but it follows how the file is indented rather than how it parses. Only the detection is shared — the two features are independently toggled, so `set_folding_enabled(false)` removes the fold chevrons and leaves the pinned headers in place. Pinned headers keep the syntax colors, range styles and virtual text of the code they mirror, reusing the per-line highlight cache, and stay anchored to the gutter instead of following the horizontal scroll, so they remain readable when a long line is scrolled sideways.
 
 ### Indentation
 
@@ -924,6 +926,81 @@ if editor.bracket_pair_colorization_enabled() {
     println!("Bracket-pair colorization is active");
 }
 ```
+
+### Virtual text
+
+Virtual text is drawn inside a line without being part of the buffer, which suits LSP inlay hints or inline debug values. Each source owns a named layer, so it can replace its items without touching the others:
+
+```rust
+use iced::Color;
+use iced_code_editor::{CodeEditor, VirtualText};
+
+let mut editor = CodeEditor::new("let total = 1;", "rs");
+
+// Draw `: u32` before the character at column 9
+editor.set_virtual_text("inlay-hints", vec![VirtualText {
+    line: 0,
+    column: 9,
+    text: ": u32".to_string(),
+    color: Color::from_rgb(0.5, 0.5, 0.5),
+}]);
+assert_eq!(editor.virtual_text("inlay-hints").len(), 1);
+
+// Remove this layer only
+editor.clear_virtual_text("inlay-hints");
+```
+
+- The text pushes the rest of the line to the right. A column at or past the end of the line draws it after the last character.
+- With line wrapping, a piece is never split: it moves to the next row with the character that follows it, or with the last character at the end of a line. A piece wider than a whole row extends past the wrap width.
+- Sticky scroll headers show the virtual text of the line they pin.
+- The cursor steps over it, and copy, `content()` and the LSP sync never see it.
+- Lines and columns are 0-based and count characters. The text must fit on one line.
+- Positions do not follow edits: replace the layer after a change. Until then, an item on a line past the end of the buffer is not drawn.
+
+Virtual text is **displayed by default** and can be hidden per editor. While hidden it takes no space, but the layers are still stored: showing it again displays the current layers at once.
+
+```rust
+// Hide virtual text
+editor.set_virtual_text_enabled(false);
+
+// Or use builder pattern during initialization
+let editor = CodeEditor::new("code", "rs")
+    .with_virtual_text_enabled(false);
+
+// Check current state
+if editor.virtual_text_enabled() {
+    println!("Virtual text is shown");
+}
+```
+
+### Range styles
+
+A range style recolors part of a line over the syntax highlighting, which suits LSP semantic tokens or highlighted references. Layers work as they do for virtual text. `scope_color` returns the color that the current theme gives a TextMate scope, so the ranges match the rest of the code:
+
+```rust
+use iced_code_editor::{CodeEditor, RangeStyle};
+
+let mut editor = CodeEditor::new("fn main() {}", "rs");
+
+if let Some(color) = editor.scope_color("entity.name.function") {
+    // Columns 3 to 7, end exclusive
+    editor.set_range_styles("semantic-tokens", vec![RangeStyle {
+        line: 0,
+        start: 3,
+        end: 7,
+        color,
+    }]);
+}
+
+// Remove this layer only
+editor.clear_range_styles("semantic-tokens");
+```
+
+- A style changes colors only, so the cursor, selection and wrapping are not affected.
+- Sticky scroll headers show the range styles of the line they pin.
+- Where styles overlap, layers later in name order win, then later styles within a layer.
+- `scope_color` returns `None` when the scope name is invalid, when the theme has no rule for the scope, or when the color would not stand out from the background.
+- Positions do not follow edits: replace the layer after a change. Until then, a range past the end of its line is cut there.
 
 ### Language Server Protocol (LSP)
 
@@ -1215,6 +1292,9 @@ A full-featured demo application is included in the `demo-app` directory, showca
 - Full keyboard navigation
 - LSP integration: hover, completion, go-to-definition, format on save, and
   diagnostic underlines whose messages and sources appear in the hover tooltip
+- Virtual text and range styles: pick the **Decorations** template to see inlay
+  hints and semantic colors that are replaced after each edit, and use the
+  **Show inlay hints** option to hide the hints
 
 Run it with:
 

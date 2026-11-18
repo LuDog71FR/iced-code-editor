@@ -7,6 +7,7 @@
 //! by [`EditorId`].
 
 use super::{DemoApp, Message};
+use crate::decorations;
 use crate::types::{EditorId, EditorToggle, FontOption, LanguageOption};
 use iced::{Task, Theme};
 use iced_code_editor::{IndentStyle, theme};
@@ -81,6 +82,10 @@ impl DemoApp {
         self.current_theme = new_theme;
         for tab in &mut self.tabs {
             tab.editor.set_theme(style);
+            // The hints and semantic colors are taken from the syntax theme.
+            if tab.decorated {
+                decorations::apply(&mut tab.editor);
+            }
         }
         Task::none()
     }

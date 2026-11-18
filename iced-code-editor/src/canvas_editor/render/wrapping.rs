@@ -109,8 +109,9 @@ impl WrappingCalculator {
     }
 
     /// Counts the virtual text of each line (`(column, width)`, sorted) in the
-    /// width of its segments. Virtual text is never split, and the one at a
-    /// wrap point starts the next segment.
+    /// width of its segments. Virtual text is never split, the one at a wrap
+    /// point starts the next segment, and the one at the end of the line
+    /// stays with the last character.
     pub(crate) fn with_virtual_text(
         mut self,
         virtual_text: HashMap<usize, Vec<(usize, f32)>>,
@@ -202,15 +203,24 @@ impl WrappingCalculator {
                 .virtual_text
                 .get(&logical_line)
                 .map_or(&[][..], Vec::as_slice);
+            let line_len = line_content.chars().count();
+            // Virtual text after the last character has no character of its
+            // own to wrap with, so it counts in the width of the last one.
+            let trailing_width =
+                width_between(virtual_text, line_len, line_len, true);
 
             for (i, c) in line_content.chars().enumerate() {
                 // Compute pixel width for the current character, with the
                 // virtual text drawn before it.
-                let char_width = measure_char_width(
-                    c,
-                    self.full_char_width,
-                    self.char_width,
-                ) + width_between(virtual_text, i, i, true);
+                let mut char_width =
+                    measure_char_width(
+                        c,
+                        self.full_char_width,
+                        self.char_width,
+                    ) + width_between(virtual_text, i, i, true);
+                if i + 1 == line_len {
+                    char_width += trailing_width;
+                }
 
                 // If adding the current character exceeds wrap width, wrap at the previous char.
                 // Ensure at least one character per segment even if a single char exceeds wrap_width.
@@ -241,7 +251,7 @@ impl WrappingCalculator {
                 logical_line,
                 segment_index,
                 current_segment_start_col,
-                line_content.chars().count(),
+                line_len,
             ));
         }
 

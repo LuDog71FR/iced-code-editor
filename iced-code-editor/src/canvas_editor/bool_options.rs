@@ -188,6 +188,12 @@ bool_options! {
         default: "Enabled by default.", ""
         builder: "Sets sticky scroll with builder pattern.",
         "Whether to pin enclosing block headers above the viewport";
+    virtual_text_enabled, set_virtual_text_enabled, with_virtual_text_enabled,
+        "Returns whether virtual text, such as inlay hints, is displayed.",
+        "`true` if virtual text is displayed, `false` otherwise",
+        default: "Enabled by default.", ""
+        builder: "Shows or hides virtual text using the builder pattern.",
+        "Whether to display virtual text";
     vim_enabled, set_vim_enabled, with_vim_enabled,
         "Returns whether Vim behavior is enabled for this editor instance.",
         "`true` if Vim behavior is enabled, `false` otherwise",

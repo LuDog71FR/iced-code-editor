@@ -121,14 +121,17 @@ pub enum Template {
     HelloWorld,
     Fibonacci,
     Factorial,
+    /// Shows virtual text and range styles (see [`crate::decorations`]).
+    Decorations,
 }
 
 impl Template {
-    pub const ALL: [Template; 4] = [
+    pub const ALL: [Template; 5] = [
         Template::Empty,
         Template::HelloWorld,
         Template::Fibonacci,
         Template::Factorial,
+        Template::Decorations,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -137,6 +140,7 @@ impl Template {
             Template::HelloWorld => "Hello World",
             Template::Fibonacci => "Fibonacci",
             Template::Factorial => "Factorial",
+            Template::Decorations => "Decorations",
         }
     }
 
@@ -178,6 +182,7 @@ for i = 1, 10 do
 end
 "#
             }
+            Template::Decorations => crate::decorations::sample(),
         }
     }
 }
@@ -219,6 +224,8 @@ pub enum EditorToggle {
     ColorPreviews,
     /// Underlines diagnostics and shows their messages on hover.
     Diagnostics,
+    /// Displays virtual text, such as inlay hints.
+    VirtualText,
     /// Highlights the bracket matching the one at the cursor.
     BracketMatchHighlight,
     /// Colors nested bracket pairs by nesting depth.
@@ -233,7 +240,7 @@ pub enum EditorToggle {
 
 impl EditorToggle {
     /// Every toggle, in the order the options panel displays them.
-    pub const ALL: [EditorToggle; 15] = [
+    pub const ALL: [EditorToggle; 16] = [
         EditorToggle::Wrap,
         EditorToggle::Folding,
         EditorToggle::AutoIndent,
@@ -244,6 +251,7 @@ impl EditorToggle {
         EditorToggle::IndentGuides,
         EditorToggle::ColorPreviews,
         EditorToggle::Diagnostics,
+        EditorToggle::VirtualText,
         EditorToggle::BracketMatchHighlight,
         EditorToggle::BracketPairColorization,
         EditorToggle::StickyScroll,
@@ -264,6 +272,7 @@ impl EditorToggle {
             EditorToggle::IndentGuides => "Show indentation guides",
             EditorToggle::ColorPreviews => "Show color previews",
             EditorToggle::Diagnostics => "Show diagnostics",
+            EditorToggle::VirtualText => "Show inlay hints",
             EditorToggle::BracketMatchHighlight => "Highlight matching bracket",
             EditorToggle::BracketPairColorization => "Rainbow brackets",
             EditorToggle::StickyScroll => "Sticky scroll",
@@ -285,6 +294,7 @@ impl EditorToggle {
             EditorToggle::IndentGuides => editor.show_indent_guides(),
             EditorToggle::ColorPreviews => editor.show_color_previews(),
             EditorToggle::Diagnostics => editor.diagnostics_enabled(),
+            EditorToggle::VirtualText => editor.virtual_text_enabled(),
             EditorToggle::BracketMatchHighlight => {
                 editor.bracket_match_highlight_enabled()
             }
@@ -326,6 +336,9 @@ impl EditorToggle {
             }
             EditorToggle::Diagnostics => {
                 editor.set_diagnostics_enabled(enabled)
+            }
+            EditorToggle::VirtualText => {
+                editor.set_virtual_text_enabled(enabled)
             }
             EditorToggle::BracketMatchHighlight => {
                 editor.set_bracket_match_highlight_enabled(enabled)

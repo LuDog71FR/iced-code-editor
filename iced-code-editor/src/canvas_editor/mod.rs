@@ -275,6 +275,9 @@ pub struct CodeEditor {
     /// Whether diagnostics are underlined and reported by `diagnostics_at`.
     /// The list itself is kept while this is off.
     pub(crate) diagnostics_enabled: bool,
+    /// Whether virtual text is displayed. The layers are kept while this is
+    /// off.
+    pub(crate) virtual_text_enabled: bool,
     /// Whether the matching-bracket/quote-pair highlight overlay is enabled.
     pub(crate) bracket_match_highlight_enabled: bool,
     /// Whether bracket-pair colorization (rainbow brackets) is enabled.
@@ -796,6 +799,7 @@ impl CodeEditor {
             show_indent_guides: true,
             show_color_previews: true,
             diagnostics_enabled: true,
+            virtual_text_enabled: true,
             bracket_match_highlight_enabled: true,
             bracket_pair_colorization_enabled: true,
             sticky_scroll_enabled: true,
