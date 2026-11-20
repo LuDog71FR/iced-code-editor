@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Security
+
+- chore: `.cargo/audit.toml` drops the ignores for the two `quick-xml`
+  advisories (RUSTSEC-2026-0194, RUSTSEC-2026-0195), which no longer match any
+  crate in `Cargo.lock`. ([#50](https://github.com/LuDog71FR/iced-code-editor/pull/50))
 
 ## [0.7.1] - 2026-11-18
 
