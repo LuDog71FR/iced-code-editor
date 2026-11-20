@@ -14,23 +14,6 @@
 
 [advisories]
 ignore = [
-    # quick-xml < 0.41: quadratic run time when a start tag repeats an
-    # attribute name (7.5 high), and unbounded namespace-declaration
-    # allocation in `NsReader` enabling memory exhaustion (7.5 high).
-    #
-    # Reached only through `syntect -> plist`, which parses `.tmTheme` and
-    # `.sublime-syntax` definitions. This crate loads exclusively the
-    # definitions bundled with syntect and `two-face`
-    # (`SyntaxSet::load_defaults_newlines`, `ThemeSet::load_defaults`, and
-    # `two_face::syntax::extra_newlines`); no file opened in the editor and no
-    # data from a language server ever reaches that parser. Both advisories
-    # are therefore unreachable here.
-    #
-    # Removable once `plist` depends on quick-xml >= 0.41 and `syntect`
-    # picks it up -- neither version is selectable from this workspace.
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
-
     # lru < 0.17: `LruCache::pop()` is not panic-safe, and a panic inside it
     # can leave the cache in a state a later access frees twice (unsound).
     #
